@@ -95,6 +95,24 @@ PostGIS `ST_DWithin` ordered by distance, and returns at most 50 results. Done =
 typecheck` passes and a vitest integration test hits the procedure against the local Postgres
 container and asserts distance ordering."
 
+### Specialist agents (`.claude/agents/`)
+
+Named, least-privilege sub-agents exist for the recurring roles. Route to these by name; brief
+each with the four-part protocol above (their definitions hold the standing context, not the task).
+
+- **`shared-contracts`** — owns `packages/shared/**`. Head of every dependency chain; runs first
+  and sequentially. (Edit scoped to shared.)
+- **`server-engineer`** — `apps/server/**`: tRPC routers, webhooks, DB, auth, PostGIS. Reads shared.
+- **`mobile-engineer`** — `apps/mobile/**`: Expo screens, navigation, PaymentSheet. Reads shared.
+- **`infra-engineer`** — `infra/**`: Dockerfile, Cloud Run/SQL, CI/CD, Secret Manager. Runs after
+  the server route passes local typecheck + tests.
+- **`dependency-auditor`** — read-only supply-chain gate; verify every new/upgraded package before
+  it lands (existence, typosquat, cooldown). Run in the background.
+- **`code-reviewer`** — read-only final gate, after typecheck + tests pass.
+
+The three engineers + infra are the parallel-split domains; `shared-contracts` is always sequential.
+Sub-agents inherit `model: sonnet` (override per file); the auditor and reviewer are read-only by tools.
+
 ### Guardrails
 
 - **Don't over-parallelize.** Splitting eight micro-tasks across eight agents costs more in
