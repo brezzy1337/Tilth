@@ -24,6 +24,7 @@
     "@homegrown/shared": "workspace:*",
     "@trpc/server": "catalog:",
     "drizzle-orm": "catalog:",
+    "jose": "catalog:",
     "postgres": "catalog:",
     "zod": "catalog:"
   },

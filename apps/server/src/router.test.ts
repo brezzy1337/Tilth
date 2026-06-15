@@ -4,17 +4,29 @@
  * Uses the caller factory with a stub context — no env vars or DB connection
  * required. This must remain true: the router tree must never import `env`
  * or `db` directly.
+ *
+ * The health router uses no db and no auth, so the db stub can be a minimal
+ * typed placeholder and jwtSecret can be any 32-char string.
  */
 
 import { describe, it, expect } from "vitest";
 import { healthResponse } from "@homegrown/shared";
 import { appRouter } from "./router";
 import { createCallerFactory } from "./trpc";
+import type { Context } from "./context";
 
 const createCaller = createCallerFactory(appRouter);
 
-// Stub context matching the real Context shape (user: null for Milestone 1)
-const caller = createCaller({ user: null });
+// Minimal stub context that satisfies the Context shape.
+// health.ping does not use db, auth, or jwtSecret — passing typed no-ops is enough.
+const stubCtx: Context = {
+  db: {} as Context["db"],
+  jwtSecret: "stub-secret-for-testing-only-32ch",
+  auth: {} as Context["auth"],
+  user: null,
+};
+
+const caller = createCaller(stubCtx);
 
 describe("health.ping", () => {
   it("returns a response that satisfies the healthResponse contract", async () => {

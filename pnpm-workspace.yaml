@@ -25,6 +25,8 @@ catalog:
   "@trpc/client": ^11.0.0
   "@trpc/react-query": ^11.0.0
   "@tanstack/react-query": ^5.62.0
+  # Auth (self-issued JWT). Exact pin per dependency-auditor (M2); upgrades re-audit.
+  jose: 6.2.3
   # Database
   drizzle-orm: ^0.45.0
   drizzle-kit: ^0.31.0

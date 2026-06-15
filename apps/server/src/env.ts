@@ -16,6 +16,12 @@ const envSchema = z.object({
     .default("development"),
   /** Postgres connection URL — required at runtime. */
   DATABASE_URL: z.string().url(),
+  /**
+   * HMAC secret for signing JWTs. Must be at least 32 characters.
+   * Locally: set in .env (gitignored). Production: GCP Secret Manager.
+   * No default — the process exits if this is missing or too short.
+   */
+  JWT_SECRET: z.string().min(32),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -1,6 +1,8 @@
 /**
- * HeroScreen — initial landing screen.
- * Placeholder for Milestone 1: no real auth, just navigation stubs.
+ * HeroScreen — initial landing screen (pre-auth).
+ * Navigates to LogIn or SignUp; never directly to Home
+ * (the navigation gate in App.tsx handles that after sign-in).
+ *
  * React Native only — no DOM elements.
  */
 
@@ -13,9 +15,9 @@ import {
   View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { RootStackParamList } from "../navigation/types";
+import type { PreAuthStackParamList } from "../navigation/types";
 
-type Props = NativeStackScreenProps<RootStackParamList, "Hero">;
+type Props = NativeStackScreenProps<PreAuthStackParamList, "Hero">;
 
 export function HeroScreen({ navigation }: Props) {
   return (

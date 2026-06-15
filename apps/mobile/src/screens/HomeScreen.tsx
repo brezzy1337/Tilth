@@ -1,8 +1,11 @@
 /**
  * HomeScreen — main authenticated screen.
- * Calls trpc.health.ping.useQuery() to prove the typed end-to-end chain.
- * If the server's AppRouter or HealthResponse shape changes, TypeScript
- * will catch it here at compile time.
+ *
+ * Shows:
+ *   - Personalised greeting using the signed-in user's username
+ *   - API status card (trpc.health.ping) to prove the typed end-to-end chain
+ *   - Sign Out button (calls auth.signOut() → returns to pre-auth stack via
+ *     the AuthContext gate in App.tsx)
  *
  * React Native only — no DOM elements.
  */
@@ -10,21 +13,29 @@
 import React from "react";
 import {
   ActivityIndicator,
+  Pressable,
   SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { trpc } from "../api/trpc";
+import { useAuth } from "../auth/AuthContext";
 
 export function HomeScreen() {
   const { data, isLoading, error } = trpc.health.ping.useQuery();
+  const { user, signOut } = useAuth();
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
+        {/* Greeting */}
         <Text style={styles.title}>HomeGrown</Text>
+        {user ? (
+          <Text style={styles.greeting}>Welcome, {user.username}!</Text>
+        ) : null}
 
+        {/* API status card */}
         <View style={styles.statusCard}>
           <Text style={styles.cardLabel}>API Status</Text>
 
@@ -41,12 +52,15 @@ export function HomeScreen() {
               <Text style={styles.statusValue}>
                 Status: <Text style={styles.statusOk}>{data.status}</Text>
               </Text>
-              <Text style={styles.statusValue}>
-                Service: {data.service}
-              </Text>
+              <Text style={styles.statusValue}>Service: {data.service}</Text>
             </>
           )}
         </View>
+
+        {/* Sign out */}
+        <Pressable style={styles.signOutButton} onPress={() => void signOut()}>
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </Pressable>
       </View>
     </SafeAreaView>
   );
@@ -62,12 +76,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
+    gap: 16,
   },
   title: {
     fontSize: 28,
     fontWeight: "bold",
     color: "#2d6a4f",
-    marginBottom: 32,
+  },
+  greeting: {
+    fontSize: 16,
+    color: "#555",
   },
   statusCard: {
     width: "100%",
@@ -100,5 +118,19 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 14,
     color: "#c0392b",
+  },
+  signOutButton: {
+    borderWidth: 2,
+    borderColor: "#2d6a4f",
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  signOutText: {
+    color: "#2d6a4f",
+    fontSize: 15,
+    fontWeight: "600",
   },
 });
