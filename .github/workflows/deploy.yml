@@ -108,6 +108,15 @@ jobs:
           curl -fsSL \
             "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64" \
             -o /usr/local/bin/cloud-sql-proxy
+          # Verify SHA-256 integrity before executing the binary.
+          CHECKSUM_FILE="$(mktemp)"
+          curl -fsSL \
+            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64.sha256" \
+            -o "${CHECKSUM_FILE}"
+          # The published checksum file contains only the hash; construct the
+          # standard "<hash>  <path>" line that sha256sum -c expects.
+          EXPECTED_HASH="$(cat "${CHECKSUM_FILE}")"
+          echo "${EXPECTED_HASH}  /usr/local/bin/cloud-sql-proxy" | sha256sum -c -
           chmod +x /usr/local/bin/cloud-sql-proxy
 
       - name: Start Cloud SQL Auth Proxy
@@ -118,17 +127,29 @@ jobs:
             --port 5432 \
             &
           # Wait until the proxy is accepting connections (up to 30 s).
+          # Fail loudly if the proxy never binds — a silent failure here would
+          # surface later as a confusing connection-refused error in the migration.
+          PROXY_READY=0
           for i in $(seq 1 30); do
-            nc -z 127.0.0.1 5432 && echo "Proxy ready after ${i}s" && break
+            if nc -z 127.0.0.1 5432; then
+              echo "Proxy ready after ${i}s"
+              PROXY_READY=1
+              break
+            fi
             sleep 1
           done
+          if [ "${PROXY_READY}" -eq 0 ]; then
+            echo "ERROR: Cloud SQL Auth Proxy did not bind on 127.0.0.1:5432 within 30 seconds" >&2
+            exit 1
+          fi
 
       - name: Run database migrations
         run: |
           # Fetch the TCP-form connection URL from Secret Manager and mask it
           # immediately so it never appears in logs.
+          # 2>/dev/null suppresses diagnostic stderr before ::add-mask:: registers.
           MIGRATE_DATABASE_URL=$(gcloud secrets versions access latest \
-            --secret=MIGRATE_DATABASE_URL)
+            --secret=MIGRATE_DATABASE_URL 2>/dev/null)
           echo "::add-mask::${MIGRATE_DATABASE_URL}"
 
           export DATABASE_URL="${MIGRATE_DATABASE_URL}"

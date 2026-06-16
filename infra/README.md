@@ -286,7 +286,7 @@ a deploy before GCP provisioning is complete.
      db:migrate` against a TCP connection to Cloud SQL (the proxy authenticates
      with the same WIF credentials).
    - Calls `gcloud run deploy` with the sha-pinned image, mirroring § 5 exactly.
-   - Smoke-tests `GET /health/ping` and fails the job if the response is not 2xx.
+   - Smoke-tests `GET /health.ping` and fails the job if the response is not 2xx.
 
 ### One-time GCP setup
 
@@ -356,11 +356,9 @@ gcloud projects add-iam-policy-binding <PROJECT_ID> \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/cloudsql.client"
 
-# Read secrets from Secret Manager (MIGRATE_DATABASE_URL; the five runtime
-# secrets are read by the runtime SA — see § 3 and cross-reference below).
-gcloud projects add-iam-policy-binding <PROJECT_ID> \
-  --member="serviceAccount:${DEPLOY_SA}" \
-  --role="roles/secretmanager.secretAccessor"
+# NOTE: The deploy SA does NOT receive roles/secretmanager.secretAccessor at the
+# project level.  Secret access is granted per-secret (MIGRATE_DATABASE_URL only)
+# in § E below — granting only what CI actually needs.
 
 # Allow the deploy SA to deploy Cloud Run services *as* the runtime SA.
 # Without this, gcloud run deploy --service-account=<RUNTIME_SA> is denied.
@@ -392,6 +390,10 @@ In the repository: **Settings → Environments → New environment**, name it
 `production`. Under **Protection rules**, enable **Required reviewers** and add the
 humans who must approve each deploy.  This is the gating mechanism referenced by
 `environment: production` in the deploy job.
+
+**Important:** do NOT enable `ACTIONS_STEP_DEBUG` on the `production` environment.
+Runner debug logging (set -x) expands every command before execution and would
+bypass log masking (`::add-mask::`) for secrets fetched in that step.
 
 #### D. Actions variables to set
 
