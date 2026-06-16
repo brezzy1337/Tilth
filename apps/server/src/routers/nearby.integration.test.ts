@@ -56,6 +56,14 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
     verifyToken: authHelpers.verifyToken,
   };
 
+  /** Stub StripeClient — nearby tests never call Stripe; stub keeps types happy. */
+  const stubStripe: Context["stripe"] = {
+    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
+    createAccountLink: async () => { throw new Error("stub: not implemented"); },
+    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
+    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+  };
+
   const createCaller = createCallerFactory(appRouter);
 
   function makeCtx(): Context {
@@ -64,6 +72,7 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null, // not used in nearby
+      stripe: stubStripe,
       user: null,
     };
   }

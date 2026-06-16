@@ -26,6 +26,7 @@
     "drizzle-orm": "catalog:",
     "jose": "catalog:",
     "postgres": "catalog:",
+    "stripe": "22.2.0",
     "zod": "catalog:"
   },
   "devDependencies": {

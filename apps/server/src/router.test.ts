@@ -17,13 +17,22 @@ import type { Context } from "./context";
 
 const createCaller = createCallerFactory(appRouter);
 
+// Minimal stub StripeClient — health.ping never calls Stripe, but Context requires it.
+const stubStripe: Context["stripe"] = {
+  createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
+  createAccountLink: async () => { throw new Error("stub: not implemented"); },
+  retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
+  createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+};
+
 // Minimal stub context that satisfies the Context shape.
-// health.ping does not use db, auth, jwtSecret, or geocode — passing typed no-ops is enough.
+// health.ping does not use db, auth, jwtSecret, geocode, or stripe — passing typed no-ops is enough.
 const stubCtx: Context = {
   db: {} as Context["db"],
   jwtSecret: "stub-secret-for-testing-only-32ch",
   auth: {} as Context["auth"],
   geocode: async () => null,
+  stripe: stubStripe,
   user: null,
 };
 

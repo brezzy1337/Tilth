@@ -51,6 +51,35 @@ spec:
                   name: DATABASE_URL
                   key: latest
 
+            # JWT_SECRET — HMAC secret for signing/verifying JWTs (min 32 chars).
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: JWT_SECRET
+                  key: latest
+
+            # GOOGLE_GEOCODING_API_KEY — used by the geocode service for address resolution.
+            - name: GOOGLE_GEOCODING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: GOOGLE_GEOCODING_API_KEY
+                  key: latest
+
+            # STRIPE_SECRET_KEY — Stripe Connect PLATFORM account secret key (sk_live_… / sk_test_…).
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: STRIPE_SECRET_KEY
+                  key: latest
+
+            # STRIPE_WEBHOOK_SECRET — signing secret (whsec_…) copied from the Stripe dashboard
+            # after registering the /webhooks/stripe endpoint. See infra/README.md §3.
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: STRIPE_WEBHOOK_SECRET
+                  key: latest
+
           resources:
             limits:
               cpu: "1"

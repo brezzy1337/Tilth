@@ -1,10 +1,15 @@
 /**
- * Drizzle schema — Milestone 3: Geo & Listings.
+ * Drizzle schema — Milestone 4: Orders & Payments.
  *
- * Adds:
+ * M3 added:
  *   - `listingCategory` and `listingUnit` pgEnums matching shared contracts exactly.
  *   - `locations`: one-per-store, PostGIS geography(Point,4326) with a GiST index.
  *   - `listings`: product listings belonging to a store.
+ *
+ * M4 adds:
+ *   - `orderStatusEnum`, `orders`, `orderItems`: payment backbone.
+ *   - Stripe Connect fields on `stores`: `stripeConnectAccountId`, `chargesEnabled`,
+ *     `payoutsEnabled`, `detailsSubmitted`.
  *
  * The `geog` column uses a Drizzle customType whose dataType() returns
  * "geography(Point,4326)". drizzle-kit generates a placeholder; the actual
@@ -22,6 +27,7 @@ import {
   pgEnum,
   customType,
   index,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +49,14 @@ export const geography = customType<{ data: string }>({
 // ---------------------------------------------------------------------------
 // Enums — must match shared contracts exactly
 // ---------------------------------------------------------------------------
+
+export const orderStatusEnum = pgEnum("order_status", [
+  "pending_payment",
+  "paid",
+  "fulfilled",
+  "cancelled",
+  "refunded",
+]);
 
 export const listingCategoryEnum = pgEnum("listing_category", [
   "vegetable",
@@ -90,7 +104,14 @@ export const stores = pgTable("stores", {
   name: text("name").notNull(),
   logo: text("logo"),
   about: text("about"),
-  stripeConnectAccountId: text("stripe_connect_account_id"),
+  /** Stripe connected account id (acct_…); set during Connect Express onboarding. */
+  stripeConnectAccountId: text("stripe_connect_account_id").unique(),
+  /** Whether the connected account can accept charges. Kept fresh by account.updated webhook. */
+  chargesEnabled: boolean("charges_enabled").notNull().default(false),
+  /** Whether the connected account can receive payouts. Kept fresh by account.updated webhook. */
+  payoutsEnabled: boolean("payouts_enabled").notNull().default(false),
+  /** Whether the seller has submitted their Connect details. Kept fresh by account.updated webhook. */
+  detailsSubmitted: boolean("details_submitted").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
@@ -140,4 +161,53 @@ export const listings = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [index("listings_store_id_idx").on(t.storeId)],
+);
+
+// ---------------------------------------------------------------------------
+// Orders — M4 payment backbone
+// Money is always integer cents. Status truth comes from Stripe webhooks.
+// ---------------------------------------------------------------------------
+
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    buyerId: uuid("buyer_id")
+      .notNull()
+      .references(() => users.id),
+    status: orderStatusEnum("status").notNull().default("pending_payment"),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    applicationFeeCents: integer("application_fee_cents").notNull(),
+    totalCents: integer("total_cents").notNull(),
+    /** Stripe PaymentIntent id — set after PI creation; used for webhook dispatch. */
+    stripePaymentIntentId: text("stripe_payment_intent_id").unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("orders_buyer_id_idx").on(t.buyerId),
+    index("orders_store_id_idx").on(t.storeId),
+  ],
+);
+
+export const orderItems = pgTable(
+  "order_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    listingId: uuid("listing_id")
+      .notNull()
+      .references(() => listings.id),
+    /** Snapshot of the listing name at order time — immune to future edits. */
+    nameSnapshot: text("name_snapshot").notNull(),
+    unitPriceCents: integer("unit_price_cents").notNull(),
+    quantity: integer("quantity").notNull(),
+    lineTotalCents: integer("line_total_cents").notNull(),
+  },
+  (t) => [index("order_items_order_id_idx").on(t.orderId)],
 );

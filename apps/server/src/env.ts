@@ -26,6 +26,18 @@ const envSchema = z.object({
    * No default — never hardcode.
    */
   GOOGLE_GEOCODING_API_KEY: z.string().min(1),
+  /**
+   * Stripe secret key (sk_live_… or sk_test_…).
+   * Locally: set in .env (gitignored). Production: GCP Secret Manager.
+   * No default — never hardcode.
+   */
+  STRIPE_SECRET_KEY: z.string().min(1),
+  /**
+   * Stripe webhook signing secret (whsec_…) for verifying webhook payloads.
+   * Locally: set in .env (gitignored). Production: GCP Secret Manager.
+   * No default — never hardcode.
+   */
+  STRIPE_WEBHOOK_SECRET: z.string().min(1),
 });
 
 const parsed = envSchema.safeParse(process.env);

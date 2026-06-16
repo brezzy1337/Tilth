@@ -46,6 +46,41 @@ export interface Geocoder {
   }): Promise<{ lat: number; lng: number } | null>;
 }
 
+/**
+ * DI interface for Stripe operations.
+ *
+ * Plain object return shapes only — no `Stripe.*` SDK types leak here so the
+ * router import tree stays SDK-free and mobile's typecheck is unaffected.
+ * The concrete implementation lives in `stripe.ts` and is wired in `index.ts`.
+ */
+export interface StripeClient {
+  /** Create a Stripe Connect Express account. Returns the new account id. */
+  createConnectedAccount(input: { email?: string }): Promise<{ id: string }>;
+  /** Generate a one-time Connect onboarding URL. */
+  createAccountLink(input: {
+    accountId: string;
+    refreshUrl: string;
+    returnUrl: string;
+  }): Promise<{ url: string }>;
+  /** Read the current onboarding state of a connected account. */
+  retrieveAccountStatus(accountId: string): Promise<{
+    chargesEnabled: boolean;
+    payoutsEnabled: boolean;
+    detailsSubmitted: boolean;
+  }>;
+  /**
+   * Create a destination-charge PaymentIntent.
+   * `amountCents` is the total charged to the buyer (integer cents, USD).
+   * `applicationFeeCents` is withheld from the seller's transfer.
+   */
+  createPaymentIntent(input: {
+    amountCents: number;
+    applicationFeeCents: number;
+    destinationAccountId: string;
+    metadata: Record<string, string>;
+  }): Promise<{ id: string; clientSecret: string }>;
+}
+
 /** The database type — Drizzle + our schema. */
 export type Db = PostgresJsDatabase<typeof schema>;
 
@@ -55,6 +90,7 @@ export interface ContextDeps {
   jwtSecret: string;
   auth: AuthHelpers;
   geocode: Geocoder;
+  stripe: StripeClient;
 }
 
 export async function createContext({ req }: CreateHTTPContextOptions, deps: ContextDeps) {
@@ -74,6 +110,7 @@ export async function createContext({ req }: CreateHTTPContextOptions, deps: Con
     jwtSecret: deps.jwtSecret,
     auth: deps.auth,
     geocode: deps.geocode,
+    stripe: deps.stripe,
     user,
   };
 }

@@ -283,3 +283,124 @@ export const nearbyListing = z.object({
 });
 
 export type NearbyListing = z.infer<typeof nearbyListing>;
+
+// ---------------------------------------------------------------------------
+// Orders — M4 Payments backbone
+// Money is always integer cents; never floats.
+// ---------------------------------------------------------------------------
+
+/**
+ * Order status progression.
+ * pending_payment → paid (via webhook) → fulfilled → cancelled / refunded.
+ */
+export const orderStatus = z.enum([
+  "pending_payment",
+  "paid",
+  "fulfilled",
+  "cancelled",
+  "refunded",
+]);
+
+export type OrderStatus = z.infer<typeof orderStatus>;
+
+/** One line item within an order (input). */
+export const orderItem = z.object({
+  listingId: z.string().uuid(),
+  /** Capped at 1 000 to bound the maximum `priceCents × quantity` product flowing into Stripe. */
+  quantity: z.number().int().positive().max(1000),
+});
+
+export type OrderItem = z.infer<typeof orderItem>;
+
+/**
+ * Input to `orders.create` (protected).
+ * Per-order caps: at most 50 line items, each with at most 1 000 units, to prevent
+ * integer overflow of `priceCents × quantity` from reaching `application_fee_amount`.
+ */
+export const createOrderInput = z.object({
+  items: z.array(orderItem).min(1).max(50),
+});
+
+export type CreateOrderInput = z.infer<typeof createOrderInput>;
+
+/** A fulfilled order item returned by `orders.get` / `orders.listMine`. */
+export const orderItemOutput = z.object({
+  id: z.string().uuid(),
+  listingId: z.string().uuid(),
+  nameSnapshot: z.string(),
+  unitPriceCents: z.number().int(),
+  quantity: z.number().int(),
+  lineTotalCents: z.number().int(),
+});
+
+export type OrderItemOutput = z.infer<typeof orderItemOutput>;
+
+/** Full order record returned by `orders.get` / `orders.listMine`. */
+export const order = z.object({
+  id: z.string().uuid(),
+  storeId: z.string().uuid(),
+  buyerId: z.string().uuid(),
+  status: orderStatus,
+  subtotalCents: z.number().int(),
+  applicationFeeCents: z.number().int(),
+  totalCents: z.number().int(),
+  stripePaymentIntentId: z.string().nullable(),
+  items: z.array(orderItemOutput),
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+  /** ISO 8601 datetime string. */
+  updatedAt: z.string().datetime(),
+});
+
+export type Order = z.infer<typeof order>;
+
+/**
+ * Response from `orders.create`.
+ * `clientSecret` is the Stripe PaymentIntent client_secret for the PaymentSheet.
+ */
+export const createOrderResponse = z.object({
+  order,
+  clientSecret: z.string(),
+});
+
+export type CreateOrderResponse = z.infer<typeof createOrderResponse>;
+
+// ---------------------------------------------------------------------------
+// Stripe Connect — seller onboarding
+// ---------------------------------------------------------------------------
+
+/**
+ * Input to `connect.createOnboardingLink` (protected).
+ * The seller's return/refresh deep-link URLs for the Stripe Connect Express onboarding flow.
+ * Both URLs must use https — Stripe rejects plain-http redirect targets.
+ */
+export const connectOnboardingInput = z.object({
+  refreshUrl: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" }),
+  returnUrl: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" }),
+});
+
+export type ConnectOnboardingInput = z.infer<typeof connectOnboardingInput>;
+
+/** Response from `connect.createOnboardingLink`. */
+export const connectOnboardingResponse = z.object({
+  url: z.string().url(),
+  accountId: z.string(),
+});
+
+export type ConnectOnboardingResponse = z.infer<typeof connectOnboardingResponse>;
+
+/** Response from `connect.status`. */
+export const connectStatus = z.object({
+  connected: z.boolean(),
+  chargesEnabled: z.boolean(),
+  payoutsEnabled: z.boolean(),
+  detailsSubmitted: z.boolean(),
+});
+
+export type ConnectStatus = z.infer<typeof connectStatus>;

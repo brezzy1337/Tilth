@@ -120,6 +120,14 @@ const stubAuth: Context["auth"] = {
   verifyToken: authHelpers.verifyToken,
 };
 
+/** Stub StripeClient — existing router tests never call Stripe; stub keeps types happy. */
+const stubStripe: Context["stripe"] = {
+  createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
+  createAccountLink: async () => { throw new Error("stub: not implemented"); },
+  retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
+  createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+};
+
 // ---------------------------------------------------------------------------
 // auth.register
 // ---------------------------------------------------------------------------
@@ -136,6 +144,7 @@ describe("auth.register", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -165,6 +174,7 @@ describe("auth.register", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -194,6 +204,7 @@ describe("auth.register", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -223,6 +234,7 @@ describe("auth.register", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -262,6 +274,7 @@ describe("auth.login", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -295,6 +308,7 @@ describe("auth.login", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -315,6 +329,7 @@ describe("auth.login", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -343,6 +358,7 @@ describe("auth.me", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID5 },
     };
     const caller = createCaller(ctx);
@@ -360,6 +376,7 @@ describe("auth.me", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -382,6 +399,7 @@ describe("stores.getMine", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -398,6 +416,7 @@ describe("stores.getMine", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -425,6 +444,7 @@ describe("stores.getMine", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -461,6 +481,7 @@ describe("stores.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -481,6 +502,7 @@ describe("stores.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -506,6 +528,7 @@ describe("stores.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -528,6 +551,7 @@ describe("stores.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -542,6 +566,7 @@ describe("stores.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -591,6 +616,7 @@ describe("listings.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -619,6 +645,7 @@ describe("listings.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -641,6 +668,7 @@ describe("listings.create", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -680,6 +708,7 @@ describe("listings.update", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -711,6 +740,7 @@ describe("listings.update", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -728,6 +758,7 @@ describe("listings.update", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -744,6 +775,7 @@ describe("listings.update", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -772,6 +804,7 @@ describe("listings.listByStore", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -790,6 +823,7 @@ describe("listings.listByStore", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -835,6 +869,7 @@ describe("geo.setStoreLocation", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => ({ lat: 39.78, lng: -89.65 }),
+      stripe: stubStripe,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -858,6 +893,7 @@ describe("geo.setStoreLocation", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null, // bad address
+      stripe: stubStripe,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -875,6 +911,7 @@ describe("geo.setStoreLocation", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => ({ lat: 39.78, lng: -89.65 }),
+      stripe: stubStripe,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -891,6 +928,7 @@ describe("geo.setStoreLocation", () => {
       jwtSecret: TEST_SECRET,
       auth: stubAuth,
       geocode: async () => null,
+      stripe: stubStripe,
       user: null,
     };
     const caller = createCaller(ctx);
