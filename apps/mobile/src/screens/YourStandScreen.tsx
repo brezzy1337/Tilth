@@ -33,23 +33,22 @@ import {
   createStoreInput,
   setStoreLocationInput,
   createListingInput,
+  listingCategory,
   type ListingCategory,
   type ListingUnit,
 } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { FormField } from "../components/FormField";
+import { capitalise } from "../utils/text";
+import { formatCents } from "../utils/money";
 
 // ---------------------------------------------------------------------------
 // Category and unit option arrays derived from the shared enums
 // ---------------------------------------------------------------------------
 
-const CATEGORY_OPTIONS: ListingCategory[] = ["vegetable", "fruit", "herb", "egg", "honey", "other"];
+const CATEGORY_OPTIONS: readonly ListingCategory[] = listingCategory.options;
 
 const UNIT_OPTIONS: ListingUnit[] = ["each", "lb", "oz", "bunch", "dozen", "jar", "pint", "quart"];
-
-function capitalise(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
 
 // ---------------------------------------------------------------------------
 // CreateStoreSection
@@ -153,7 +152,7 @@ function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
 // LocationSection
 // ---------------------------------------------------------------------------
 
-function LocationSection({ storeId }: { storeId: string }) {
+function LocationSection() {
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
@@ -176,11 +175,6 @@ function LocationSection({ storeId }: { storeId: string }) {
       setServerError(err.message ?? "Could not save location. Try again.");
     },
   });
-
-  // storeId is provided from parent but setStoreLocation infers it server-side
-  // from the session — we don't pass it in the input. Including it here only
-  // for future use or logging; the mutation payload follows setStoreLocationInput.
-  void storeId;
 
   function handleSubmit() {
     setErrors({});
@@ -268,7 +262,7 @@ function LocationSection({ storeId }: { storeId: string }) {
 // AddListingForm
 // ---------------------------------------------------------------------------
 
-function AddListingForm({ storeId, onAdded }: { storeId: string; onAdded: () => void }) {
+function AddListingForm({ onAdded }: { onAdded: () => void }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ListingCategory>("vegetable");
   const [priceDollars, setPriceDollars] = useState("");
@@ -282,9 +276,6 @@ function AddListingForm({ storeId, onAdded }: { storeId: string; onAdded: () => 
     unit?: string;
   }>({});
   const [serverError, setServerError] = useState<string | null>(null);
-
-  // storeId not in createListingInput — server infers from session.
-  void storeId;
 
   const mutation = trpc.listings.create.useMutation({
     onSuccess: () => {
@@ -314,8 +305,8 @@ function AddListingForm({ storeId, onAdded }: { storeId: string; onAdded: () => 
     const result = createListingInput.safeParse({
       name,
       category,
-      priceCents: Number.isNaN(priceCents) ? priceCents : priceCents,
-      quantity: Number.isNaN(parsedQuantity) ? parsedQuantity : parsedQuantity,
+      priceCents,
+      quantity: parsedQuantity,
       unit,
     });
 
@@ -461,14 +452,14 @@ function ListingsSection({ storeId }: { storeId: string }) {
             <View key={item.id} style={styles.listingCard}>
               <Text style={styles.listingName}>{item.name}</Text>
               <Text style={styles.listingMeta}>
-                {capitalise(item.category)} · ${(item.priceCents / 100).toFixed(2)}/{item.unit} ·
+                {capitalise(item.category)} · ${formatCents(item.priceCents)}/{item.unit} ·
                 qty {item.quantity}
               </Text>
             </View>
           ))
         : null}
 
-      <AddListingForm storeId={storeId} onAdded={handleListingAdded} />
+      <AddListingForm onAdded={handleListingAdded} />
     </View>
   );
 }
@@ -483,7 +474,7 @@ function StoreView({ storeId, storeName }: { storeId: string; storeName: string 
       <View style={styles.storeHeader}>
         <Text style={styles.storeName}>{storeName}</Text>
       </View>
-      <LocationSection storeId={storeId} />
+      <LocationSection />
       <ListingsSection storeId={storeId} />
     </>
   );

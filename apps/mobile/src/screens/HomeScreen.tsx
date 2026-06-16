@@ -23,11 +23,13 @@ import {
   View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { ListingCategory } from "@homegrown/shared";
+import { listingCategory, type ListingCategory } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { AuthedStackParamList } from "../navigation/types";
+import { capitalise } from "../utils/text";
+import { formatCents } from "../utils/money";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "Home">;
 
@@ -39,12 +41,7 @@ type FilterCategory = ListingCategory | "all";
 
 const FILTER_OPTIONS: { label: string; value: FilterCategory }[] = [
   { label: "All", value: "all" },
-  { label: "Vegetables", value: "vegetable" },
-  { label: "Fruit", value: "fruit" },
-  { label: "Herbs", value: "herb" },
-  { label: "Egg", value: "egg" },
-  { label: "Honey", value: "honey" },
-  { label: "Other", value: "other" },
+  ...listingCategory.options.map((cat) => ({ label: capitalise(cat), value: cat as FilterCategory })),
 ];
 
 // ---------------------------------------------------------------------------
@@ -125,10 +122,10 @@ function BrowseView({ lat, lng }: { lat: number; lng: number }) {
                 <Text style={styles.listingDistance}>{item.distanceKm.toFixed(1)} km</Text>
               </View>
               <Text style={styles.listingPrice}>
-                ${(item.priceCents / 100).toFixed(2)} / {item.unit}
+                ${formatCents(item.priceCents)} / {item.unit}
               </Text>
               <Text style={styles.listingMeta}>
-                {item.category.charAt(0).toUpperCase() + item.category.slice(1)} · {item.storeName}
+                {capitalise(item.category)} · {item.storeName}
               </Text>
             </View>
           )}

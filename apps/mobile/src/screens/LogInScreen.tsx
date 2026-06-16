@@ -20,13 +20,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { loginInput } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
+import { FormField } from "../components/FormField";
 import type { PreAuthStackParamList } from "../navigation/types";
 
 type Props = NativeStackScreenProps<PreAuthStackParamList, "LogIn">;
@@ -86,49 +85,29 @@ export function LogInScreen({ navigation }: Props) {
         >
           <Text style={styles.title}>Log In</Text>
 
-          {/* Username or Email */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Username or Email</Text>
-            <TextInput
-              style={[
-                styles.input,
-                fieldErrors.usernameOrEmail ? styles.inputError : null,
-              ]}
-              value={usernameOrEmail}
-              onChangeText={setUsernameOrEmail}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="email-address"
-              textContentType="username"
-              placeholder="Username or email"
-              placeholderTextColor="#aaa"
-            />
-            {fieldErrors.usernameOrEmail ? (
-              <Text style={styles.fieldError}>{fieldErrors.usernameOrEmail}</Text>
-            ) : null}
-          </View>
+          <FormField
+            label="Username or Email"
+            value={usernameOrEmail}
+            onChangeText={setUsernameOrEmail}
+            error={fieldErrors.usernameOrEmail}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="username"
+            placeholder="Username or email"
+          />
 
-          {/* Password */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={[
-                styles.input,
-                fieldErrors.password ? styles.inputError : null,
-              ]}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              textContentType="password"
-              placeholder="Password"
-              placeholderTextColor="#aaa"
-            />
-            {fieldErrors.password ? (
-              <Text style={styles.fieldError}>{fieldErrors.password}</Text>
-            ) : null}
-          </View>
+          <FormField
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
+            error={fieldErrors.password}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            placeholder="Password"
+          />
 
           {/* Server error */}
           {serverError ? (
@@ -183,33 +162,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#2d6a4f",
     marginBottom: 28,
-  },
-  fieldGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#444",
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    fontSize: 15,
-    color: "#222",
-    backgroundColor: "#fafafa",
-  },
-  inputError: {
-    borderColor: "#c0392b",
-  },
-  fieldError: {
-    marginTop: 4,
-    fontSize: 12,
-    color: "#c0392b",
   },
   serverError: {
     marginBottom: 12,
