@@ -52,10 +52,9 @@ function fakeDb(opts: {
   let joinCallCount = 0;
 
   const selectFn = () => {
-    const rows =
-      opts.selectSequence
-        ? (opts.selectSequence[selectCallCount++] ?? [])
-        : (opts.selectRows ?? []);
+    const rows = opts.selectSequence
+      ? (opts.selectSequence[selectCallCount++] ?? [])
+      : (opts.selectRows ?? []);
 
     // Make builder thenable so procedures can await it directly (without .limit())
     // or call .limit() on it.
@@ -63,7 +62,10 @@ function fakeDb(opts: {
       from: () => typeof builder;
       where: () => typeof builder;
       limit: () => Promise<unknown[]>;
-      innerJoin: () => { where: () => { where: () => unknown; limit: () => Promise<unknown[]> }; limit: () => Promise<unknown[]> };
+      innerJoin: () => {
+        where: () => { where: () => unknown; limit: () => Promise<unknown[]> };
+        limit: () => Promise<unknown[]>;
+      };
       then: (resolve: (v: unknown[]) => void, reject: (e: unknown) => void) => void;
     } = {
       from: () => builder,
@@ -71,10 +73,9 @@ function fakeDb(opts: {
       limit: () => Promise.resolve(rows),
       // Support innerJoin chaining — routes to joinRows/joinSequence
       innerJoin: () => {
-        const joinRows =
-          opts.joinSequence
-            ? (opts.joinSequence[joinCallCount++] ?? [])
-            : (opts.joinRows ?? []);
+        const joinRows = opts.joinSequence
+          ? (opts.joinSequence[joinCallCount++] ?? [])
+          : (opts.joinRows ?? []);
         const joinBuilder = {
           where: () => joinBuilder,
           limit: () => Promise.resolve(joinRows),
@@ -127,12 +128,16 @@ describe("auth.register", () => {
   it("happy path: creates user and returns token + session user", async () => {
     const db = fakeDb({
       selectRows: [], // no existing user
-      insertRows: [
-        { id: UUID1, email: "alice@example.com", username: "alice" },
-      ],
+      insertRows: [{ id: UUID1, email: "alice@example.com", username: "alice" }],
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     const result = await caller.auth.register({
@@ -155,7 +160,13 @@ describe("auth.register", () => {
       selectRows: [{ id: UUID2 }], // existing user found
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(
@@ -164,9 +175,7 @@ describe("auth.register", () => {
         username: "taken",
         password: "password123",
       }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "CONFLICT" }),
-    );
+    ).rejects.toThrow(expect.objectContaining({ code: "CONFLICT" }));
   });
 
   it("throws CONFLICT when INSERT races and yields a 23505 unique-violation", async () => {
@@ -180,7 +189,13 @@ describe("auth.register", () => {
       insertError: pgUniqueViolation,
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     const err = await caller.auth
@@ -193,9 +208,7 @@ describe("auth.register", () => {
 
     expect(err).toMatchObject({ code: "CONFLICT" });
     // Must not expose which field — message should be generic
-    expect((err as { message: string }).message).toBe(
-      "Email or username is already taken",
-    );
+    expect((err as { message: string }).message).toBe("Email or username is already taken");
   });
 
   it("re-throws non-23505 DB errors from INSERT without wrapping", async () => {
@@ -205,7 +218,13 @@ describe("auth.register", () => {
       insertError: dbErr,
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(
@@ -238,7 +257,13 @@ describe("auth.login", () => {
       ],
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     const result = await caller.auth.login({
@@ -265,7 +290,13 @@ describe("auth.login", () => {
       ],
     });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(
@@ -273,15 +304,19 @@ describe("auth.login", () => {
         usernameOrEmail: "carol@example.com",
         password: "wrongpassword",
       }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "UNAUTHORIZED" }),
-    );
+    ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 
   it("throws UNAUTHORIZED when user not found", async () => {
     const db = fakeDb({ selectRows: [] });
 
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(
@@ -289,9 +324,7 @@ describe("auth.login", () => {
         usernameOrEmail: "nobody@example.com",
         password: "anything",
       }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "UNAUTHORIZED" }),
-    );
+    ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 });
 
@@ -302,9 +335,7 @@ describe("auth.login", () => {
 describe("auth.me", () => {
   it("returns the authenticated principal from a DB read", async () => {
     const db = fakeDb({
-      selectRows: [
-        { id: UUID5, email: "dave@example.com", username: "dave" },
-      ],
+      selectRows: [{ id: UUID5, email: "dave@example.com", username: "dave" }],
     });
 
     const ctx: Context = {
@@ -324,7 +355,13 @@ describe("auth.me", () => {
 
   it("throws UNAUTHORIZED when unauthenticated", async () => {
     const db = fakeDb({ selectRows: [] });
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(caller.auth.me()).rejects.toThrow(
@@ -340,7 +377,13 @@ describe("auth.me", () => {
 describe("stores.getMine", () => {
   it("throws UNAUTHORIZED when ctx.user is null", async () => {
     const db = fakeDb({ selectRows: [] });
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
     await expect(caller.stores.getMine()).rejects.toThrow(
@@ -442,9 +485,7 @@ describe("stores.create", () => {
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.stores.create({ name: "Another Store" }),
-    ).rejects.toThrow(
+    await expect(caller.stores.create({ name: "Another Store" })).rejects.toThrow(
       expect.objectContaining({ code: "CONFLICT" }),
     );
   });
@@ -469,9 +510,7 @@ describe("stores.create", () => {
     };
     const caller = createCaller(ctx);
 
-    const err = await caller.stores
-      .create({ name: "Concurrent Store" })
-      .catch((e: unknown) => e);
+    const err = await caller.stores.create({ name: "Concurrent Store" }).catch((e: unknown) => e);
 
     expect(err).toMatchObject({ code: "CONFLICT" });
     expect((err as { message: string }).message).toBe("You already have a store.");
@@ -493,19 +532,21 @@ describe("stores.create", () => {
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.stores.create({ name: "Error Store" }),
-    ).rejects.toThrow("disk full");
+    await expect(caller.stores.create({ name: "Error Store" })).rejects.toThrow("disk full");
   });
 
   it("throws UNAUTHORIZED when unauthenticated", async () => {
     const db = fakeDb({ selectRows: [] });
-    const ctx: Context = { db, jwtSecret: TEST_SECRET, auth: stubAuth, geocode: async () => null, user: null };
+    const ctx: Context = {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      user: null,
+    };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.stores.create({ name: "Should Fail" }),
-    ).rejects.toThrow(
+    await expect(caller.stores.create({ name: "Should Fail" })).rejects.toThrow(
       expect.objectContaining({ code: "UNAUTHORIZED" }),
     );
   });
@@ -720,7 +761,10 @@ describe("listings.update", () => {
 describe("listings.listByStore", () => {
   it("returns an array of listings for a store", async () => {
     const db = fakeDb({
-      selectRows: [BASE_LISTING, { ...BASE_LISTING, id: "bb22bc99-9c0b-4ef8-bb6d-6bb9bd380c11", name: "Basil" }],
+      selectRows: [
+        BASE_LISTING,
+        { ...BASE_LISTING, id: "bb22bc99-9c0b-4ef8-bb6d-6bb9bd380c11", name: "Basil" },
+      ],
     });
 
     const ctx: Context = {
@@ -818,9 +862,9 @@ describe("geo.setStoreLocation", () => {
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.geo.setStoreLocation(locationInput),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.geo.setStoreLocation(locationInput)).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("throws NOT_FOUND when the caller has no store", async () => {
@@ -835,9 +879,9 @@ describe("geo.setStoreLocation", () => {
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.geo.setStoreLocation(locationInput),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.geo.setStoreLocation(locationInput)).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 
   it("throws UNAUTHORIZED when unauthenticated", async () => {
@@ -851,8 +895,8 @@ describe("geo.setStoreLocation", () => {
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.geo.setStoreLocation(locationInput),
-    ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
+    await expect(caller.geo.setStoreLocation(locationInput)).rejects.toThrow(
+      expect.objectContaining({ code: "UNAUTHORIZED" }),
+    );
   });
 });

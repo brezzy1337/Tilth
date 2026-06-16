@@ -63,20 +63,23 @@ describe("geocodeAddress", () => {
     expect(result?.lng).toBe(-89.2);
   });
 
-  it("encodes the address and includes the key in the URL", async () => {
+  it("encodes the address and passes the key as a header (not in the URL)", async () => {
     const fetchSpy = mockFetch(googleOkResponse(40.1, -89.2));
     vi.stubGlobal("fetch", fetchSpy);
 
     await geocodeAddress(INPUT, FAKE_API_KEY);
 
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const url = (fetchSpy.mock.calls[0] as unknown[])[0] as string;
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("maps.googleapis.com/maps/api/geocode/json");
-    expect(url).toContain("key=fake-api-key-for-testing");
-    // Address must be URL-encoded
+    // Key must NOT appear in the URL query string
+    expect(url).not.toContain("key=");
+    // Address must be URL-encoded and present
     expect(url).toContain("address=");
-    // Key should not appear in the encoded address part
     expect(url).toContain("Springfield");
+    // Key must be sent as a request header instead
+    const headers = init?.headers as Record<string, string>;
+    expect(headers?.["X-Goog-Api-Key"]).toBe(FAKE_API_KEY);
   });
 
   it("returns null on ZERO_RESULTS", async () => {
@@ -101,31 +104,30 @@ describe("geocodeAddress", () => {
   });
 
   it("returns null when fetch throws a network error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new Error("network error")),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
 
     const result = await geocodeAddress(INPUT, FAKE_API_KEY);
     expect(result).toBeNull();
   });
 
   it("returns null on REQUEST_DENIED status", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({ status: "REQUEST_DENIED", results: [] }),
-    );
+    vi.stubGlobal("fetch", mockFetch({ status: "REQUEST_DENIED", results: [] }));
 
     const result = await geocodeAddress(INPUT, FAKE_API_KEY);
     expect(result).toBeNull();
   });
 
   it("returns null when JSON parsing fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => { throw new Error("invalid json"); },
-    } as unknown as Response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new Error("invalid json");
+        },
+      } as unknown as Response),
+    );
 
     const result = await geocodeAddress(INPUT, FAKE_API_KEY);
     expect(result).toBeNull();

@@ -122,18 +122,22 @@ export const locations = pgTable(
 // Listings — produce items belonging to a store
 // ---------------------------------------------------------------------------
 
-export const listings = pgTable("listings", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  storeId: uuid("store_id")
-    .notNull()
-    .references(() => stores.id),
-  name: text("name").notNull(),
-  category: listingCategoryEnum("category").notNull(),
-  priceCents: integer("price_cents").notNull(),
-  quantity: integer("quantity").notNull(),
-  unit: listingUnitEnum("unit").notNull(),
-  /** Optional JSONB extras, e.g. { dried: true } for herbs. */
-  attributes: jsonb("attributes"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
-});
+export const listings = pgTable(
+  "listings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    name: text("name").notNull(),
+    category: listingCategoryEnum("category").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    quantity: integer("quantity").notNull(),
+    unit: listingUnitEnum("unit").notNull(),
+    /** Optional JSONB extras, e.g. { dried: true } for herbs. */
+    attributes: jsonb("attributes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [index("listings_store_id_idx").on(t.storeId)],
+);

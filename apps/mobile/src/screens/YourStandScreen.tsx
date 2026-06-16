@@ -43,25 +43,9 @@ import { FormField } from "../components/FormField";
 // Category and unit option arrays derived from the shared enums
 // ---------------------------------------------------------------------------
 
-const CATEGORY_OPTIONS: ListingCategory[] = [
-  "vegetable",
-  "fruit",
-  "herb",
-  "egg",
-  "honey",
-  "other",
-];
+const CATEGORY_OPTIONS: ListingCategory[] = ["vegetable", "fruit", "herb", "egg", "honey", "other"];
 
-const UNIT_OPTIONS: ListingUnit[] = [
-  "each",
-  "lb",
-  "oz",
-  "bunch",
-  "dozen",
-  "jar",
-  "pint",
-  "quart",
-];
+const UNIT_OPTIONS: ListingUnit[] = ["each", "lb", "oz", "bunch", "dozen", "jar", "pint", "quart"];
 
 function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -117,9 +101,7 @@ function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Create Your Stand</Text>
-      <Text style={styles.sectionSubtitle}>
-        Set up your store to start selling local produce.
-      </Text>
+      <Text style={styles.sectionSubtitle}>Set up your store to start selling local produce.</Text>
 
       <FormField
         label="Stand Name"
@@ -150,9 +132,7 @@ function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
         style={styles.multilineInput}
       />
 
-      {serverError ? (
-        <Text style={styles.serverError}>{serverError}</Text>
-      ) : null}
+      {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
 
       <Pressable
         style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
@@ -267,9 +247,7 @@ function LocationSection({ storeId }: { storeId: string }) {
         maxLength={12}
       />
 
-      {serverError ? (
-        <Text style={styles.serverError}>{serverError}</Text>
-      ) : null}
+      {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
 
       <Pressable
         style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
@@ -290,13 +268,7 @@ function LocationSection({ storeId }: { storeId: string }) {
 // AddListingForm
 // ---------------------------------------------------------------------------
 
-function AddListingForm({
-  storeId,
-  onAdded,
-}: {
-  storeId: string;
-  onAdded: () => void;
-}) {
+function AddListingForm({ storeId, onAdded }: { storeId: string; onAdded: () => void }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ListingCategory>("vegetable");
   const [priceDollars, setPriceDollars] = useState("");
@@ -335,9 +307,7 @@ function AddListingForm({
 
     // Convert dollars (string) → integer cents
     const parsedDollars = parseFloat(priceDollars);
-    const priceCents = Number.isFinite(parsedDollars)
-      ? Math.round(parsedDollars * 100)
-      : NaN;
+    const priceCents = Number.isFinite(parsedDollars) ? Math.round(parsedDollars * 100) : NaN;
 
     const parsedQuantity = parseInt(quantity, 10);
 
@@ -384,26 +354,16 @@ function AddListingForm({
           {CATEGORY_OPTIONS.map((opt) => (
             <Pressable
               key={opt}
-              style={[
-                styles.chip,
-                category === opt ? styles.chipActive : null,
-              ]}
+              style={[styles.chip, category === opt ? styles.chipActive : null]}
               onPress={() => setCategory(opt)}
             >
-              <Text
-                style={[
-                  styles.chipText,
-                  category === opt ? styles.chipTextActive : null,
-                ]}
-              >
+              <Text style={[styles.chipText, category === opt ? styles.chipTextActive : null]}>
                 {capitalise(opt)}
               </Text>
             </Pressable>
           ))}
         </View>
-        {errors.category ? (
-          <Text style={styles.fieldError}>{errors.category}</Text>
-        ) : null}
+        {errors.category ? <Text style={styles.fieldError}>{errors.category}</Text> : null}
       </View>
 
       <FormField
@@ -434,25 +394,16 @@ function AddListingForm({
               style={[styles.chip, unit === opt ? styles.chipActive : null]}
               onPress={() => setUnit(opt)}
             >
-              <Text
-                style={[
-                  styles.chipText,
-                  unit === opt ? styles.chipTextActive : null,
-                ]}
-              >
+              <Text style={[styles.chipText, unit === opt ? styles.chipTextActive : null]}>
                 {opt}
               </Text>
             </Pressable>
           ))}
         </View>
-        {errors.unit ? (
-          <Text style={styles.fieldError}>{errors.unit}</Text>
-        ) : null}
+        {errors.unit ? <Text style={styles.fieldError}>{errors.unit}</Text> : null}
       </View>
 
-      {serverError ? (
-        <Text style={styles.serverError}>{serverError}</Text>
-      ) : null}
+      {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
 
       <Pressable
         style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
@@ -490,15 +441,11 @@ function ListingsSection({ storeId }: { storeId: string }) {
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Your Listings</Text>
 
-      {isLoading && (
-        <ActivityIndicator size="small" color="#2d6a4f" style={styles.loader} />
-      )}
+      {isLoading && <ActivityIndicator size="small" color="#2d6a4f" style={styles.loader} />}
 
       {error ? (
         <View>
-          <Text style={styles.serverError}>
-            Could not load listings: {error.message}
-          </Text>
+          <Text style={styles.serverError}>Could not load listings: {error.message}</Text>
           <Pressable style={styles.retryButton} onPress={() => void refetch()}>
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
@@ -514,7 +461,8 @@ function ListingsSection({ storeId }: { storeId: string }) {
             <View key={item.id} style={styles.listingCard}>
               <Text style={styles.listingName}>{item.name}</Text>
               <Text style={styles.listingMeta}>
-                {capitalise(item.category)} · ${(item.priceCents / 100).toFixed(2)}/{item.unit} · qty {item.quantity}
+                {capitalise(item.category)} · ${(item.priceCents / 100).toFixed(2)}/{item.unit} ·
+                qty {item.quantity}
               </Text>
             </View>
           ))
@@ -559,21 +507,14 @@ export function YourStandScreen() {
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <ScrollView
-          contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.pageTitle}>Your Stand</Text>
 
-          {isLoading && (
-            <ActivityIndicator size="large" color="#2d6a4f" style={styles.loader} />
-          )}
+          {isLoading && <ActivityIndicator size="large" color="#2d6a4f" style={styles.loader} />}
 
           {error ? (
             <View>
-              <Text style={styles.serverError}>
-                Could not load store: {error.message}
-              </Text>
+              <Text style={styles.serverError}>Could not load store: {error.message}</Text>
               <Pressable style={styles.retryButton} onPress={() => void refetch()}>
                 <Text style={styles.retryText}>Retry</Text>
               </Pressable>
@@ -584,9 +525,7 @@ export function YourStandScreen() {
             <CreateStoreSection onCreated={handleStoreCreated} />
           ) : null}
 
-          {store ? (
-            <StoreView storeId={store.id} storeName={store.name} />
-          ) : null}
+          {store ? <StoreView storeId={store.id} storeName={store.name} /> : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

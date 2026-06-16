@@ -13,12 +13,7 @@ import { env } from "./env";
 import { db } from "./db/index";
 import { appRouter } from "./router";
 import { createContext } from "./context";
-import {
-  hashPassword,
-  verifyPassword,
-  signToken,
-  verifyToken,
-} from "./auth";
+import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
 import { geocodeAddress } from "./geocode";
 
 const server = createHTTPServer({

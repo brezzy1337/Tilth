@@ -11,9 +11,7 @@ import { z } from "zod";
 const envSchema = z.object({
   /** Cloud Run injects PORT; defaults to 3001 locally. */
   PORT: z.coerce.number().default(3001),
-  NODE_ENV: z
-    .enum(["development", "test", "production"])
-    .default("development"),
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   /** Postgres connection URL — required at runtime. */
   DATABASE_URL: z.string().url(),
   /**

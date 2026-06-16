@@ -125,28 +125,12 @@ export type Store = z.infer<typeof store>;
 // ---------------------------------------------------------------------------
 
 /** The category of a produce listing. Drives filtering in `listings.nearby`. */
-export const listingCategory = z.enum([
-  "vegetable",
-  "fruit",
-  "herb",
-  "egg",
-  "honey",
-  "other",
-]);
+export const listingCategory = z.enum(["vegetable", "fruit", "herb", "egg", "honey", "other"]);
 
 export type ListingCategory = z.infer<typeof listingCategory>;
 
 /** The sell-by unit for a listing quantity (e.g. "lb", "bunch"). */
-export const listingUnit = z.enum([
-  "each",
-  "lb",
-  "oz",
-  "bunch",
-  "dozen",
-  "jar",
-  "pint",
-  "quart",
-]);
+export const listingUnit = z.enum(["each", "lb", "oz", "bunch", "dozen", "jar", "pint", "quart"]);
 
 export type ListingUnit = z.infer<typeof listingUnit>;
 

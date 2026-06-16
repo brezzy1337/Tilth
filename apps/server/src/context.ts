@@ -57,13 +57,9 @@ export interface ContextDeps {
   geocode: Geocoder;
 }
 
-export async function createContext(
-  { req }: CreateHTTPContextOptions,
-  deps: ContextDeps,
-) {
+export async function createContext({ req }: CreateHTTPContextOptions, deps: ContextDeps) {
   const authHeader = req.headers.authorization;
-  const token =
-    authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
   let user: { id: string } | null = null;
   if (token) {

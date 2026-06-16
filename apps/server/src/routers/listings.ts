@@ -24,6 +24,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
 import { stores, listings } from "../db/schema";
+import { resolveCallerStore } from "./helpers";
 
 /** Columns returned by all listing queries. */
 const listingCols = {
@@ -76,19 +77,8 @@ export const listingsRouter = router({
     .input(createListingInput)
     .output(listingSchema)
     .mutation(async ({ input, ctx }) => {
-      // Resolve the caller's store
-      const [store] = await ctx.db
-        .select({ id: stores.id })
-        .from(stores)
-        .where(eq(stores.userId, ctx.user.id))
-        .limit(1);
-
-      if (!store) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "You do not have a store. Create one first.",
-        });
-      }
+      // Resolve the caller's store (throws NOT_FOUND if absent)
+      const store = await resolveCallerStore(ctx.db, ctx.user.id);
 
       const [inserted] = await ctx.db
         .insert(listings)
@@ -254,7 +244,7 @@ export const listingsRouter = router({
         JOIN locations loc ON loc.store_id = s.id
         WHERE ST_DWithin(loc.geog, ST_MakePoint(${lng}, ${lat})::geography, ${radiusMeters})
         ${categoryFilter}
-        ORDER BY distance_m ASC
+        ORDER BY ST_Distance(loc.geog, ST_MakePoint(${lng}, ${lat})::geography) ASC
         LIMIT 50
       `);
 

@@ -38,11 +38,13 @@ export async function geocodeAddress(
 ): Promise<{ lat: number; lng: number } | null> {
   const fullAddress = `${input.address}, ${input.city}, ${input.state} ${input.zip}`;
   const encoded = encodeURIComponent(fullAddress);
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${apiKey}`;
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}`;
 
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, {
+      headers: { "X-Goog-Api-Key": apiKey },
+    });
   } catch {
     // Network error
     return null;

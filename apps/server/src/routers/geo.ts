@@ -11,9 +11,10 @@
 
 import { TRPCError } from "@trpc/server";
 import { setStoreLocationInput, location as locationSchema } from "@homegrown/shared";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
-import { stores, locations } from "../db/schema";
+import { locations } from "../db/schema";
+import { resolveCallerStore } from "./helpers";
 
 export const geoRouter = router({
   /**
@@ -25,19 +26,8 @@ export const geoRouter = router({
     .input(setStoreLocationInput)
     .output(locationSchema)
     .mutation(async ({ input, ctx }) => {
-      // Resolve the caller's store
-      const [store] = await ctx.db
-        .select({ id: stores.id })
-        .from(stores)
-        .where(eq(stores.userId, ctx.user.id))
-        .limit(1);
-
-      if (!store) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "You do not have a store. Create one first.",
-        });
-      }
+      // Resolve the caller's store (throws NOT_FOUND if absent)
+      const store = await resolveCallerStore(ctx.db, ctx.user.id);
 
       // Geocode the address via the injected capability
       const coords = await ctx.geocode(input);
@@ -50,8 +40,10 @@ export const geoRouter = router({
 
       const { lat, lng } = coords;
 
+      // Hoist the geography point so lng/lat order is defined exactly once.
+      const geogPoint = sql`ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography`;
+
       // Upsert: insert or update on store_id conflict
-      // geog = ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography
       const [upserted] = await ctx.db
         .insert(locations)
         .values({
@@ -60,7 +52,7 @@ export const geoRouter = router({
           city: input.city,
           state: input.state,
           zip: input.zip,
-          geog: sql`ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography`,
+          geog: geogPoint,
         })
         .onConflictDoUpdate({
           target: locations.storeId,
@@ -69,7 +61,7 @@ export const geoRouter = router({
             city: input.city,
             state: input.state,
             zip: input.zip,
-            geog: sql`ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography`,
+            geog: geogPoint,
             updatedAt: sql`now()`,
           },
         })

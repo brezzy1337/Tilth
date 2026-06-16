@@ -51,13 +51,7 @@ const FILTER_OPTIONS: { label: string; value: FilterCategory }[] = [
 // BrowseView — rendered once coords are available
 // ---------------------------------------------------------------------------
 
-function BrowseView({
-  lat,
-  lng,
-}: {
-  lat: number;
-  lng: number;
-}) {
+function BrowseView({ lat, lng }: { lat: number; lng: number }) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
 
   const category: ListingCategory | undefined =
@@ -88,9 +82,7 @@ function BrowseView({
             <Text
               style={[
                 styles.filterChipText,
-                activeCategory === item.value
-                  ? styles.filterChipTextActive
-                  : null,
+                activeCategory === item.value ? styles.filterChipTextActive : null,
               ]}
             >
               {item.label}
@@ -101,18 +93,12 @@ function BrowseView({
 
       {/* Listings */}
       {isLoading && (
-        <ActivityIndicator
-          size="large"
-          color="#2d6a4f"
-          style={styles.centeredLoader}
-        />
+        <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
       )}
 
       {error ? (
         <View style={styles.centeredState}>
-          <Text style={styles.stateText}>
-            Could not load listings: {error.message}
-          </Text>
+          <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
           <Pressable style={styles.retryButton} onPress={() => void refetch()}>
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
@@ -122,9 +108,7 @@ function BrowseView({
       {!isLoading && !error && data && data.length === 0 ? (
         <View style={styles.centeredState}>
           <Text style={styles.stateText}>No produce nearby.</Text>
-          <Text style={styles.stateSubText}>
-            Check back soon or try a wider search.
-          </Text>
+          <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
         </View>
       ) : null}
 
@@ -138,16 +122,13 @@ function BrowseView({
             <View style={styles.listingCard}>
               <View style={styles.listingRow}>
                 <Text style={styles.listingName}>{item.name}</Text>
-                <Text style={styles.listingDistance}>
-                  {item.distanceKm.toFixed(1)} km
-                </Text>
+                <Text style={styles.listingDistance}>{item.distanceKm.toFixed(1)} km</Text>
               </View>
               <Text style={styles.listingPrice}>
                 ${(item.priceCents / 100).toFixed(2)} / {item.unit}
               </Text>
               <Text style={styles.listingMeta}>
-                {item.category.charAt(0).toUpperCase() + item.category.slice(1)}{" "}
-                · {item.storeName}
+                {item.category.charAt(0).toUpperCase() + item.category.slice(1)} · {item.storeName}
               </Text>
             </View>
           )}
@@ -171,21 +152,13 @@ export function HomeScreen({ navigation }: Props) {
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>HomeGrown</Text>
-          {user ? (
-            <Text style={styles.greeting}>Hi, {user.username}</Text>
-          ) : null}
+          {user ? <Text style={styles.greeting}>Hi, {user.username}</Text> : null}
         </View>
         <View style={styles.headerActions}>
-          <Pressable
-            style={styles.standButton}
-            onPress={() => navigation.navigate("YourStand")}
-          >
+          <Pressable style={styles.standButton} onPress={() => navigation.navigate("YourStand")}>
             <Text style={styles.standButtonText}>Your Stand</Text>
           </Pressable>
-          <Pressable
-            style={styles.signOutButton}
-            onPress={() => void signOut()}
-          >
+          <Pressable style={styles.signOutButton} onPress={() => void signOut()}>
             <Text style={styles.signOutText}>Sign Out</Text>
           </Pressable>
         </View>
@@ -211,9 +184,7 @@ export function HomeScreen({ navigation }: Props) {
       {location.status === "error" ? (
         <View style={styles.centeredState}>
           <Text style={styles.stateText}>Could not determine your location.</Text>
-          <Text style={styles.stateSubText}>
-            Please check your device settings and try again.
-          </Text>
+          <Text style={styles.stateSubText}>Please check your device settings and try again.</Text>
         </View>
       ) : null}
 
