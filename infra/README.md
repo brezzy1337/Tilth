@@ -449,6 +449,84 @@ secrets (`DATABASE_URL`, `JWT_SECRET`, `GOOGLE_GEOCODING_API_KEY`,
 performed in § 3 — no additional action needed here, but verify it is done before
 arming `DEPLOY_ENABLED`.
 
+#### G. Pre-arming hardening: pin the Cloud SQL Auth Proxy checksum
+
+**Required before setting `DEPLOY_ENABLED = true`.**
+
+The workflow currently downloads the `.sha256` verification file from the same GCS
+origin as the binary itself (trust-on-first-use).  This provides no protection if
+that origin is compromised — an attacker who can replace the binary can replace the
+checksum too.
+
+Before arming the pipeline, replace the dynamic checksum fetch in the "Download
+Cloud SQL Auth Proxy" step with a hardcoded expected SHA-256 literal for v2.15.2:
+
+1. Obtain the canonical hash **out-of-band** (from a machine you trust, not inside
+   the CI runner) by downloading
+   `https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64.sha256`
+   and cross-checking it against the hash published on the
+   [official GitHub release page](https://github.com/GoogleCloudPlatform/cloud-sql-proxy/releases/tag/v2.15.2).
+2. Hardcode that verified hex string in the workflow step, for example:
+   ```yaml
+   - name: Download Cloud SQL Auth Proxy
+     run: |
+       curl -fsSL \
+         "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64" \
+         -o /usr/local/bin/cloud-sql-proxy
+       # Pinned SHA-256 verified out-of-band against the v2.15.2 GitHub release.
+       echo "<VERIFIED_SHA256_HEX>  /usr/local/bin/cloud-sql-proxy" | sha256sum -c -
+       chmod +x /usr/local/bin/cloud-sql-proxy
+   ```
+   Replace `<VERIFIED_SHA256_HEX>` with the actual hash you obtained in step 1.
+3. When upgrading the proxy version, repeat this process — never copy a hash from
+   the same network request that fetches the binary.
+
+Do **not** invent or copy a hash from this document; obtain it from the authoritative
+source and verify it yourself before committing.
+
+#### H. Migrations are forward-only; rollback is manual
+
+**Destructive schema changes require the expand/contract pattern.**
+
+The migration step runs before `gcloud run deploy` makes the new revision live, but
+the previous revision may still be serving traffic during the migrate → deploy window
+(Cloud Run drains connections gradually).  A migration that drops or renames a column
+that the previous revision reads will cause errors in that window.
+
+- **Always use expand/contract across two deploys** for destructive changes:
+  - **Deploy 1 (expand):** add the new column/table alongside the old one; both
+    revisions can coexist.
+  - **Deploy 2 (contract):** after the old revision is fully drained, drop the old
+    column/table.
+- Never drop or rename a column in the same deploy that introduces the code that
+  stops reading it.
+
+**Failed smoke test leaves the new revision live — roll back manually.**
+
+`gcloud run deploy` makes the new revision the default before the smoke-test step
+runs.  If the smoke test fails, the new revision is already serving traffic.  To
+restore service, route 100 % of traffic to the prior revision:
+
+```bash
+gcloud run services update-traffic homegrown-server \
+  --region=<REGION> \
+  --to-revisions=<PRIOR_REVISION>=100
+```
+
+The prior revision name is visible in the Cloud Run console or via:
+
+```bash
+gcloud run revisions list \
+  --service=homegrown-server \
+  --region=<REGION> \
+  --sort-by=~creationTimestamp \
+  --limit=5
+```
+
+Because images are tagged with the full Git SHA (`:<sha>`), the prior revision's
+image is always recoverable from Artifact Registry — it is never overwritten by the
+`:latest` push.
+
 ---
 
 ## Future: compiled build (post-M1)

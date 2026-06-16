@@ -36,29 +36,30 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
 
       - name: Resolve image name
         id: vars
         run: |
-          IMAGE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/server"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          BASE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/server"
+          echo "image=${BASE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "image_base=${BASE}" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         run: |
-          IMAGE="${{ steps.vars.outputs.image }}"
+          BASE="${{ steps.vars.outputs.image_base }}"
           docker build \
             --platform linux/amd64 \
             -f infra/Dockerfile \
-            -t "${IMAGE}:${{ github.sha }}" \
-            -t "${IMAGE}:latest" \
+            -t "${BASE}:${{ github.sha }}" \
+            -t "${BASE}:latest" \
             .
 
       - name: Push image
         run: |
-          IMAGE="${{ steps.vars.outputs.image }}"
-          docker push "${IMAGE}:${{ github.sha }}"
-          docker push "${IMAGE}:latest"
+          BASE="${{ steps.vars.outputs.image_base }}"
+          docker push "${BASE}:${{ github.sha }}"
+          docker push "${BASE}:latest"
 
   # ── Migrate + deploy (gated by the production Environment) ───────────────────
   deploy:
@@ -129,9 +130,10 @@ jobs:
           # Wait until the proxy is accepting connections (up to 30 s).
           # Fail loudly if the proxy never binds — a silent failure here would
           # surface later as a confusing connection-refused error in the migration.
+          # Uses bash's built-in TCP redirect — no dependency on nc/netcat.
           PROXY_READY=0
           for i in $(seq 1 30); do
-            if nc -z 127.0.0.1 5432; then
+            if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
               echo "Proxy ready after ${i}s"
               PROXY_READY=1
               break
@@ -158,9 +160,8 @@ jobs:
       # ── Cloud Run deploy ────────────────────────────────────────────────────
       - name: Deploy to Cloud Run
         run: |
-          IMAGE="${{ needs.build-and-push.outputs.image }}"
           gcloud run deploy homegrown-server \
-            --image="${IMAGE}:${{ github.sha }}" \
+            --image="${{ needs.build-and-push.outputs.image }}" \
             --region="${{ vars.GCP_REGION }}" \
             --platform=managed \
             --allow-unauthenticated \
