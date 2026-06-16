@@ -3,6 +3,8 @@
  *
  * Sets up:
  *   - AuthProvider (reads SecureStore, validates token, exposes auth state)
+ *   - CartProvider (unconditional; lives inside AuthProvider so it can read
+ *     auth status and clear the cart on sign-out)
  *   - QueryClientProvider (TanStack Query v5)
  *   - trpc.Provider (tRPC React Query bridge, single client with auth header)
  *   - StripeProvider (PaymentSheet + Connect onboarding redirect support)
@@ -84,35 +86,33 @@ function RootNavigator() {
           />
         </PreAuthStack.Navigator>
       ) : (
-        <CartProvider>
-          <AuthedStack.Navigator>
-            <AuthedStack.Screen
-              name="Home"
-              component={HomeScreen}
-              options={{ headerShown: false }}
-            />
-            <AuthedStack.Screen
-              name="YourStand"
-              component={YourStandScreen}
-              options={{ title: "Your Stand" }}
-            />
-            <AuthedStack.Screen
-              name="Cart"
-              component={CartScreen}
-              options={{ title: "Cart" }}
-            />
-            <AuthedStack.Screen
-              name="Orders"
-              component={OrdersScreen}
-              options={{ title: "Orders" }}
-            />
-            <AuthedStack.Screen
-              name="OrderDetail"
-              component={OrderDetailScreen}
-              options={{ title: "Order" }}
-            />
-          </AuthedStack.Navigator>
-        </CartProvider>
+        <AuthedStack.Navigator>
+          <AuthedStack.Screen
+            name="Home"
+            component={HomeScreen}
+            options={{ headerShown: false }}
+          />
+          <AuthedStack.Screen
+            name="YourStand"
+            component={YourStandScreen}
+            options={{ title: "Your Stand" }}
+          />
+          <AuthedStack.Screen
+            name="Cart"
+            component={CartScreen}
+            options={{ title: "Cart" }}
+          />
+          <AuthedStack.Screen
+            name="Orders"
+            component={OrdersScreen}
+            options={{ title: "Orders" }}
+          />
+          <AuthedStack.Screen
+            name="OrderDetail"
+            component={OrderDetailScreen}
+            options={{ title: "Order" }}
+          />
+        </AuthedStack.Navigator>
       )}
     </NavigationContainer>
   );
@@ -148,7 +148,12 @@ export default function App() {
           urlScheme="homegrown"
         >
           <AuthProvider>
-            <RootNavigator />
+            {/* CartProvider is unconditional and lives inside AuthProvider so it
+                can call useAuth() to clear items on sign-out, without being
+                re-mounted on auth-state transitions. */}
+            <CartProvider>
+              <RootNavigator />
+            </CartProvider>
           </AuthProvider>
         </StripeProvider>
       </QueryClientProvider>

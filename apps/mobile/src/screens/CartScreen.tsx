@@ -7,16 +7,19 @@
  *   1. orders.create → (order, clientSecret)
  *   2. initPaymentSheet
  *   3. presentPaymentSheet
- *   4. Poll orders.get up to 5× (~1.5 s apart) until status === "paid"
- *      (webhook-driven truth; SDK result is NOT treated as final).
- *   5. On paid: clearCart → navigate to OrderDetail.
- *      On polling exhaustion: show finalizing message, still navigate.
+ *   On Canceled: abort quietly.
+ *   On any other presentErr: show error and stop.
+ *   On success: clearCart → navigate to OrderDetail immediately.
+ *   OrderDetailScreen is the single confirmer (it polls orders.get while
+ *   status === "pending_payment" via refetchInterval).
+ *
+ * Unmount-safe: mountedRef guards every setState that runs after an await.
  *
  * React Native only — no DOM elements.
  * Money: integer cents throughout; formatCents for display.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -37,15 +40,6 @@ import { formatCents } from "../utils/money";
 type Props = NativeStackScreenProps<AuthedStackParamList, "Cart">;
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Sleep for ms milliseconds. */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ---------------------------------------------------------------------------
 // CartScreen
 // ---------------------------------------------------------------------------
 
@@ -53,13 +47,21 @@ export function CartScreen({ navigation }: Props) {
   const { items, storeName, itemCount, subtotalCents, setQuantity, removeItem, clearCart } =
     useCart();
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
-  const utils = trpc.useUtils();
 
   const createOrder = trpc.orders.create.useMutation();
 
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  // Unmount guard — prevents setState calls on an unmounted component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   async function handleCheckout() {
     if (items.length === 0) return;
@@ -75,6 +77,7 @@ export function CartScreen({ navigation }: Props) {
       try {
         orderResult = await createOrder.mutateAsync({ items: orderItems });
       } catch (err) {
+        if (!mountedRef.current) return;
         const msg = err instanceof Error ? err.message : "Could not create order. Try again.";
         setCheckoutError(msg);
         setCheckoutStatus(null);
@@ -85,6 +88,7 @@ export function CartScreen({ navigation }: Props) {
       const { order, clientSecret } = orderResult;
 
       // Step 2: init PaymentSheet
+      if (!mountedRef.current) return;
       setCheckoutStatus("Initialising payment…");
       const { error: initErr } = await initPaymentSheet({
         merchantDisplayName: "HomeGrown",
@@ -92,6 +96,7 @@ export function CartScreen({ navigation }: Props) {
         returnURL: "homegrown://stripe-redirect",
       });
       if (initErr) {
+        if (!mountedRef.current) return;
         setCheckoutError(initErr.message ?? "Could not initialise payment.");
         setCheckoutStatus(null);
         setIsCheckingOut(false);
@@ -99,50 +104,34 @@ export function CartScreen({ navigation }: Props) {
       }
 
       // Step 3: present PaymentSheet
+      if (!mountedRef.current) return;
       setCheckoutStatus("Waiting for payment…");
       const { error: presentErr } = await presentPaymentSheet();
       if (presentErr) {
         if (presentErr.code === "Canceled") {
           // Buyer dismissed — quiet abort
+          if (!mountedRef.current) return;
           setCheckoutStatus(null);
           setIsCheckingOut(false);
           return;
         }
+        if (!mountedRef.current) return;
         setCheckoutError(presentErr.message ?? "Payment failed. Please try again.");
         setCheckoutStatus(null);
         setIsCheckingOut(false);
         return;
       }
 
-      // Step 4: confirm via webhook-backed truth (poll orders.get)
-      // The SDK returning without error does NOT mean paid — the webhook is truth.
-      setCheckoutStatus("Confirming payment…");
-      const MAX_POLLS = 5;
-      const POLL_INTERVAL_MS = 1500;
-      let confirmed = await utils.orders.get.fetch({ id: order.id });
-      let attempts = 1;
-
-      while (confirmed.status !== "paid" && attempts < MAX_POLLS) {
-        await sleep(POLL_INTERVAL_MS);
-        confirmed = await utils.orders.get.fetch({ id: order.id });
-        attempts++;
-      }
-
-      if (confirmed.status === "paid") {
-        // Paid and confirmed
-        clearCart();
-        navigation.replace("OrderDetail", { orderId: order.id });
-      } else {
-        // Webhook hasn't arrived yet — order exists, navigate anyway
-        // The OrderDetail screen will auto-refetch when the webhook catches up.
-        clearCart();
-        setCheckoutStatus("Payment received — finalizing your order…");
-        await sleep(800);
-        navigation.replace("OrderDetail", { orderId: order.id });
-      }
+      // Payment sheet completed without error.
+      // Navigate immediately — OrderDetailScreen is the single confirmer
+      // (it polls orders.get via refetchInterval while status === "pending_payment").
+      clearCart();
+      navigation.replace("OrderDetail", { orderId: order.id });
     } finally {
-      setIsCheckingOut(false);
-      setCheckoutStatus(null);
+      if (mountedRef.current) {
+        setIsCheckingOut(false);
+        setCheckoutStatus(null);
+      }
     }
   }
 

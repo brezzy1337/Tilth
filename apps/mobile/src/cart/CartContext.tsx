@@ -12,8 +12,17 @@
  * Exported: CartProvider, useCart.
  */
 
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { NearbyListing } from "@homegrown/shared";
+import { useAuth } from "../auth/AuthContext";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,7 +42,8 @@ export type CartLineItem = {
 
 export type AddItemResult =
   | { ok: true }
-  | { ok: false; reason: "different-store"; cartStoreName: string };
+  | { ok: false; reason: "different-store"; cartStoreName: string }
+  | { ok: false; reason: "sold-out" };
 
 export type CartContextValue = {
   items: CartLineItem[];
@@ -44,10 +54,11 @@ export type CartContextValue = {
   /** Sum of priceCents × quantity across all items (integer cents). */
   subtotalCents: number;
   /**
-   * Add a listing to the cart. If the cart is non-empty and the listing belongs
-   * to a different store, returns { ok: false, reason: "different-store" }.
-   * Otherwise increments quantity if the item is already in the cart, up to
-   * Math.min(available, 1000).
+   * Add a listing to the cart. If the listing is sold out, returns
+   * { ok: false, reason: "sold-out" }. If the cart is non-empty and the
+   * listing belongs to a different store, returns
+   * { ok: false, reason: "different-store" }. Otherwise increments quantity
+   * if the item is already in the cart, up to Math.min(available, 1000).
    */
   addItem: (listing: NearbyListing) => AddItemResult;
   /**
@@ -72,18 +83,59 @@ const CartContext = createContext<CartContextValue | null>(null);
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartLineItem[]>([]);
 
+  // itemsRef always reflects the latest committed items array, eliminating
+  // stale-closure reads in addItem (which must read current state synchronously
+  // before the async setState settles).
+  const itemsRef = useRef<CartLineItem[]>([]);
+
+  // Wrap setItems so itemsRef is kept in sync inside every updater.
+  const setItemsAndRef = useCallback(
+    (updater: (prev: CartLineItem[]) => CartLineItem[]) => {
+      setItems((prev) => {
+        const next = updater(prev);
+        itemsRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Clear cart on sign-out — decouples cleanup from AuthContext.
+  const { status: authStatus } = useAuth();
+  useEffect(() => {
+    if (authStatus === "signedOut") {
+      setItemsAndRef(() => []);
+    }
+  }, [authStatus, setItemsAndRef]);
+
   const addItem = useCallback((listing: NearbyListing): AddItemResult => {
-    // Single-store invariant check
-    const currentStoreId = items.length > 0 ? items[0]!.storeId : null;
+    // Defense-in-depth: reject sold-out listings before touching state.
+    if (listing.quantity === 0) {
+      return { ok: false, reason: "sold-out" };
+    }
+
+    // Single-store invariant check — read from ref, not the closed-over `items`,
+    // so rapid successive calls all see the most-recently committed state.
+    const currentItems = itemsRef.current;
+    const currentStoreId = currentItems.length > 0 ? currentItems[0]!.storeId : null;
     if (currentStoreId !== null && currentStoreId !== listing.storeId) {
       return {
         ok: false,
         reason: "different-store",
-        cartStoreName: items[0]!.storeName,
+        cartStoreName: currentItems[0]!.storeName,
       };
     }
 
-    setItems((prev) => {
+    setItemsAndRef((prev) => {
+      // Second line of defense inside the updater — prev is the latest committed
+      // state, so two concurrent taps cannot both sneak through.
+      const prevStoreId = prev.length > 0 ? prev[0]!.storeId : null;
+      if (prevStoreId !== null && prevStoreId !== listing.storeId) {
+        // Reject silently; caller already got ok:true from the synchronous guard
+        // above, but we prevent a corrupt item list. Return prev unchanged.
+        return prev;
+      }
+
       const existing = prev.find((i) => i.listingId === listing.id);
       if (existing) {
         // Increment quantity, clamped to min(available, 1000)
@@ -110,25 +162,25 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     });
 
     return { ok: true };
-  }, [items]);
+  }, [setItemsAndRef]);
 
   const setQuantity = useCallback((listingId: string, qty: number) => {
-    setItems((prev) =>
+    setItemsAndRef((prev) =>
       prev.map((i) => {
         if (i.listingId !== listingId) return i;
         const cap = Math.min(i.available, 1000);
         return { ...i, quantity: Math.max(1, Math.min(qty, cap)) };
       }),
     );
-  }, []);
+  }, [setItemsAndRef]);
 
   const removeItem = useCallback((listingId: string) => {
-    setItems((prev) => prev.filter((i) => i.listingId !== listingId));
-  }, []);
+    setItemsAndRef((prev) => prev.filter((i) => i.listingId !== listingId));
+  }, [setItemsAndRef]);
 
   const clearCart = useCallback(() => {
-    setItems([]);
-  }, []);
+    setItemsAndRef(() => []);
+  }, [setItemsAndRef]);
 
   const storeId = items.length > 0 ? items[0]!.storeId : null;
   const storeName = items.length > 0 ? items[0]!.storeName : null;
