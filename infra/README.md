@@ -296,23 +296,119 @@ a deploy before GCP provisioning is complete.
    - Calls `gcloud run deploy` with the sha-pinned image, mirroring § 5 exactly.
    - Smoke-tests `GET /health.ping` and fails the job if the response is not 2xx.
 
-### One-time GCP setup
+### One-time GCP setup — Terraform workflow (primary path)
 
-> **Automated setup:** `infra/scripts/gcp-bootstrap.sh` performs steps A–G below
-> end-to-end (idempotent — safe to re-run). Prerequisites: `gcloud` and `gh` on
-> PATH and authenticated, and `PROJECT_ID` exported. It does **not** create the
-> GCP project or link billing — both must exist first.
->
-> ```bash
-> PROJECT_ID=my-gcp-project bash infra/scripts/gcp-bootstrap.sh
-> ```
->
-> The script prints a final summary of computed values and the remaining manual
-> steps that cannot be automated (PostGIS DDL, Stripe webhook registration,
-> required reviewer setup, proxy SHA pin). The steps below remain the canonical
-> reference and fallback if you need to run any step individually.
+GCP infrastructure is managed by Terraform in `infra/terraform/`. The pipeline
+owns building and deploying Cloud Run revisions via `gcloud run deploy`; Terraform
+explicitly does **not** manage the Cloud Run service — if it did, TF and the
+pipeline would fight over every deploy.
 
-Complete every step in §§ 1–5 first, then do the following.
+**Prerequisites:** `gcloud` on PATH and authenticated; GCP project must already
+exist with billing enabled; `GITHUB_TOKEN` exported for the GitHub provider.
+
+#### (a) Create the TF state bucket
+
+```bash
+PROJECT_ID=my-gcp-project bash infra/scripts/tf-bootstrap.sh
+```
+
+This enables the three bootstrap APIs (cloudresourcemanager, storage,
+serviceusage) and creates a versioned GCS bucket for remote state. It prints the
+exact `terraform init` command to run next. `TF_STATE_BUCKET` and `REGION` can
+be overridden via environment variables.
+
+#### (b) Initialise, plan, and apply Terraform
+
+```bash
+cd infra/terraform
+
+# Copy and fill in the vars file (gitignored — never committed):
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars: set project_id at minimum.
+
+terraform init \
+  -backend-config="bucket=<YOUR_TF_STATE_BUCKET>" \
+  -backend-config="prefix=homegrown/terraform"
+
+terraform plan
+terraform apply
+```
+
+Terraform creates:
+- Artifact Registry repository
+- Cloud SQL Postgres 16 instance + database (no app user — see below)
+- Deploy SA + runtime SA with least-privilege IAM bindings
+- Workload Identity pool + OIDC provider scoped to this repo
+- Secret Manager secrets (empty shells — no values in state)
+- GitHub Actions variables (including `DEPLOY_ENABLED = false`)
+- GitHub `production` environment
+
+**TF/Cloud-Run boundary:** Terraform does not create a `google_cloud_run_service`
+resource. The GitHub Actions pipeline exclusively owns creating and updating Cloud
+Run revisions via `gcloud run deploy`. This prevents a conflict where every
+pipeline deploy would be overwritten by the next `terraform apply`.
+
+**TF/state hygiene — what never enters state:**
+- No `google_secret_manager_secret_version` with real values.
+- No `random_password` or `google_sql_user` resources — the DB password and
+  application user are created entirely out-of-band by `inject-secrets.sh`.
+
+#### (c) Inject secrets out-of-band
+
+```bash
+PROJECT_ID=my-gcp-project bash infra/scripts/inject-secrets.sh
+```
+
+This script (never Terraform) performs the secret-value work:
+- Creates the Cloud SQL app user + sets password via `--password-file=<(...)`
+  (never a CLI argument; never written to disk).
+- Adds secret versions for `DATABASE_URL` (Unix socket) and
+  `MIGRATE_DATABASE_URL` (TCP form).
+- Auto-generates and stores `JWT_SECRET` via `openssl rand`.
+- Prompts (silent `read -rs`) for `GOOGLE_GEOCODING_API_KEY`,
+  `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` (placeholder accepted if
+  the webhook is not yet registered).
+- Prints the manual PostGIS DDL step.
+
+#### (d) Remaining manual steps (complete before arming)
+
+1. **PostGIS** (printed by inject-secrets.sh):
+   ```bash
+   gcloud sql connect homegrown-db --user=postgres --project=<PROJECT_ID>
+   # Inside psql:
+   # CREATE EXTENSION IF NOT EXISTS postgis;
+   # CREATE EXTENSION IF NOT EXISTS postgis_topology;
+   ```
+
+2. **Required reviewers** — add in the GitHub UI:
+   Settings → Environments → production → Protection rules → Required reviewers.
+   (Or set `production_reviewer_ids` in `terraform.tfvars` and re-apply.)
+   **Do NOT enable `ACTIONS_STEP_DEBUG` on the production environment.**
+
+3. **Pin the Cloud SQL Auth Proxy SHA-256** — see §G below. Required before
+   arming.
+
+4. **Register the Stripe webhook** after first deploy → replace the placeholder
+   `STRIPE_WEBHOOK_SECRET`:
+   ```bash
+   read -rs WHSEC && printf '%s' "$WHSEC" \
+     | gcloud secrets versions add STRIPE_WEBHOOK_SECRET --data-file=- \
+     && unset WHSEC
+   ```
+
+5. **Arm the pipeline** (only after all above):
+   ```bash
+   gh variable set DEPLOY_ENABLED --body true --repo <GITHUB_REPO>
+   ```
+   Note: `DEPLOY_ENABLED` is hardcoded to `"false"` in Terraform. Arming is a
+   deliberate `gh variable set` — not a `terraform apply` — so TF can never arm
+   the pipeline autonomously.
+
+### Fallback: manual gcloud runbook
+
+The imperative steps below are the canonical reference for running any step
+individually. They mirror exactly what Terraform and the inject script automate
+above. Complete every step in §§ 1–5 first, then do the following.
 
 #### A. Workload Identity Federation
 
