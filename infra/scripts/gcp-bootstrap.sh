@@ -10,8 +10,10 @@
 #     `read -rs` (silent, no echo) and piped directly into Secret Manager via
 #     `--data-file=-` on stdin.
 #   - Auto-generated secrets (JWT_SECRET, DB_PASS, root password) are held
-#     only in shell variables for the lifetime of this process and piped the
-#     same way — never written to disk, never printed.
+#     only in shell variables for the lifetime of this process and fed to
+#     gcloud via process substitution (--root-password-file=<(...)) or
+#     --password-file=<(...)) — never passed as CLI words, never written to disk,
+#     never printed.
 #   - The only values printed to stdout are non-secret identifiers (project
 #     number, resource names, SA emails, instance connection name).
 #
@@ -152,6 +154,38 @@ fi
 log "Setting gcloud project to '${PROJECT_ID}'..."
 gcloud config set project "${PROJECT_ID}" --quiet
 
+# ── WIF repo scope confirmation ───────────────────────────────────────────────
+# GITHUB_REPO is env-overridable; an incorrect value mis-scopes the WIF trust
+# binding so that a different repo can impersonate the deploy SA.  Confirm the
+# effective value with the operator before proceeding.
+#
+# Prefer the gh-authenticated repo context when the script is run from inside
+# the repo — this gives the operator a concrete cross-check against the env var.
+_GH_DETECTED_REPO=""
+if _GH_DETECTED_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"; then
+    log "gh detected repo (from current directory): ${_GH_DETECTED_REPO}"
+else
+    log "gh could not detect a repo from the current directory (not inside a git checkout, or no remote)."
+fi
+
+printf "\n${BOLD}${YELLOW}WIF TRUST SCOPE CONFIRMATION${RESET}\n"
+printf "  The Workload Identity Federation trust will be scoped to:\n"
+printf "    GITHUB_REPO = %s\n" "${GITHUB_REPO}"
+if [[ -n "${_GH_DETECTED_REPO}" && "${_GH_DETECTED_REPO}" != "${GITHUB_REPO}" ]]; then
+    printf "\n${RED}  WARNING: this does NOT match the gh-detected repo (%s).${RESET}\n" "${_GH_DETECTED_REPO}"
+    printf "  A mis-scoped WIF binding grants a DIFFERENT repo the ability to\n"
+    printf "  impersonate the deploy service account.\n"
+fi
+printf "\n  Type the repo slug exactly as shown above to confirm, or Ctrl-C to abort:\n"
+printf "  > "
+read -r _CONFIRM_REPO
+if [[ "${_CONFIRM_REPO}" != "${GITHUB_REPO}" ]]; then
+    die "Confirmation did not match GITHUB_REPO='${GITHUB_REPO}'. Aborting. Set GITHUB_REPO correctly and re-run."
+fi
+unset _CONFIRM_REPO _GH_DETECTED_REPO
+log_ok "WIF scope confirmed: ${GITHUB_REPO}"
+# ─────────────────────────────────────────────────────────────────────────────
+
 log_ok "Preflight checks passed."
 
 # =============================================================================
@@ -213,12 +247,15 @@ if gcloud sql instances describe "${CLOUDSQL_INSTANCE}" \
     log_ok "Cloud SQL instance '${CLOUDSQL_INSTANCE}' already exists — skipping creation."
 else
     log "Creating Cloud SQL Postgres 16 instance (this can take 5–10 minutes)..."
+    # --root-password-file reads from a file descriptor, keeping ROOT_PASS out
+    # of /proc/<pid>/cmdline for the lifetime of the gcloud process.
+    # Process substitution (<(...)) is supported in bash 3.2+.
     gcloud sql instances create "${CLOUDSQL_INSTANCE}" \
         --database-version=POSTGRES_16 \
         --tier="${CLOUDSQL_TIER}" \
         --region="${REGION}" \
         --project="${PROJECT_ID}" \
-        --root-password="${ROOT_PASS}" \
+        --root-password-file=<(printf '%s' "${ROOT_PASS}") \
         --quiet
     log_ok "Cloud SQL instance '${CLOUDSQL_INSTANCE}' created."
 fi
@@ -261,12 +298,20 @@ if gcloud sql users describe "${DB_USER}" \
     log_warn "Then re-run this script (it will prompt for secrets again if they don't exist)."
     log_warn "If the secrets already exist in Secret Manager, skip this script step."
 else
+    # `gcloud sql users create` does not support --password-file, so we create
+    # the user without a password and immediately set it via `set-password`,
+    # which DOES support --password-file.  This keeps DB_PASS out of
+    # /proc/<pid>/cmdline entirely.
     gcloud sql users create "${DB_USER}" \
         --instance="${CLOUDSQL_INSTANCE}" \
         --project="${PROJECT_ID}" \
-        --password="${DB_PASS}" \
         --quiet
-    log_ok "Database user '${DB_USER}' created."
+    gcloud sql users set-password "${DB_USER}" \
+        --instance="${CLOUDSQL_INSTANCE}" \
+        --project="${PROJECT_ID}" \
+        --password-file=<(printf '%s' "${DB_PASS}") \
+        --quiet
+    log_ok "Database user '${DB_USER}' created and password set."
 fi
 
 # Note for PostGIS — this must be done manually as cloudsqlsuperuser (postgres):
@@ -554,8 +599,8 @@ else
         printf "  The secret was created with a placeholder value.\n"
         printf "  After your FIRST deploy, register the webhook endpoint:\n"
         printf "    URL: https://<cloud-run-url>/webhooks/stripe\n"
-        printf "  Then add the real signing secret:\n"
-        printf "    echo -n 'whsec_...' | gcloud secrets versions add STRIPE_WEBHOOK_SECRET --data-file=-\n\n"
+        printf "  Then add the real signing secret (read -rs avoids shell history leakage):\n"
+        printf "    read -rs WHSEC && printf '%%s' \"\$WHSEC\" | gcloud secrets versions add STRIPE_WEBHOOK_SECRET --data-file=- && unset WHSEC\n\n"
     else
         printf '%s' "${_WEBHOOK_SECRET}" \
             | gcloud secrets create "${SECRET_WEBHOOK}" \
@@ -691,8 +736,9 @@ printf "      gcloud run services describe homegrown-server --region=%s --format
 printf "    Register the endpoint https://<url>/webhooks/stripe in the Stripe dashboard\n"
 printf "    (Developers → Webhooks → Add endpoint), subscribing to:\n"
 printf "      payment_intent.succeeded, payment_intent.payment_failed, account.updated\n"
-printf "    Then store the signing secret (whsec_…):\n"
-printf "      echo -n 'whsec_...' | gcloud secrets versions add STRIPE_WEBHOOK_SECRET --data-file=-\n\n"
+printf "    Then store the signing secret (whsec_...).\n"
+printf "    Use read -rs to avoid the value landing in shell history:\n"
+printf "      read -rs WHSEC && printf '%%s' \"\$WHSEC\" | gcloud secrets versions add STRIPE_WEBHOOK_SECRET --data-file=- && unset WHSEC\n\n"
 
 printf "${BOLD}(c) Add required reviewers to the 'production' GitHub Environment${RESET}\n"
 printf "    Settings → Environments → production → Protection rules → Required reviewers\n"
