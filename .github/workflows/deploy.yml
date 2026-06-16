@@ -1,0 +1,190 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Minimal top-level permissions; each job adds only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  # ── Build & push the server image to Artifact Registry ───────────────────────
+  build-and-push:
+    name: Build and push image
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Resolve image name
+        id: vars
+        run: |
+          BASE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/server"
+          echo "image=${BASE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "image_base=${BASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          BASE="${{ steps.vars.outputs.image_base }}"
+          docker build \
+            --platform linux/amd64 \
+            -f infra/Dockerfile \
+            -t "${BASE}:${{ github.sha }}" \
+            -t "${BASE}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          BASE="${{ steps.vars.outputs.image_base }}"
+          docker push "${BASE}:${{ github.sha }}"
+          docker push "${BASE}:latest"
+
+  # ── Migrate + deploy (gated by the production Environment) ───────────────────
+  deploy:
+    name: Migrate and deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    environment: production   # ← approval gate; required reviewers configured in GitHub
+
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Migration via Cloud SQL Auth Proxy ──────────────────────────────────
+      # The proxy authenticates using the ADC credentials established by the WIF
+      # auth step above.  The deploy SA must hold roles/cloudsql.client.
+      # MIGRATE_DATABASE_URL is a TCP-form connection string:
+      #   postgres://USER:PASS@127.0.0.1:5432/DB
+      # It is ONLY used here through the proxy tunnel; the runtime DATABASE_URL
+      # uses the Cloud SQL Unix socket and is never present in CI.
+      - name: Download Cloud SQL Auth Proxy
+        run: |
+          curl -fsSL \
+            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64" \
+            -o /usr/local/bin/cloud-sql-proxy
+          # Verify SHA-256 integrity before executing the binary.
+          CHECKSUM_FILE="$(mktemp)"
+          curl -fsSL \
+            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64.sha256" \
+            -o "${CHECKSUM_FILE}"
+          # The published checksum file contains only the hash; construct the
+          # standard "<hash>  <path>" line that sha256sum -c expects.
+          EXPECTED_HASH="$(cat "${CHECKSUM_FILE}")"
+          echo "${EXPECTED_HASH}  /usr/local/bin/cloud-sql-proxy" | sha256sum -c -
+          chmod +x /usr/local/bin/cloud-sql-proxy
+
+      - name: Start Cloud SQL Auth Proxy
+        run: |
+          cloud-sql-proxy \
+            "${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:${{ vars.GCP_CLOUDSQL_INSTANCE }}" \
+            --address 127.0.0.1 \
+            --port 5432 \
+            &
+          # Wait until the proxy is accepting connections (up to 30 s).
+          # Fail loudly if the proxy never binds — a silent failure here would
+          # surface later as a confusing connection-refused error in the migration.
+          # Uses bash's built-in TCP redirect — no dependency on nc/netcat.
+          PROXY_READY=0
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
+              echo "Proxy ready after ${i}s"
+              PROXY_READY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "${PROXY_READY}" -eq 0 ]; then
+            echo "ERROR: Cloud SQL Auth Proxy did not bind on 127.0.0.1:5432 within 30 seconds" >&2
+            exit 1
+          fi
+
+      - name: Run database migrations
+        run: |
+          # Fetch the TCP-form connection URL from Secret Manager and mask it
+          # immediately so it never appears in logs.
+          # 2>/dev/null suppresses diagnostic stderr before ::add-mask:: registers.
+          MIGRATE_DATABASE_URL=$(gcloud secrets versions access latest \
+            --secret=MIGRATE_DATABASE_URL 2>/dev/null)
+          echo "::add-mask::${MIGRATE_DATABASE_URL}"
+
+          export DATABASE_URL="${MIGRATE_DATABASE_URL}"
+          pnpm --filter @homegrown/server db:migrate
+
+      # ── Cloud Run deploy ────────────────────────────────────────────────────
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy homegrown-server \
+            --image="${{ needs.build-and-push.outputs.image }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --port=8080 \
+            --service-account="${{ vars.GCP_RUNTIME_SA }}" \
+            --set-env-vars="NODE_ENV=production" \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,GOOGLE_GEOCODING_API_KEY=GOOGLE_GEOCODING_API_KEY:latest,STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest,STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest" \
+            --add-cloudsql-instances="${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:${{ vars.GCP_CLOUDSQL_INSTANCE }}"
+
+      # ── Smoke test ──────────────────────────────────────────────────────────
+      - name: Smoke test — health endpoint
+        run: |
+          URL=$(gcloud run services describe homegrown-server \
+            --region="${{ vars.GCP_REGION }}" \
+            --format="value(status.url)")
+          echo "Service URL: ${URL}"
+          # --fail exits non-zero on HTTP 4xx/5xx; --retry handles cold starts.
+          # Path is the tRPC procedure "health.ping" (dot), served at the root —
+          # NOT "/health/ping" and NOT under a "/trpc" prefix (verified against the
+          # running server).
+          curl --fail \
+               --retry 5 \
+               --retry-delay 5 \
+               --retry-connrefused \
+               "${URL}/health.ping"
+          # Expected response shape: {"result":{"data":{"status":"ok",...}}}

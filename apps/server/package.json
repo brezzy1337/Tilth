@@ -18,7 +18,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
     "@homegrown/shared": "workspace:*",
