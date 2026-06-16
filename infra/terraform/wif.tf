@@ -27,9 +27,11 @@ resource "google_iam_workload_identity_pool_provider" "github_oidc" {
     "attribute.repository" = "assertion.repository"
   }
 
-  # Restrict trust to this repository only. An OIDC token from any other
-  # GitHub repository will be rejected at token exchange time.
-  attribute_condition = "attribute.repository == '${var.github_repo}'"
+  # Restrict trust to this repository AND the main branch only. An OIDC token
+  # from any other repository — or from any ref other than refs/heads/main
+  # (e.g. a workflow on a feature branch) — is rejected at token exchange time,
+  # so the deploy SA cannot be impersonated from a non-main context.
+  attribute_condition = "attribute.repository == '${var.github_repo}' && assertion.ref == 'refs/heads/main'"
 }
 
 # Bind the deploy SA so that GitHub Actions workflows in var.github_repo can
