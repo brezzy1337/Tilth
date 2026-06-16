@@ -33,6 +33,20 @@ coverage/
 # Claude Code — local config, not shared
 .claude/
 
+# Terraform — state, vars files, and provider cache must never be committed.
+# terraform.tfvars can contain project IDs and other values that vary per
+# environment. Use terraform.tfvars.example as the committed template.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.auto.tfvars
+# NOTE: .terraform.lock.hcl IS committed (provider-version pinning, like pnpm-lock.yaml).
+
+# Local Google Cloud SDK install (do not commit toolchain into the repo).
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+
 # Editor / OS
 .DS_Store
 *.log

@@ -1,0 +1,31 @@
+# terraform.tfvars.example — copy to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored and must never be committed.
+#
+# Usage:
+#   cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+#   # Edit terraform.tfvars with your actual values, then:
+#   terraform init -backend-config="bucket=<YOUR_TF_STATE_BUCKET>"
+#   terraform plan
+#   terraform apply
+
+# ── Required ────────────────────────────────────────────────────────────────
+
+project_id = "REPLACE_WITH_YOUR_GCP_PROJECT_ID"
+
+# ── Optional — defaults match infra/scripts/gcp-bootstrap.sh ────────────────
+
+region            = "us-central1"
+github_repo       = "brezzy1337/HomeGrown"
+ar_repo           = "homegrown"
+cloudsql_instance = "homegrown-db"
+cloudsql_tier     = "db-g1-small"
+db_name           = "homegrown"
+deploy_sa_name    = "homegrown-deploy"
+runtime_sa_name   = "homegrown-server"
+wif_pool_id       = "github-actions"
+wif_provider_id   = "github"
+
+# Optional — list of GitHub user IDs (numeric) for production environment
+# required reviewers.  Leave empty to add reviewers via GitHub UI.
+# Find a user's numeric ID: gh api users/<username> --jq .id
+# production_reviewer_ids = [12345678]
