@@ -7,9 +7,10 @@
  * the router import tree side-effect free (no env validation, no DB connection on
  * import, and no node:crypto / Stripe SDK that would break mobile's typecheck).
  *
- * HTTP routing:
+ * HTTP routing is handled by `createRequestListener` (see request-listener.ts):
  *   POST /webhooks/stripe  →  raw-body Stripe webhook handler (outside tRPC)
- *   everything else        →  tRPC standalone adapter
+ *   /trpc/**               →  tRPC standalone adapter (canonical; matches mobile client)
+ *   /**                    →  tRPC standalone adapter (root paths, e.g. /health.ping smoke test)
  */
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
@@ -22,6 +23,7 @@ import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
 import { geocodeAddress } from "./geocode";
 import { createStripeClient } from "./stripe";
 import { handleStripeWebhookRequest } from "./webhook";
+import { createRequestListener } from "./request-listener";
 
 const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
 
@@ -37,17 +39,20 @@ const trpcHandler = createHTTPHandler({
     }),
 });
 
-const server = createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/webhooks/stripe") {
-    return handleStripeWebhookRequest(req, res, {
-      db,
-      webhookSecret: env.STRIPE_WEBHOOK_SECRET,
-      constructWebhookEvent: (rawBody, sig, secret) =>
-        stripe.constructWebhookEvent(rawBody, sig, secret),
-    });
-  }
-  return trpcHandler(req, res);
-});
+const server = createServer(
+  createRequestListener({
+    trpcHandler,
+    webhook: {
+      handle: handleStripeWebhookRequest,
+      opts: {
+        db,
+        webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+        constructWebhookEvent: (rawBody, sig, secret) =>
+          stripe.constructWebhookEvent(rawBody, sig, secret),
+      },
+    },
+  }),
+);
 
 server.listen(env.PORT, () => {
   console.log(`HomeGrown server listening on http://localhost:${env.PORT}`);
