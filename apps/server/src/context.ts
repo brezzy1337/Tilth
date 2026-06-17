@@ -56,12 +56,12 @@ export interface Geocoder {
 export interface StripeClient {
   /**
    * Create a Stripe Connect Express account. Returns the new account id.
-   * `idempotencyKey` (optional) — pass a stable per-store key to prevent duplicate
-   * accounts if the create succeeds but DB persistence is retried.
+   * `idempotencyKey` — stable per-store key that prevents duplicate accounts
+   * if the create succeeds but DB persistence is retried.
    */
   createConnectedAccount(input: {
     email?: string;
-    idempotencyKey?: string;
+    idempotencyKey: string;
   }): Promise<{ id: string }>;
   /**
    * Generate a one-time Connect onboarding URL.

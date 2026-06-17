@@ -8,6 +8,16 @@
 
 import { z } from "zod";
 
+/**
+ * Reusable https-only URL validator.
+ * The startsWith("https://") refine is load-bearing: z.string().url() alone
+ * accepts javascript: and data: scheme URLs, which would be open-redirect vectors.
+ */
+const httpsUrl = z
+  .string()
+  .url()
+  .refine((u) => u.startsWith("https://"), { message: "must be an https URL" });
+
 const envSchema = z.object({
   /** Cloud Run injects PORT; defaults to 3001 locally. */
   PORT: z.coerce.number().default(3001),
@@ -54,16 +64,8 @@ const envSchema = z.object({
    *
    * Both must be https:// URLs.
    */
-  STRIPE_CONNECT_REFRESH_URL: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" })
-    .default("https://homegrown.app/connect/refresh"),
-  STRIPE_CONNECT_RETURN_URL: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" })
-    .default("https://homegrown.app/connect/return"),
+  STRIPE_CONNECT_REFRESH_URL: httpsUrl.default("https://homegrown.app/connect/refresh"),
+  STRIPE_CONNECT_RETURN_URL: httpsUrl.default("https://homegrown.app/connect/return"),
   /**
    * Stripe webhook signing secret (whsec_…) for verifying webhook payloads.
    * Locally: set in .env (gitignored). Production: GCP Secret Manager.

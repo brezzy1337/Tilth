@@ -67,7 +67,7 @@ export function createStripeClient(
           type: "express",
           ...(input.email ? { email: input.email } : {}),
         },
-        input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
+        { idempotencyKey: input.idempotencyKey },
       );
       return { id: account.id };
     },

@@ -65,7 +65,19 @@ export const connectRouter = router({
       }
 
       // Redirect URLs are server-side config — not accepted from the client (issue #7).
-      const link = await ctx.stripe.createAccountLink({ accountId });
+      let link: { url: string };
+      try {
+        link = await ctx.stripe.createAccountLink({ accountId });
+      } catch (err) {
+        console.error(
+          "[connect.createOnboardingLink] account link failed",
+          err instanceof Error ? err.message : String(err),
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to start onboarding. Please try again.",
+        });
+      }
 
       return { url: link.url, accountId };
     }),
