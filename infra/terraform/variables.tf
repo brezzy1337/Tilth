@@ -63,14 +63,6 @@ variable "wif_provider_id" {
   default     = "github"
 }
 
-variable "production_reviewer_ids" {
-  description = <<-EOT
-    List of GitHub user IDs (numeric integers) to add as required reviewers for
-    the 'production' environment protection rule.  If empty, the environment is
-    created without reviewers — add them manually in the GitHub UI
-    (Settings → Environments → production → Protection rules → Required reviewers).
-    Find a user's numeric ID via: gh api users/<username> --jq .id
-  EOT
-  type        = list(number)
-  default     = []
-}
+# NOTE: GitHub Actions variables and the `production` environment are NOT managed
+# by Terraform (the available CI tokens lack repo-admin scope). Configure them
+# manually per infra/README.md §7.
