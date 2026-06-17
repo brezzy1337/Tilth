@@ -25,7 +25,5 @@ runtime_sa_name   = "homegrown-server"
 wif_pool_id       = "github-actions"
 wif_provider_id   = "github"
 
-# Optional — list of GitHub user IDs (numeric) for production environment
-# required reviewers.  Leave empty to add reviewers via GitHub UI.
-# Find a user's numeric ID: gh api users/<username> --jq .id
-# production_reviewer_ids = [12345678]
+# NOTE: GitHub Actions variables + the `production` environment are configured
+# manually (not by Terraform) — see infra/README.md §7.

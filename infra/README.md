@@ -303,8 +303,9 @@ owns building and deploying Cloud Run revisions via `gcloud run deploy`; Terrafo
 explicitly does **not** manage the Cloud Run service — if it did, TF and the
 pipeline would fight over every deploy.
 
-**Prerequisites:** `gcloud` on PATH and authenticated; GCP project must already
-exist with billing enabled; `GITHUB_TOKEN` exported for the GitHub provider.
+**Prerequisites:** `gcloud` on PATH and authenticated (incl. `gcloud auth
+application-default login`); GCP project must already exist **with billing
+enabled**.
 
 #### (a) Create the TF state bucket
 
@@ -340,8 +341,13 @@ Terraform creates:
 - Deploy SA + runtime SA with least-privilege IAM bindings
 - Workload Identity pool + OIDC provider scoped to this repo
 - Secret Manager secrets (empty shells — no values in state)
-- GitHub Actions variables (including `DEPLOY_ENABLED = false`)
-- GitHub `production` environment
+
+Terraform does **not** manage the GitHub Actions variables or the `production`
+environment — the tokens available in CI (incl. the Codespaces `GITHUB_TOKEN`)
+lack repo-admin scope, so those API calls return `403 Resource not accessible by
+integration`. Configure them manually: the variables per the table in **§7-D**
+and the environment per **§7-C**. `terraform output` prints the exact values to
+paste (e.g. `wif_provider_resource_name`, the SA emails).
 
 **TF/Cloud-Run boundary:** Terraform does not create a `google_cloud_run_service`
 resource. The GitHub Actions pipeline exclusively owns creating and updating Cloud

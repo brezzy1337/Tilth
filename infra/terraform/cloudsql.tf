@@ -16,16 +16,25 @@ resource "google_sql_database_instance" "main" {
   database_version = "POSTGRES_16"
 
   settings {
-    tier = var.cloudsql_tier
+    # Shared-core tiers like db-g1-small are only valid on the ENTERPRISE edition.
+    # Some projects default new instances to ENTERPRISE_PLUS, which rejects them —
+    # so pin the edition explicitly.
+    edition = "ENTERPRISE"
+    tier    = var.cloudsql_tier
 
     backup_configuration {
       enabled = true
     }
 
     ip_configuration {
-      # No public IP — Cloud Run connects via the Cloud SQL connector sidecar
-      # (Unix socket) or through the Cloud SQL Auth Proxy (TCP, for migrations).
-      ipv4_enabled = false
+      # Cloud SQL requires at least one connectivity method. We enable a public
+      # IP (no private VPC needed for the pilot) but add NO authorized networks,
+      # so the instance is not directly reachable from the internet — access is
+      # only via the Cloud Run connector sidecar (Unix socket) and the Cloud SQL
+      # Auth Proxy (used by the migration step), both of which tunnel via IAM.
+      # SSL is enforced. A private-IP setup is a later hardening option.
+      ipv4_enabled = true
+      ssl_mode     = "ENCRYPTED_ONLY"
     }
   }
 

@@ -1,5 +1,7 @@
 # Provider configuration.
-# The github provider is configured in github.tf (owner derived from var.github_repo).
+# Terraform manages only GCP. The GitHub Actions variables + `production`
+# environment are configured manually (see infra/README.md §7) because the
+# tokens available in CI lack repo-admin scope.
 
 provider "google" {
   project = var.project_id
