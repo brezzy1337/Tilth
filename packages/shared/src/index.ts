@@ -371,19 +371,11 @@ export type CreateOrderResponse = z.infer<typeof createOrderResponse>;
 
 /**
  * Input to `connect.createOnboardingLink` (protected).
- * The seller's return/refresh deep-link URLs for the Stripe Connect Express onboarding flow.
- * Both URLs must use https — Stripe rejects plain-http redirect targets.
+ * No client-supplied URLs — the seller's return/refresh URLs are now configured server-side
+ * from environment variables. Accepting these from the client was an open-redirect vulnerability:
+ * any authenticated caller could direct Stripe to redirect to an arbitrary https URL.
  */
-export const connectOnboardingInput = z.object({
-  refreshUrl: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" }),
-  returnUrl: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" }),
-});
+export const connectOnboardingInput = z.object({});
 
 export type ConnectOnboardingInput = z.infer<typeof connectOnboardingInput>;
 

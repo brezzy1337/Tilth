@@ -34,14 +34,18 @@ export const connectRouter = router({
   createOnboardingLink: protectedProcedure
     .input(connectOnboardingInput)
     .output(connectOnboardingResponse)
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ ctx }) => {
       const store = await resolveCallerStoreWithConnect(ctx.db, ctx.user.id);
 
       let accountId = store.stripeConnectAccountId;
 
       if (!accountId) {
-        // Create a new Connect Express account
-        const created = await ctx.stripe.createConnectedAccount({});
+        // Create a new Connect Express account.
+        // Idempotency key = store.id: stable per store, prevents a duplicate account
+        // if the create succeeds but DB persistence is retried.
+        const created = await ctx.stripe.createConnectedAccount({
+          idempotencyKey: store.id,
+        });
         accountId = created.id;
 
         // Persist the id before generating the link — prevents orphaned accounts
@@ -60,11 +64,8 @@ export const connectRouter = router({
         }
       }
 
-      const link = await ctx.stripe.createAccountLink({
-        accountId,
-        refreshUrl: input.refreshUrl,
-        returnUrl: input.returnUrl,
-      });
+      // Redirect URLs are server-side config — not accepted from the client (issue #7).
+      const link = await ctx.stripe.createAccountLink({ accountId });
 
       return { url: link.url, accountId };
     }),

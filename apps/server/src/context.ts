@@ -54,14 +54,21 @@ export interface Geocoder {
  * The concrete implementation lives in `stripe.ts` and is wired in `index.ts`.
  */
 export interface StripeClient {
-  /** Create a Stripe Connect Express account. Returns the new account id. */
-  createConnectedAccount(input: { email?: string }): Promise<{ id: string }>;
-  /** Generate a one-time Connect onboarding URL. */
-  createAccountLink(input: {
-    accountId: string;
-    refreshUrl: string;
-    returnUrl: string;
-  }): Promise<{ url: string }>;
+  /**
+   * Create a Stripe Connect Express account. Returns the new account id.
+   * `idempotencyKey` (optional) — pass a stable per-store key to prevent duplicate
+   * accounts if the create succeeds but DB persistence is retried.
+   */
+  createConnectedAccount(input: {
+    email?: string;
+    idempotencyKey?: string;
+  }): Promise<{ id: string }>;
+  /**
+   * Generate a one-time Connect onboarding URL.
+   * The redirect URLs are baked into the concrete client from env vars — callers
+   * must NOT supply them (prevents open-redirect: issue #7).
+   */
+  createAccountLink(input: { accountId: string }): Promise<{ url: string }>;
   /** Read the current onboarding state of a connected account. */
   retrieveAccountStatus(accountId: string): Promise<{
     chargesEnabled: boolean;
@@ -72,12 +79,15 @@ export interface StripeClient {
    * Create a destination-charge PaymentIntent.
    * `amountCents` is the total charged to the buyer (integer cents, USD).
    * `applicationFeeCents` is withheld from the seller's transfer.
+   * `idempotencyKey` — pass a stable per-order key so client retries of the same
+   * order never create duplicate PaymentIntents on Stripe's side.
    */
   createPaymentIntent(input: {
     amountCents: number;
     applicationFeeCents: number;
     destinationAccountId: string;
     metadata: Record<string, string>;
+    idempotencyKey: string;
   }): Promise<{ id: string; clientSecret: string }>;
 }
 

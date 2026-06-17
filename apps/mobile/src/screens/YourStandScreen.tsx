@@ -57,16 +57,6 @@ const CATEGORY_OPTIONS: readonly ListingCategory[] = listingCategory.options;
 const UNIT_OPTIONS: ListingUnit[] = ["each", "lb", "oz", "bunch", "dozen", "jar", "pint", "quart"];
 
 // ---------------------------------------------------------------------------
-// Stripe Connect return/refresh URLs
-// These are placeholder hosted-return pages. A real https return page is a
-// human prerequisite before polished QA — swap these for actual hosted pages
-// before going live.
-// ---------------------------------------------------------------------------
-
-const CONNECT_REFRESH_URL = "https://homegrown.app/connect/refresh";
-const CONNECT_RETURN_URL = "https://homegrown.app/connect/return";
-
-// ---------------------------------------------------------------------------
 // CreateStoreSection
 // ---------------------------------------------------------------------------
 
@@ -213,10 +203,7 @@ function PaymentsSection() {
 
   function handleSetupPress() {
     setBrowserError(null);
-    onboardingMutation.mutate({
-      refreshUrl: CONNECT_REFRESH_URL,
-      returnUrl: CONNECT_RETURN_URL,
-    });
+    onboardingMutation.mutate({});
   }
 
   const isPending = onboardingMutation.isPending || isBrowserOpen;

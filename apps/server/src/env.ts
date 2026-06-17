@@ -27,11 +27,43 @@ const envSchema = z.object({
    */
   GOOGLE_GEOCODING_API_KEY: z.string().min(1),
   /**
-   * Stripe secret key (sk_live_… or sk_test_…).
+   * Stripe secret key. Must start with `rk_` (restricted key — preferred, least-privilege)
+   * or `sk_` (secret key — accepted for test mode). Publishable keys (`pk_`) are rejected.
+   *
+   * RECOMMENDED: use a restricted key (`rk_live_…` / `rk_test_…`) scoped to only the
+   * Stripe resources HomeGrown touches (PaymentIntents, Accounts, AccountLinks, Webhooks).
+   * This limits blast radius if the key is ever exposed.
+   *
    * Locally: set in .env (gitignored). Production: GCP Secret Manager.
    * No default — never hardcode.
    */
-  STRIPE_SECRET_KEY: z.string().min(1),
+  STRIPE_SECRET_KEY: z
+    .string()
+    .min(1)
+    .refine(
+      (v) => v.startsWith("rk_") || v.startsWith("sk_"),
+      {
+        message:
+          "STRIPE_SECRET_KEY must start with 'rk_' (restricted key, preferred) or 'sk_' (secret key). Publishable keys (pk_) are not accepted here.",
+      },
+    ),
+  /**
+   * Stripe Connect onboarding redirect URLs — built server-side to prevent open-redirect.
+   * These are NOT secrets (no sensitive authority). Override in .env for staging/local tunnels.
+   * In production, set via GCP Secret Manager or Cloud Run env vars.
+   *
+   * Both must be https:// URLs.
+   */
+  STRIPE_CONNECT_REFRESH_URL: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" })
+    .default("https://homegrown.app/connect/refresh"),
+  STRIPE_CONNECT_RETURN_URL: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), { message: "must be an https URL" })
+    .default("https://homegrown.app/connect/return"),
   /**
    * Stripe webhook signing secret (whsec_…) for verifying webhook payloads.
    * Locally: set in .env (gitignored). Production: GCP Secret Manager.

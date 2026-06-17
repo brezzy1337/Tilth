@@ -390,7 +390,7 @@ describe("orders.create", () => {
     expect(result.clientSecret).toBe("pi_test_abc123_secret_xyz");
   });
 
-  it("passes applicationFeeCents and destinationAccountId to Stripe", async () => {
+  it("passes applicationFeeCents, destinationAccountId, and idempotencyKey to Stripe", async () => {
     const piInput = vi.fn().mockResolvedValue({
       id: STRIPE_PI_ID,
       clientSecret: "pi_test_abc123_secret_xyz",
@@ -411,6 +411,8 @@ describe("orders.create", () => {
     expect(call.applicationFeeCents).toBe(40);
     expect(call.destinationAccountId).toBe(STRIPE_ACCOUNT_ID);
     expect(call.metadata.orderId).toBe(UUID_ORDER);
+    // Idempotency key must be the orderId — prevents duplicate PIs on client retries
+    expect(call.idempotencyKey).toBe(UUID_ORDER);
   });
 
   it("rejects items from multiple stores with BAD_REQUEST", async () => {
@@ -563,12 +565,14 @@ describe("connect.createOnboardingLink", () => {
     });
     const caller = createCaller(ctx);
 
-    const result = await caller.connect.createOnboardingLink({
-      refreshUrl: "https://example.com/refresh",
-      returnUrl: "https://example.com/return",
-    });
+    // input is now {} — URLs are server-side config, not accepted from the client (issue #7)
+    const result = await caller.connect.createOnboardingLink({});
 
     expect(createConnectedAccount).toHaveBeenCalledOnce();
+    // idempotencyKey = store.id must be passed through
+    expect(createConnectedAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: UUID_STORE }),
+    );
     expect(result.accountId).toBe(STRIPE_ACCOUNT_ID);
     expect(result.url).toBe("https://connect.stripe.com/setup/test");
   });
@@ -581,10 +585,8 @@ describe("connect.createOnboardingLink", () => {
     });
     const caller = createCaller(ctx);
 
-    const result = await caller.connect.createOnboardingLink({
-      refreshUrl: "https://example.com/refresh",
-      returnUrl: "https://example.com/return",
-    });
+    // input is now {} — URLs are server-side config
+    const result = await caller.connect.createOnboardingLink({});
 
     // Must NOT create a new account
     expect(createConnectedAccount).not.toHaveBeenCalled();
@@ -595,11 +597,9 @@ describe("connect.createOnboardingLink", () => {
     const ctx = makeConnectCtx({});
     const caller = createCaller({ ...ctx, user: null });
 
+    // input is now {} — client no longer supplies URLs
     await expect(
-      caller.connect.createOnboardingLink({
-        refreshUrl: "https://example.com/refresh",
-        returnUrl: "https://example.com/return",
-      }),
+      caller.connect.createOnboardingLink({}),
     ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 
@@ -626,11 +626,9 @@ describe("connect.createOnboardingLink", () => {
     };
     const caller = createCaller(ctx);
 
+    // input is now {} — client no longer supplies URLs
     await expect(
-      caller.connect.createOnboardingLink({
-        refreshUrl: "https://example.com/refresh",
-        returnUrl: "https://example.com/return",
-      }),
+      caller.connect.createOnboardingLink({}),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 });

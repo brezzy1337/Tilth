@@ -17,6 +17,20 @@ import type { StripeClient } from "./context";
 /**
  * Build a concrete `StripeClient` backed by the Stripe Node SDK.
  *
+ * @param secretKey  - Stripe secret/restricted key (read from env, never hardcoded).
+ * @param connect    - Server-side Connect redirect URLs. Baked in here so routers never
+ *                     accept client-supplied URLs (prevents open-redirect, issue #7).
+ *
+ * API version is pinned to "2026-05-27.dahlia" — the latest version supported by
+ * stripe@22.2.0. Pinning is required for deterministic webhook event/object shapes:
+ * without an explicit apiVersion, Stripe would silently serve the account's default
+ * version, which can drift as Stripe rolls out updates. Webhooks are our source of
+ * truth for payment state; shape surprises there are unacceptable.
+ *
+ * `maxNetworkRetries: 2` enables Stripe SDK-level retry with exponential back-off on
+ * transient network failures, which are idempotent for read operations and for writes
+ * that carry a client-supplied idempotency key.
+ *
  * Payment intents use destination charges:
  *   - `amount` = total buyer charge in cents
  *   - `application_fee_amount` = platform fee withheld from the seller's transfer
@@ -26,29 +40,44 @@ import type { StripeClient } from "./context";
  * `index.ts` can wire Stripe webhook signature verification using the same
  * underlying SDK instance — no dummy key required.
  */
-export function createStripeClient(secretKey: string): StripeClient & {
+export function createStripeClient(
+  secretKey: string,
+  connect: { refreshUrl: string; returnUrl: string },
+): StripeClient & {
   constructWebhookEvent(
     rawBody: Buffer,
     signature: string,
     webhookSecret: string,
   ): Stripe.Event;
 } {
-  const stripe = new Stripe(secretKey);
+  const stripe = new Stripe(secretKey, {
+    // Pinned to the latest API version accepted by stripe@22.2.0 types.
+    // Pinning ensures deterministic webhook event/object shapes — essential because
+    // webhooks are the source of truth for all payment state in HomeGrown.
+    apiVersion: "2026-05-27.dahlia",
+    // SDK-level retry with exponential back-off for transient network errors.
+    // Safe alongside idempotency keys: Stripe deduplicates server-side.
+    maxNetworkRetries: 2,
+  });
 
   return {
     async createConnectedAccount(input) {
-      const account = await stripe.accounts.create({
-        type: "express",
-        ...(input.email ? { email: input.email } : {}),
-      });
+      const account = await stripe.accounts.create(
+        {
+          type: "express",
+          ...(input.email ? { email: input.email } : {}),
+        },
+        input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
+      );
       return { id: account.id };
     },
 
     async createAccountLink(input) {
       const link = await stripe.accountLinks.create({
         account: input.accountId,
-        refresh_url: input.refreshUrl,
-        return_url: input.returnUrl,
+        // Use the server-side URLs baked in at construction — never accept these from the client.
+        refresh_url: connect.refreshUrl,
+        return_url: connect.returnUrl,
         type: "account_onboarding",
       });
       return { url: link.url };
@@ -64,15 +93,18 @@ export function createStripeClient(secretKey: string): StripeClient & {
     },
 
     async createPaymentIntent(input) {
-      const pi = await stripe.paymentIntents.create({
-        amount: input.amountCents,
-        currency: "usd",
-        application_fee_amount: input.applicationFeeCents,
-        transfer_data: {
-          destination: input.destinationAccountId,
+      const pi = await stripe.paymentIntents.create(
+        {
+          amount: input.amountCents,
+          currency: "usd",
+          application_fee_amount: input.applicationFeeCents,
+          transfer_data: {
+            destination: input.destinationAccountId,
+          },
+          metadata: input.metadata,
         },
-        metadata: input.metadata,
-      });
+        { idempotencyKey: input.idempotencyKey },
+      );
 
       if (!pi.client_secret) {
         throw new Error("Stripe did not return a client_secret for the PaymentIntent");

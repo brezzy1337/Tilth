@@ -25,7 +25,10 @@ import { createStripeClient } from "./stripe";
 import { handleStripeWebhookRequest } from "./webhook";
 import { createRequestListener } from "./request-listener";
 
-const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
+const stripe = createStripeClient(env.STRIPE_SECRET_KEY, {
+  refreshUrl: env.STRIPE_CONNECT_REFRESH_URL,
+  returnUrl: env.STRIPE_CONNECT_RETURN_URL,
+});
 
 const trpcHandler = createHTTPHandler({
   router: appRouter,

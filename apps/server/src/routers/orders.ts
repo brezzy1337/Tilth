@@ -252,11 +252,14 @@ export const ordersRouter = router({
       let clientSecret: string;
       let paymentIntentId: string;
       try {
+        // orderId is created inside the DB transaction above — stable across client retries
+        // of the same order, so this key prevents duplicate PaymentIntents on Stripe's side.
         const pi = await ctx.stripe.createPaymentIntent({
           amountCents: totalCents,
           applicationFeeCents,
           destinationAccountId: store.stripeConnectAccountId,
           metadata: { orderId },
+          idempotencyKey: orderId,
         });
         clientSecret = pi.clientSecret;
         paymentIntentId = pi.id;
