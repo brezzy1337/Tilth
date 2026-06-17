@@ -7,8 +7,10 @@
 # to guarantee no secret value ever enters TF state:
 #
 #   1. Create the Cloud SQL application user with a generated password.
-#      Uses `gcloud sql users create` then `set-password --password-file=<(...)`
-#      so the password never appears in /proc/<pid>/cmdline or shell history.
+#      gcloud has NO file/stdin password option for Cloud SQL users, so the
+#      generated (URL-safe hex) password is passed via --password on a single
+#      `users create`. It is briefly visible in /proc/<pid>/cmdline to same-user
+#      processes during that one call — acceptable on a trusted operator machine.
 #
 #   2. Add secret VERSIONS (not just empty secrets — TF already created the
 #      secret shells) for:
@@ -127,15 +129,16 @@ log_ok "Preflight checks passed."
 # Terraform manages the instance + database but NOT the app user, so the DB
 # password never enters TF state.
 #
-# Strategy: create the user without a password, then immediately set-password
-# using --password-file=<(process substitution) so the password never appears
-# in /proc/<pid>/cmdline.
+# Strategy: a single `gcloud sql users create --password=<hex>`. gcloud has no
+# file/stdin password option for Cloud SQL users, so the value is briefly in
+# /proc/<pid>/cmdline during this one call (acceptable on a trusted machine).
 
 log "Step 1: Creating Cloud SQL application user '${DB_USER}'..."
 
-# Generate a strong random password, held only in a shell variable for the
-# lifetime of this function scope — never written to disk, never printed.
-DB_PASS="$(openssl rand -base64 32)"
+# Generate a strong random password. Use hex (URL-safe) — a base64 password can
+# contain '/', '+', '=', which break parsing of the postgres://user:pass@… URL.
+# Held only in a shell variable; never written to disk, never printed.
+DB_PASS="$(openssl rand -hex 32)"
 
 if gcloud sql users describe "${DB_USER}" \
         --instance="${CLOUDSQL_INSTANCE}" \
@@ -155,18 +158,17 @@ if gcloud sql users describe "${DB_USER}" \
     # below because we do not know the existing password.
     SKIP_DB_SECRETS=1
 else
-    # Create user without a password first (create does not support --password-file).
+    # gcloud offers no file/stdin password option for Cloud SQL users — neither
+    # `users create` nor `set-password` accepts --password-file, and
+    # --prompt-for-password does not read piped stdin. So --password is the only
+    # headless method. The hex value is URL-safe; the brief /proc exposure to
+    # same-user processes is acceptable on a trusted operator machine.
     gcloud sql users create "${DB_USER}" \
         --instance="${CLOUDSQL_INSTANCE}" \
         --project="${PROJECT_ID}" \
+        --password="${DB_PASS}" \
         --quiet
-    # Immediately set password via process substitution — password never in cmdline.
-    gcloud sql users set-password "${DB_USER}" \
-        --instance="${CLOUDSQL_INSTANCE}" \
-        --project="${PROJECT_ID}" \
-        --password-file=<(printf '%s' "${DB_PASS}") \
-        --quiet
-    log_ok "User '${DB_USER}' created and password set."
+    log_ok "User '${DB_USER}' created."
     SKIP_DB_SECRETS=0
 fi
 

@@ -106,17 +106,16 @@ jobs:
       # uses the Cloud SQL Unix socket and is never present in CI.
       - name: Download Cloud SQL Auth Proxy
         run: |
+          # Pinned SHA-256 of cloud-sql-proxy v2.15.2 (linux/amd64), verified
+          # out-of-band against the GitHub release notes:
+          #   github.com/GoogleCloudPlatform/cloud-sql-proxy/releases/tag/v2.15.2
+          # No .sha256 sidecar is published for this artifact, so the hash is
+          # hardcoded here (a same-origin fetch would give no integrity gain).
+          # Update this literal whenever the pinned version is bumped.
+          EXPECTED_HASH="31607582f62be0109ee09c9165dafc7bb585c29108fc6b7b9734f3797acdd357"
           curl -fsSL \
             "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64" \
             -o /usr/local/bin/cloud-sql-proxy
-          # Verify SHA-256 integrity before executing the binary.
-          CHECKSUM_FILE="$(mktemp)"
-          curl -fsSL \
-            "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.linux.amd64.sha256" \
-            -o "${CHECKSUM_FILE}"
-          # The published checksum file contains only the hash; construct the
-          # standard "<hash>  <path>" line that sha256sum -c expects.
-          EXPECTED_HASH="$(cat "${CHECKSUM_FILE}")"
           echo "${EXPECTED_HASH}  /usr/local/bin/cloud-sql-proxy" | sha256sum -c -
           chmod +x /usr/local/bin/cloud-sql-proxy
 
