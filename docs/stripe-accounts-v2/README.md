@@ -9,6 +9,23 @@ to **Accounts v2**. Status: **proposed, not started** — pending a TEST spike.
 - [`spike-runbook.md`](./spike-runbook.md) — how to run the TEST probe and what to capture.
 - [`accounts-v2-probe.mjs`](./accounts-v2-probe.mjs) — throwaway probe script (no app code; run by hand against Stripe TEST).
 
+## Key finding: there is no clean, one-shot v1 → v2 migration
+
+This was the surprising part, so it's stated plainly:
+
+- **Stripe has no in-place conversion API.** You cannot "upgrade" an existing v1
+  Express account to v2 — accounts are re-created and re-onboarded under v2. This
+  is a Stripe platform constraint, not a tooling gap.
+- **The Stripe plugin is advisory, not a migration tool.** The
+  `stripe-best-practices` skill recommends Accounts v2 and explains the model, but
+  ships guidance only — and its docs use `controller.*` field names that don't even
+  match the installed `stripe@22.2.0` SDK (which uses `defaults.responsibilities`
+  + `dashboard`).
+- **Therefore this is a deliberate, staged code change** (spike → server-only
+  rewrite of `stripe.ts` + `webhook.ts`), not a one-command upgrade — and it is
+  correctly **deferred to post-MVP**. For TEST mode, existing Express accounts are
+  disposable; re-onboard rather than build coexistence machinery.
+
 ## TL;DR
 
 Migrate **mainly to shift negative-balance/fraud liability from the platform to
