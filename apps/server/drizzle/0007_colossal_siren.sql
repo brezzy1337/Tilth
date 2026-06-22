@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "refund_declined_at" timestamp with time zone;

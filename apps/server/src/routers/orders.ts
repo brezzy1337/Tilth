@@ -1,10 +1,14 @@
 /**
  * Orders router — M4 Payments backbone.
  *
- * `create`    — protected; builds an order from listing ids, creates a Stripe
- *               destination-charge PaymentIntent, returns the clientSecret.
- * `listMine`  — protected; returns the authenticated buyer's orders, newest first.
- * `get`       — protected; returns a single order (caller must be buyer or store owner).
+ * `create`        — protected; builds an order from listing ids, creates a Stripe
+ *                   destination-charge PaymentIntent, returns the clientSecret.
+ * `listMine`      — protected; returns the authenticated buyer's orders, newest first.
+ * `get`           — protected; returns a single order (caller must be buyer or store owner).
+ * `requestRefund` — protected; buyer requests a refund (sets refundRequestedAt).
+ * `approveRefund` — protected; store owner approves a refund request (calls Stripe).
+ * `declineRefund` — protected; store owner declines a refund request (no Stripe call).
+ * `listForMyStore`— protected; returns all orders for the caller's store, newest first.
  *
  * Rules that must hold here:
  *   - No imports of env, db/index, or the Stripe SDK — everything via ctx.
@@ -19,6 +23,7 @@ import {
   createOrderResponse,
   requestRefundInput,
   approveRefundInput,
+  declineRefundInput,
   order as orderSchema,
   type Order,
   type OrderItemOutput,
@@ -26,6 +31,7 @@ import {
 import { eq, inArray, desc, and } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
 import { orders, orderItems, listings, stores } from "../db/schema";
+import type { Db } from "../context";
 
 /**
  * Platform fee in basis points (1 bp = 0.01%).
@@ -33,6 +39,40 @@ import { orders, orderItems, listings, stores } from "../db/schema";
  * Withheld from the seller's transfer via `application_fee_amount` on the destination charge.
  */
 const PLATFORM_FEE_BPS = 1000;
+
+// ---------------------------------------------------------------------------
+// Shared column projections — single source of truth for the select shape
+// ---------------------------------------------------------------------------
+
+/**
+ * The 14-field orders projection used by all select() calls.
+ * Add new order columns here; mapOrder and loadOrderById stay in sync automatically.
+ */
+const orderColumns = {
+  id: orders.id,
+  storeId: orders.storeId,
+  buyerId: orders.buyerId,
+  status: orders.status,
+  subtotalCents: orders.subtotalCents,
+  applicationFeeCents: orders.applicationFeeCents,
+  totalCents: orders.totalCents,
+  stripePaymentIntentId: orders.stripePaymentIntentId,
+  refundRequestedAt: orders.refundRequestedAt,
+  refundReason: orders.refundReason,
+  refundApprovedAt: orders.refundApprovedAt,
+  refundDeclinedAt: orders.refundDeclinedAt,
+  createdAt: orders.createdAt,
+  updatedAt: orders.updatedAt,
+} as const;
+
+/**
+ * Extends orderColumns with `storeUserId` for procedures that join stores.
+ * Used in `get`, `approveRefund`, `declineRefund`.
+ */
+const orderColumnsWithStore = {
+  ...orderColumns,
+  storeUserId: stores.userId,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Private output mappers — keep the DB-row → shared-type transformation DRY
@@ -69,6 +109,7 @@ function mapOrder(
     refundRequestedAt: Date | null;
     refundReason: string | null;
     refundApprovedAt: Date | null;
+    refundDeclinedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   },
@@ -86,10 +127,43 @@ function mapOrder(
     refundRequestedAt: orderRow.refundRequestedAt?.toISOString() ?? null,
     refundReason: orderRow.refundReason ?? null,
     refundApprovedAt: orderRow.refundApprovedAt?.toISOString() ?? null,
+    refundDeclinedAt: orderRow.refundDeclinedAt?.toISOString() ?? null,
     items: itemRows.map(mapOrderItem),
     createdAt: orderRow.createdAt.toISOString(),
     updatedAt: orderRow.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Load a single order by id plus its items, and return the mapped Order DTO.
+ * Throws NOT_FOUND if the order does not exist.
+ * Used as the authoritative post-mutation re-fetch in requestRefund, approveRefund,
+ * and declineRefund so that each procedure returns the actual committed state.
+ */
+async function loadOrderById(db: Db, orderId: string): Promise<Order> {
+  const [row] = await db
+    .select(orderColumns)
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+
+  if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+  }
+
+  const fetchedItems = await db
+    .select({
+      id: orderItems.id,
+      listingId: orderItems.listingId,
+      nameSnapshot: orderItems.nameSnapshot,
+      unitPriceCents: orderItems.unitPriceCents,
+      quantity: orderItems.quantity,
+      lineTotalCents: orderItems.lineTotalCents,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, row.id));
+
+  return mapOrder(row, fetchedItems);
 }
 
 export const ordersRouter = router({
@@ -331,6 +405,7 @@ export const ordersRouter = router({
         refundRequestedAt: null,
         refundReason: null,
         refundApprovedAt: null,
+        refundDeclinedAt: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -345,21 +420,7 @@ export const ordersRouter = router({
     .output(orderSchema.array())
     .query(async ({ ctx }) => {
       const myOrders = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-        })
+        .select(orderColumns)
         .from(orders)
         .where(eq(orders.buyerId, ctx.user.id))
         .orderBy(desc(orders.createdAt));
@@ -401,22 +462,7 @@ export const ordersRouter = router({
     .output(orderSchema)
     .query(async ({ input, ctx }) => {
       const [foundOrder] = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-          storeUserId: stores.userId,
-        })
+        .select(orderColumnsWithStore)
         .from(orders)
         .innerJoin(stores, eq(orders.storeId, stores.id))
         .where(eq(orders.id, input.id))
@@ -457,7 +503,8 @@ export const ordersRouter = router({
    *   - Status is 'paid' or 'fulfilled' (else BAD_REQUEST).
    *   - No refund has been requested yet (else BAD_REQUEST).
    *
-   * Sets refund_requested_at = now() and refund_reason = input.reason (nullable).
+   * Sets refund_requested_at = now(), refund_reason = input.reason (nullable),
+   * and clears refund_declined_at (so the buyer can re-request after a decline).
    * Does NOT call Stripe — that happens in approveRefund.
    */
   requestRefund: protectedProcedure
@@ -465,21 +512,7 @@ export const ordersRouter = router({
     .output(orderSchema)
     .mutation(async ({ input, ctx }) => {
       const [foundOrder] = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-        })
+        .select(orderColumns)
         .from(orders)
         .where(eq(orders.id, input.orderId))
         .limit(1);
@@ -509,48 +542,12 @@ export const ordersRouter = router({
         .set({
           refundRequestedAt: now,
           refundReason: input.reason ?? null,
+          refundDeclinedAt: null,
           updatedAt: now,
         })
         .where(and(eq(orders.id, input.orderId), eq(orders.buyerId, ctx.user.id)));
 
-      // Re-fetch to return the authoritative post-update state
-      const [updatedOrder] = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-        })
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-
-      if (!updatedOrder) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to fetch updated order" });
-      }
-
-      const fetchedItems = await ctx.db
-        .select({
-          id: orderItems.id,
-          listingId: orderItems.listingId,
-          nameSnapshot: orderItems.nameSnapshot,
-          unitPriceCents: orderItems.unitPriceCents,
-          quantity: orderItems.quantity,
-          lineTotalCents: orderItems.lineTotalCents,
-        })
-        .from(orderItems)
-        .where(eq(orderItems.orderId, updatedOrder.id));
-
-      return mapOrder(updatedOrder, fetchedItems);
+      return loadOrderById(ctx.db, input.orderId);
     }),
 
   /**
@@ -570,22 +567,7 @@ export const ordersRouter = router({
     .output(orderSchema)
     .mutation(async ({ input, ctx }) => {
       const [foundOrder] = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-          storeUserId: stores.userId,
-        })
+        .select(orderColumnsWithStore)
         .from(orders)
         .innerJoin(stores, eq(orders.storeId, stores.id))
         .where(eq(orders.id, input.orderId))
@@ -636,44 +618,63 @@ export const ordersRouter = router({
         })
         .where(and(eq(orders.id, input.orderId), eq(orders.storeId, foundOrder.storeId)));
 
-      // Re-fetch to return the authoritative post-update state
-      const [updatedOrder] = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-        })
+      return loadOrderById(ctx.db, input.orderId);
+    }),
+
+  /**
+   * Decline a refund request (SELLER / store owner only).
+   *
+   * Asserts:
+   *   - Caller owns the store (else NOT_FOUND to avoid leaking order existence).
+   *   - A refund was requested (else BAD_REQUEST).
+   *   - Refund not yet approved (else BAD_REQUEST).
+   *   - Refund not already declined (else BAD_REQUEST).
+   *
+   * Sets refund_declined_at = now() and clears refund_requested_at so the
+   * buyer can re-request. Does NOT call Stripe.
+   */
+  declineRefund: protectedProcedure
+    .input(declineRefundInput)
+    .output(orderSchema)
+    .mutation(async ({ input, ctx }) => {
+      const [foundOrder] = await ctx.db
+        .select(orderColumnsWithStore)
         .from(orders)
+        .innerJoin(stores, eq(orders.storeId, stores.id))
         .where(eq(orders.id, input.orderId))
         .limit(1);
 
-      if (!updatedOrder) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to fetch updated order" });
+      // Surface as NOT_FOUND when not found or caller is not the store owner
+      if (!foundOrder || foundOrder.storeUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
       }
 
-      const fetchedItems = await ctx.db
-        .select({
-          id: orderItems.id,
-          listingId: orderItems.listingId,
-          nameSnapshot: orderItems.nameSnapshot,
-          unitPriceCents: orderItems.unitPriceCents,
-          quantity: orderItems.quantity,
-          lineTotalCents: orderItems.lineTotalCents,
-        })
-        .from(orderItems)
-        .where(eq(orderItems.orderId, updatedOrder.id));
+      if (foundOrder.refundRequestedAt === null) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No refund requested for this order",
+        });
+      }
 
-      return mapOrder(updatedOrder, fetchedItems);
+      if (foundOrder.refundApprovedAt !== null) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Refund already approved" });
+      }
+
+      if (foundOrder.refundDeclinedAt !== null) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Refund already declined" });
+      }
+
+      const now = new Date();
+      await ctx.db
+        .update(orders)
+        .set({
+          refundDeclinedAt: now,
+          refundRequestedAt: null,
+          updatedAt: now,
+        })
+        .where(and(eq(orders.id, input.orderId), eq(orders.storeId, foundOrder.storeId)));
+
+      return loadOrderById(ctx.db, input.orderId);
     }),
 
   /**
@@ -693,21 +694,7 @@ export const ordersRouter = router({
       if (!myStore) return [];
 
       const storeOrders = await ctx.db
-        .select({
-          id: orders.id,
-          storeId: orders.storeId,
-          buyerId: orders.buyerId,
-          status: orders.status,
-          subtotalCents: orders.subtotalCents,
-          applicationFeeCents: orders.applicationFeeCents,
-          totalCents: orders.totalCents,
-          stripePaymentIntentId: orders.stripePaymentIntentId,
-          refundRequestedAt: orders.refundRequestedAt,
-          refundReason: orders.refundReason,
-          refundApprovedAt: orders.refundApprovedAt,
-          createdAt: orders.createdAt,
-          updatedAt: orders.updatedAt,
-        })
+        .select(orderColumns)
         .from(orders)
         .where(eq(orders.storeId, myStore.id))
         .orderBy(desc(orders.createdAt));

@@ -202,6 +202,8 @@ export const orders = pgTable(
     refundReason: text("refund_reason"),
     /** Set when the seller approves the refund; null until approved. */
     refundApprovedAt: timestamp("refund_approved_at", { withTimezone: true }),
+    /** Set when the seller declines the refund request; null until declined. Cleared when buyer re-requests. */
+    refundDeclinedAt: timestamp("refund_declined_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

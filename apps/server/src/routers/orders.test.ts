@@ -9,6 +9,8 @@
  *   - handleStripeEvent: paid-transition idempotency, account.updated store sync
  *   - orders.create: price/fee computation, single-store rejection, not-onboarded rejection
  *   - connect.createOnboardingLink: creates+persists account id once (idempotent on reuse)
+ *   - orders.requestRefund, approveRefund, declineRefund: guards, mutations, re-request
+ *   - orders.listForMyStore: empty / populated
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -66,7 +68,21 @@ function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["st
 }
 
 // ---------------------------------------------------------------------------
-// Fake DB builder — same pattern as routers.test.ts
+// Fake DB builder — single source of truth for all router unit tests
+//
+// Options:
+//   selectRows       — rows returned by every plain select() (no sequence)
+//   selectSequence   — per-call rows; each select() call consumes the next slot
+//   joinUsesSelectSlot — when true, innerJoin() reuses the same slot already consumed
+//                        by the enclosing select() call (used by refund procedures that
+//                        load orders with a store join). Default false.
+//   joinRows         — rows returned by innerJoin (when joinUsesSelectSlot is false)
+//   insertRows       — rows returned by insert().returning()
+//   insertError      — if set, insert().returning() rejects with this
+//   updateRows       — rows returned by update().returning()
+//   updateFn         — called with the set-payload on every update().set()
+//   captureUpdates   — each update().set() payload is pushed here
+//   transactionFn    — override the transaction implementation
 // ---------------------------------------------------------------------------
 
 function fakeDb(opts: {
@@ -76,12 +92,16 @@ function fakeDb(opts: {
   insertError?: unknown;
   updateRows?: unknown[];
   joinRows?: unknown[];
-  updateFn?: (set: unknown) => unknown;
+  joinUsesSelectSlot?: boolean;
+  updateFn?: (set: unknown) => void;
+  captureUpdates?: unknown[];
   transactionFn?: (txFn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
 }) {
   let selectCallCount = 0;
+  const capturedUpdates = opts.captureUpdates ?? [];
 
   const selectFn = () => {
+    const slotIdx = selectCallCount;
     const rows = opts.selectSequence
       ? (opts.selectSequence[selectCallCount++] ?? [])
       : (opts.selectRows ?? []);
@@ -99,8 +119,14 @@ function fakeDb(opts: {
       limit: () => Promise.resolve(rows),
       orderBy: () => builder,
       innerJoin: () => {
+        // When joinUsesSelectSlot is true the innerJoin result is the same rows
+        // already loaded by this select() call (the slot was consumed above).
+        // When false, use the dedicated joinRows option.
+        const joinResult = opts.joinUsesSelectSlot
+          ? (opts.selectSequence ? (opts.selectSequence[slotIdx] ?? []) : (opts.selectRows ?? []))
+          : (opts.joinRows ?? []);
         const jb = {
-          where: () => ({ limit: () => Promise.resolve(opts.joinRows ?? []) }),
+          where: () => ({ limit: () => Promise.resolve(joinResult) }),
         };
         return jb;
       },
@@ -120,18 +146,16 @@ function fakeDb(opts: {
   };
   const insertFn = () => insertBuilder;
 
-  let capturedSet: unknown = null;
   const updateBuilder = {
-    set: (s: unknown) => { capturedSet = s; return updateBuilder; },
+    set: (s: unknown) => {
+      capturedUpdates.push(s);
+      opts.updateFn?.(s);
+      return updateBuilder;
+    },
     where: () => updateBuilder,
     returning: () => Promise.resolve(opts.updateRows ?? [{ id: UUID_ORDER }]),
   };
-  const updateFn = () => {
-    if (opts.updateFn && capturedSet) {
-      opts.updateFn(capturedSet);
-    }
-    return updateBuilder;
-  };
+  const updateFn = () => updateBuilder;
 
   const transactionFn = opts.transactionFn ?? (async (fn: (tx: unknown) => Promise<unknown>) => {
     return fn({
@@ -781,6 +805,7 @@ function makeOrderRow(overrides: Partial<{
   refundRequestedAt: Date | null;
   refundReason: string | null;
   refundApprovedAt: Date | null;
+  refundDeclinedAt: Date | null;
   storeUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -797,6 +822,7 @@ function makeOrderRow(overrides: Partial<{
     refundRequestedAt: null,
     refundReason: null,
     refundApprovedAt: null,
+    refundDeclinedAt: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     updatedAt: new Date("2026-01-01T00:00:00Z"),
     storeUserId: UUID_SELLER,
@@ -805,72 +831,34 @@ function makeOrderRow(overrides: Partial<{
 }
 
 /**
- * Build a fake DB for refund procedure tests.
+ * Build a context for refund procedure tests.
  *
- * `selectSequence` — ordered list of row arrays to return per select() call.
- *   Plain selects AND innerJoin selects each consume one slot.
+ * Uses the module-level `fakeDb` with `joinUsesSelectSlot: true` so that
+ * procedures doing select().innerJoin() (approveRefund, declineRefund, get) get
+ * back the same slot row that the select() call would have returned.
+ *
+ * `selectSequence` — ordered list of row arrays; each select() call consumes one slot.
  * `captureUpdates` — each update().set() payload is pushed here.
  */
-function makeRefundDb(opts: {
+function makeRefundCtx(opts: {
   selectSequence: unknown[][];
   captureUpdates?: unknown[];
-}) {
-  let selectIdx = 0;
+  userId: string;
+  stripeOverrides?: Partial<Context["stripe"]>;
+}): Context {
+  const db = fakeDb({
+    selectSequence: opts.selectSequence,
+    captureUpdates: opts.captureUpdates,
+    joinUsesSelectSlot: true,
+  });
 
-  const updates: unknown[] = opts.captureUpdates ?? [];
-
-  const selectFn = () => {
-    const slotIdx = selectIdx++;
-    const rows = opts.selectSequence[slotIdx] ?? [];
-
-    const b: {
-      from: () => typeof b;
-      where: () => typeof b;
-      limit: () => Promise<unknown[]>;
-      orderBy: () => typeof b;
-      then: (resolve: (v: unknown[]) => void) => void;
-      innerJoin: (table: unknown, cond: unknown) => { where: () => { limit: () => Promise<unknown[]> } };
-    } = {
-      from: () => b,
-      where: () => b,
-      limit: () => Promise.resolve(rows),
-      orderBy: () => b,
-      innerJoin: (_table: unknown, _cond: unknown) => {
-        // innerJoin uses the same slot already consumed by this select() call
-        return {
-          where: () => ({ limit: () => Promise.resolve(rows) }),
-        };
-      },
-      then: (resolve: (v: unknown[]) => void) => Promise.resolve(rows).then(resolve),
-    };
-    return b;
-  };
-
-  const updateBuilder = {
-    set: (s: unknown) => {
-      updates.push(s);
-      return updateBuilder;
-    },
-    where: () => updateBuilder,
-    returning: () => Promise.resolve([]),
-  };
-
-  return {
-    select: selectFn,
-    update: () => updateBuilder,
-    insert: () => ({ values: () => ({ returning: () => Promise.resolve([]) }) }),
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ insert: () => ({ values: () => ({ returning: () => Promise.resolve([]) }) }) }),
-  } as unknown as Context["db"];
-}
-
-function makeRefundCtx(db: Context["db"], userId: string, stripeOverrides: Partial<Context["stripe"]> = {}): Context {
   return {
     db,
     jwtSecret: TEST_SECRET,
     auth: stubAuth,
     geocode: async () => null,
-    stripe: makeStripeStub(stripeOverrides),
-    user: { id: userId },
+    stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+    user: { id: opts.userId },
   };
 }
 
@@ -883,16 +871,15 @@ describe("orders.requestRefund", () => {
     const updates: unknown[] = [];
     const orderRow = makeOrderRow({ status: "paid" });
     // sequence: [initial load], [re-fetch after update], [order items]
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],         // initial load (no join for requestRefund)
+        [orderRow],         // initial load (plain select, no join for requestRefund)
         [{ ...orderRow, refundRequestedAt: new Date("2026-06-22T10:00:00Z"), refundReason: "damaged" }], // re-fetch
         [],                  // order items
       ],
       captureUpdates: updates,
+      userId: UUID_BUYER,
     });
-
-    const ctx = makeRefundCtx(db, UUID_BUYER);
     const caller = createCaller(ctx);
 
     const result = await caller.orders.requestRefund({
@@ -906,6 +893,9 @@ describe("orders.requestRefund", () => {
     expect(updatePayload.refundRequestedAt).toBeInstanceOf(Date);
     expect(updatePayload.refundReason).toBe("damaged");
 
+    // requestRefund must also clear refundDeclinedAt
+    expect(updatePayload.refundDeclinedAt).toBeNull();
+
     // Status must NOT be changed
     expect(updatePayload).not.toHaveProperty("status");
 
@@ -917,15 +907,15 @@ describe("orders.requestRefund", () => {
   it("sets refundRequestedAt on a fulfilled order", async () => {
     const updates: unknown[] = [];
     const orderRow = makeOrderRow({ status: "fulfilled" });
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [
         [orderRow],
         [{ ...orderRow, refundRequestedAt: new Date("2026-06-22T10:00:00Z") }],
         [],
       ],
       captureUpdates: updates,
+      userId: UUID_BUYER,
     });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
     const caller = createCaller(ctx);
 
     await caller.orders.requestRefund({ orderId: UUID_ORDER_PAID });
@@ -937,8 +927,10 @@ describe("orders.requestRefund", () => {
 
   it("returns NOT_FOUND when the caller is not the buyer", async () => {
     const orderRow = makeOrderRow({ buyerId: UUID_BUYER }); // buyer is UUID_BUYER, caller is UUID_SELLER
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_SELLER); // wrong user
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      userId: UUID_SELLER, // wrong user
+    });
     const caller = createCaller(ctx);
 
     await expect(
@@ -947,8 +939,7 @@ describe("orders.requestRefund", () => {
   });
 
   it("returns NOT_FOUND when order does not exist", async () => {
-    const db = makeRefundDb({ selectSequence: [[]] }); // no rows
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
@@ -958,8 +949,7 @@ describe("orders.requestRefund", () => {
 
   it("rejects with BAD_REQUEST when order is pending_payment", async () => {
     const orderRow = makeOrderRow({ status: "pending_payment" });
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
@@ -969,8 +959,7 @@ describe("orders.requestRefund", () => {
 
   it("rejects with BAD_REQUEST when order is cancelled", async () => {
     const orderRow = makeOrderRow({ status: "cancelled" });
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
@@ -980,8 +969,7 @@ describe("orders.requestRefund", () => {
 
   it("rejects with BAD_REQUEST when order is already refunded", async () => {
     const orderRow = makeOrderRow({ status: "refunded" });
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
@@ -991,8 +979,7 @@ describe("orders.requestRefund", () => {
 
   it("rejects with BAD_REQUEST when order is disputed", async () => {
     const orderRow = makeOrderRow({ status: "disputed" });
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
@@ -1005,13 +992,53 @@ describe("orders.requestRefund", () => {
       status: "paid",
       refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
     });
-    const db = makeRefundDb({ selectSequence: [[orderRow]] });
-    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
     await expect(
       caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("already requested") }));
+  });
+
+  it("succeeds (re-request) when refundDeclinedAt is set and refundRequestedAt is null, and update clears refundDeclinedAt", async () => {
+    const updates: unknown[] = [];
+    // After a decline: refundDeclinedAt is set, refundRequestedAt is null
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: null,
+      refundDeclinedAt: new Date("2026-06-21T09:00:00Z"),
+    });
+    const updatedRow = {
+      ...orderRow,
+      refundRequestedAt: new Date("2026-06-22T11:00:00Z"),
+      refundDeclinedAt: null,
+      refundReason: "still damaged",
+    };
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow],   // initial load
+        [updatedRow], // re-fetch after update (loadOrderById)
+        [],           // order items
+      ],
+      captureUpdates: updates,
+      userId: UUID_BUYER,
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.requestRefund({
+      orderId: UUID_ORDER_PAID,
+      reason: "still damaged",
+    });
+
+    expect(updates).toHaveLength(1);
+    const payload = updates[0] as Record<string, unknown>;
+    // Must set refundRequestedAt and clear refundDeclinedAt
+    expect(payload.refundRequestedAt).toBeInstanceOf(Date);
+    expect(payload.refundDeclinedAt).toBeNull();
+
+    // Return value must reflect re-requested state
+    expect(result.refundRequestedAt).toBe("2026-06-22T11:00:00.000Z");
+    expect(result.refundDeclinedAt).toBeNull();
   });
 });
 
@@ -1030,20 +1057,20 @@ describe("orders.approveRefund", () => {
       storeUserId: UUID_SELLER,
     });
 
-    // selectSequence for approveRefund:
-    // slot 0 — consumed by select() + innerJoin (same slot, reused within the builder)
-    // slot 1 — re-fetch after update (plain select, no join)
+    // selectSequence for approveRefund (uses innerJoin for initial load via joinUsesSelectSlot):
+    // slot 0 — consumed by select() + innerJoin (joinUsesSelectSlot reuses it)
+    // slot 1 — re-fetch after update (loadOrderById plain select)
     // slot 2 — order items
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],  // slot 0 — for initial innerJoin load
+        [orderRow],  // slot 0 — innerJoin load
         [{ ...orderRow, refundApprovedAt: new Date("2026-06-22T12:00:00Z") }], // re-fetch
         [],           // order items
       ],
       captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { refundPayment },
     });
-
-    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
     const caller = createCaller(ctx);
 
     const result = await caller.orders.approveRefund({ orderId: UUID_ORDER_PAID });
@@ -1069,10 +1096,10 @@ describe("orders.approveRefund", () => {
 
   it("returns NOT_FOUND when caller is not the store owner", async () => {
     const orderRow = makeOrderRow({ storeUserId: UUID_SELLER });
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [[orderRow]],
+      userId: UUID_BUYER, // buyer, not seller
     });
-    const ctx = makeRefundCtx(db, UUID_BUYER); // buyer, not seller
     const caller = createCaller(ctx);
 
     await expect(
@@ -1086,10 +1113,10 @@ describe("orders.approveRefund", () => {
       refundRequestedAt: null, // not yet requested
       storeUserId: UUID_SELLER,
     });
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
     });
-    const ctx = makeRefundCtx(db, UUID_SELLER);
     const caller = createCaller(ctx);
 
     await expect(
@@ -1104,10 +1131,10 @@ describe("orders.approveRefund", () => {
       stripePaymentIntentId: null,
       storeUserId: UUID_SELLER,
     });
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
     });
-    const ctx = makeRefundCtx(db, UUID_SELLER);
     const caller = createCaller(ctx);
 
     await expect(
@@ -1126,11 +1153,11 @@ describe("orders.approveRefund", () => {
       storeUserId: UUID_SELLER,
     });
 
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
+      stripeOverrides: { refundPayment },
     });
-
-    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
     const caller = createCaller(ctx);
 
     await expect(
@@ -1153,11 +1180,11 @@ describe("orders.approveRefund", () => {
       storeUserId: UUID_SELLER,
     });
 
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
+      stripeOverrides: { refundPayment },
     });
-
-    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
     const caller = createCaller(ctx);
 
     await expect(
@@ -1170,14 +1197,129 @@ describe("orders.approveRefund", () => {
 });
 
 // ---------------------------------------------------------------------------
+// orders.declineRefund
+// ---------------------------------------------------------------------------
+
+describe("orders.declineRefund", () => {
+  it("store owner declines a requested order — sets refundDeclinedAt, clears refundRequestedAt, NO refundPayment call", async () => {
+    const refundPayment = vi.fn();
+    const updates: unknown[] = [];
+
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+    const declinedRow = {
+      ...orderRow,
+      refundDeclinedAt: new Date("2026-06-22T13:00:00Z"),
+      refundRequestedAt: null,
+    };
+
+    // slot 0 — innerJoin initial load; slot 1 — re-fetch (loadOrderById); slot 2 — items
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow],
+        [declinedRow],
+        [],
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { refundPayment },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.declineRefund({ orderId: UUID_ORDER_PAID });
+
+    // No Stripe call
+    expect(refundPayment).not.toHaveBeenCalled();
+
+    // DB update must set refundDeclinedAt and clear refundRequestedAt
+    expect(updates).toHaveLength(1);
+    const payload = updates[0] as Record<string, unknown>;
+    expect(payload.refundDeclinedAt).toBeInstanceOf(Date);
+    expect(payload.refundRequestedAt).toBeNull();
+
+    // Return reflects declined state
+    expect(result.refundDeclinedAt).toBe("2026-06-22T13:00:00.000Z");
+    expect(result.refundRequestedAt).toBeNull();
+  });
+
+  it("returns NOT_FOUND when caller is not the store owner", async () => {
+    const orderRow = makeOrderRow({
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      userId: UUID_BUYER, // buyer, not seller
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  });
+
+  it("rejects with BAD_REQUEST when no refund was requested", async () => {
+    const orderRow = makeOrderRow({
+      refundRequestedAt: null, // none requested
+      storeUserId: UUID_SELLER,
+    });
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("No refund requested") }));
+  });
+
+  it("rejects with BAD_REQUEST when refund is already approved", async () => {
+    const orderRow = makeOrderRow({
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      refundApprovedAt: new Date("2026-06-21T08:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already approved") }));
+  });
+
+  it("rejects with BAD_REQUEST when refund is already declined", async () => {
+    const orderRow = makeOrderRow({
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      refundDeclinedAt: new Date("2026-06-21T09:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already declined") }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // orders.listForMyStore
 // ---------------------------------------------------------------------------
 
 describe("orders.listForMyStore", () => {
   it("returns [] when the caller has no store", async () => {
     // selectSequence: store lookup returns empty
-    const db = makeRefundDb({ selectSequence: [[]] });
-    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const ctx = makeRefundCtx({ selectSequence: [[]], userId: UUID_SELLER });
     const caller = createCaller(ctx);
 
     const result = await caller.orders.listForMyStore();
@@ -1185,13 +1327,13 @@ describe("orders.listForMyStore", () => {
   });
 
   it("returns [] when the store has no orders", async () => {
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [
         [{ id: UUID_STORE }],  // store lookup
         [],                     // orders for store (empty)
       ],
+      userId: UUID_SELLER,
     });
-    const ctx = makeRefundCtx(db, UUID_SELLER);
     const caller = createCaller(ctx);
 
     const result = await caller.orders.listForMyStore();
@@ -1210,14 +1352,14 @@ describe("orders.listForMyStore", () => {
       updatedAt: new Date("2026-06-21T10:00:00Z"),
     });
 
-    const db = makeRefundDb({
+    const ctx = makeRefundCtx({
       selectSequence: [
         [{ id: UUID_STORE }],         // store lookup
         [orderRow1, orderRow2],        // store orders (already newest-first from DB)
         [],                             // order items for both
       ],
+      userId: UUID_SELLER,
     });
-    const ctx = makeRefundCtx(db, UUID_SELLER);
     const caller = createCaller(ctx);
 
     const result = await caller.orders.listForMyStore();
@@ -1225,9 +1367,10 @@ describe("orders.listForMyStore", () => {
     // First result is the newer order
     expect(result[0]!.id).toBe("cc00bc99-9c0b-4ef8-bb6d-6bb9bd380acc");
     expect(result[1]!.id).toBe("dd00bc99-9c0b-4ef8-bb6d-6bb9bd380add");
-    // All three refund fields present and null
+    // All four refund fields present and null
     expect(result[0]!.refundRequestedAt).toBeNull();
     expect(result[0]!.refundReason).toBeNull();
     expect(result[0]!.refundApprovedAt).toBeNull();
+    expect(result[0]!.refundDeclinedAt).toBeNull();
   });
 });
