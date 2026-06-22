@@ -1,16 +1,15 @@
 /**
  * StoreOrdersScreen — seller view of all orders for their store.
  *
- * Fetches trpc.orders.listForMyStore (newest first).
+ * Fetches trpc.orders.listForMyStore (newest first) with infinite-scroll keyset
+ * pagination. Pull-to-refresh surfaces webhook-driven status changes (e.g. a
+ * refund that completed server-side). No interval polling.
+ *
  * FlatList: short order id, total, status pill.
  * For orders with a pending refund request (refundRequestedAt set,
  * refundApprovedAt/refundDeclinedAt null): shows "Refund requested" marker
  * + reason, and two action buttons — Approve and Decline (each with a confirm
  * Alert, disabled while mutation isPending, invalidates cache on success).
- *
- * Polling: refetchInterval ~3 s while any order is pending_payment OR has an
- * active refund request, else false — so webhook-driven status changes appear
- * without manual refresh.
  *
  * States: loading, error (retry), empty ("No orders yet"), list.
  * React Native only — no DOM elements.
@@ -22,6 +21,7 @@ import {
   Alert,
   FlatList,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -33,22 +33,9 @@ import { trpc } from "../api/trpc";
 import { StatusPill } from "../components/StatusPill";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
+import { isPendingRefund } from "../utils/orders";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "StoreOrders">;
-
-// ---------------------------------------------------------------------------
-// Helper — decide if any order needs active polling
-// ---------------------------------------------------------------------------
-
-function needsPolling(orders: Order[]): boolean {
-  return orders.some(
-    (o) =>
-      o.status === "pending_payment" ||
-      (o.refundRequestedAt !== null &&
-        o.refundApprovedAt === null &&
-        o.refundDeclinedAt === null),
-  );
-}
 
 // ---------------------------------------------------------------------------
 // RefundActions — approve / decline buttons for a single order row
@@ -122,7 +109,7 @@ function RefundActions({ order }: { order: Order }) {
         <Pressable
           style={[
             styles.approveButton,
-            (anyPending || approveRefund.isPending) && styles.actionButtonDisabled,
+            anyPending && styles.actionButtonDisabled,
           ]}
           onPress={handleApprove}
           disabled={anyPending}
@@ -134,7 +121,7 @@ function RefundActions({ order }: { order: Order }) {
         <Pressable
           style={[
             styles.declineButton,
-            (anyPending || declineRefund.isPending) && styles.actionButtonDisabled,
+            anyPending && styles.actionButtonDisabled,
           ]}
           onPress={handleDecline}
           disabled={anyPending}
@@ -153,11 +140,6 @@ function RefundActions({ order }: { order: Order }) {
 // ---------------------------------------------------------------------------
 
 function OrderRow({ order }: { order: Order }) {
-  const hasPendingRefund =
-    order.refundRequestedAt !== null &&
-    order.refundApprovedAt === null &&
-    order.refundDeclinedAt === null;
-
   return (
     <View style={styles.orderCard}>
       <View style={styles.orderRow}>
@@ -174,7 +156,7 @@ function OrderRow({ order }: { order: Order }) {
         </Text>
         <Text style={styles.orderTotal}>${formatCents(order.totalCents)}</Text>
       </View>
-      {hasPendingRefund ? <RefundActions order={order} /> : null}
+      {isPendingRefund(order) ? <RefundActions order={order} /> : null}
     </View>
   );
 }
@@ -184,18 +166,23 @@ function OrderRow({ order }: { order: Order }) {
 // ---------------------------------------------------------------------------
 
 export function StoreOrdersScreen(_props: Props) {
-  const { data, isLoading, error, refetch } = trpc.orders.listForMyStore.useQuery(
-    {},
+  const {
+    data,
+    isLoading,
+    error,
+    refetch,
+    isRefetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = trpc.orders.listForMyStore.useInfiniteQuery(
+    { limit: 20 },
     {
-      refetchInterval: (query) => {
-        const result = query.state.data;
-        if (!result) return false;
-        return needsPolling(result.orders) ? 3000 : false;
-      },
+      getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     },
   );
 
-  const orders = data?.orders;
+  const orders = data?.pages.flatMap((p) => p.orders) ?? [];
 
   if (isLoading) {
     return (
@@ -221,7 +208,7 @@ export function StoreOrdersScreen(_props: Props) {
     );
   }
 
-  if (!orders || orders.length === 0) {
+  if (orders.length === 0) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
@@ -239,6 +226,23 @@ export function StoreOrdersScreen(_props: Props) {
         keyExtractor={(o) => o.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => <OrderRow order={item} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={() => void refetch()}
+          />
+        }
+        onEndReached={() => {
+          if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+        }}
+        onEndReachedThreshold={0.4}
+        ListFooterComponent={
+          isFetchingNextPage ? (
+            <View style={styles.footerSpinner}>
+              <ActivityIndicator size="small" color="#2d6a4f" />
+            </View>
+          ) : null
+        }
       />
     </SafeAreaView>
   );
@@ -320,6 +324,10 @@ const styles = StyleSheet.create({
     color: "#2d6a4f",
     fontSize: 14,
     fontWeight: "600",
+  },
+  footerSpinner: {
+    paddingVertical: 16,
+    alignItems: "center",
   },
   // Refund block
   refundBlock: {

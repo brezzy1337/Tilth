@@ -31,6 +31,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { OrderStatus } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
+import { ColorBadge } from "../components/ColorBadge";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
 import { capitalise } from "../utils/text";
@@ -191,18 +192,18 @@ export function OrderDetailScreen({ route }: Props) {
         {user && order.buyerId === user.id && (
           <>
             {order.refundApprovedAt ? (
-              <View style={styles.refundBadge}>
-                <Text style={styles.refundApprovedText}>Refund approved</Text>
+              <View style={styles.refundBadgeWrapper}>
+                <ColorBadge label="Refund approved" bg="#fff3e0" text="#2d6a4f" />
               </View>
             ) : order.refundRequestedAt ? (
-              <View style={styles.refundBadge}>
-                <Text style={styles.refundRequestedText}>Refund requested</Text>
+              <View style={styles.refundBadgeWrapper}>
+                <ColorBadge label="Refund requested" bg="#fff3e0" text="#e65100" />
               </View>
             ) : (
               <>
                 {order.refundDeclinedAt ? (
-                  <View style={[styles.refundBadge, styles.refundDeclinedBadge]}>
-                    <Text style={styles.refundDeclinedText}>Refund declined</Text>
+                  <View style={styles.refundBadgeWrapper}>
+                    <ColorBadge label="Refund declined" bg="#fff8e1" text="#92400e" />
                   </View>
                 ) : null}
                 {(order.status === "paid" || order.status === "fulfilled") ? (
@@ -399,30 +400,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
-  refundBadge: {
+  refundBadgeWrapper: {
     marginTop: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: "#fff3e0",
-    alignItems: "center",
-  },
-  refundDeclinedBadge: {
-    backgroundColor: "#fff8e1",
-  },
-  refundRequestedText: {
-    color: "#e65100",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  refundApprovedText: {
-    color: "#2d6a4f",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  refundDeclinedText: {
-    color: "#92400e",
-    fontSize: 14,
-    fontWeight: "600",
+    alignItems: "flex-start",
   },
 });

@@ -3,12 +3,14 @@
  *
  * Renders a small coloured pill for a given OrderStatus.
  * Unknown/future statuses fall back to a neutral grey pill.
+ *
+ * Layout is delegated to ColorBadge; this file owns only the status→colour mapping.
  */
 
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
 import type { OrderStatus } from "@homegrown/shared";
 import { capitalise } from "../utils/text";
+import { ColorBadge } from "./ColorBadge";
 
 // ---------------------------------------------------------------------------
 // Status config — single source of truth for pill colours across the app
@@ -33,21 +35,5 @@ export const STATUS_CONFIG: Record<
 export function StatusPill({ status }: { status: OrderStatus }) {
   const config =
     STATUS_CONFIG[status] ?? { label: capitalise(status), bg: "#e5e7eb", text: "#374151" };
-  return (
-    <View style={[styles.pill, { backgroundColor: config.bg }]}>
-      <Text style={[styles.pillText, { color: config.text }]}>{config.label}</Text>
-    </View>
-  );
+  return <ColorBadge label={config.label} bg={config.bg} text={config.text} />;
 }
-
-const styles = StyleSheet.create({
-  pill: {
-    paddingVertical: 3,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-  },
-  pillText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-});
