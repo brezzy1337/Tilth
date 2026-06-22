@@ -89,6 +89,13 @@ export interface StripeClient {
     metadata: Record<string, string>;
     idempotencyKey: string;
   }): Promise<{ id: string; clientSecret: string }>;
+  /**
+   * Read the current status of a PaymentIntent.
+   * Plain return shape — no Stripe SDK types leak into this interface.
+   * Used by the reconciliation poller to detect succeeded PIs that were missed
+   * by the webhook (e.g. when the connected-account webhook was not yet wired).
+   */
+  retrievePaymentIntent(id: string): Promise<{ status: string }>;
 }
 
 /** The database type — Drizzle + our schema. */

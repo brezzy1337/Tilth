@@ -11,6 +11,7 @@ describe("envSchema DATABASE_URL", () => {
     GOOGLE_GEOCODING_API_KEY: "geocode-key",
     STRIPE_SECRET_KEY: "sk_test_abc123",
     STRIPE_WEBHOOK_SECRET: "whsec_abc123",
+    STRIPE_WEBHOOK_SECRET_CONNECT: "whsec_connect_abc123",
   };
 
   it("accepts the Cloud SQL unix-socket form (empty host)", () => {
@@ -72,6 +73,7 @@ describe("envSchema full happy-path", () => {
       GOOGLE_GEOCODING_API_KEY: "AIzaSyFakeKey",
       STRIPE_SECRET_KEY: "sk_test_51FakeStripeKey",
       STRIPE_WEBHOOK_SECRET: "whsec_fakeWebhookSecret",
+      STRIPE_WEBHOOK_SECRET_CONNECT: "whsec_connect_fakeSecret",
       STRIPE_CONNECT_REFRESH_URL: "https://homegrown.app/connect/refresh",
       STRIPE_CONNECT_RETURN_URL: "https://homegrown.app/connect/return",
     });
@@ -83,5 +85,40 @@ describe("envSchema full happy-path", () => {
     expect(result.data.NODE_ENV).toBe("production");
     expect(result.data.DATABASE_URL).toContain("postgres://");
     expect(result.data.JWT_SECRET).toHaveLength(46);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STRIPE_WEBHOOK_SECRET_CONNECT — required, must fail loudly when absent
+// ---------------------------------------------------------------------------
+
+describe("envSchema STRIPE_WEBHOOK_SECRET_CONNECT", () => {
+  const validBase = {
+    DATABASE_URL: "postgres://u:p@localhost:5432/homegrown",
+    JWT_SECRET: "a-very-long-secret-that-is-at-least-32-chars!!",
+    GOOGLE_GEOCODING_API_KEY: "geocode-key",
+    STRIPE_SECRET_KEY: "sk_test_abc123",
+    STRIPE_WEBHOOK_SECRET: "whsec_platform_secret",
+    STRIPE_WEBHOOK_SECRET_CONNECT: "whsec_connect_secret",
+  };
+
+  it("accepts a valid STRIPE_WEBHOOK_SECRET_CONNECT", () => {
+    const result = envSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects when STRIPE_WEBHOOK_SECRET_CONNECT is absent", () => {
+    const { STRIPE_WEBHOOK_SECRET_CONNECT: _omitted, ...without } = validBase;
+    const result = envSchema.safeParse(without);
+    expect(result.success).toBe(false);
+    const paths = result.error?.issues.map((i) => i.path).flat();
+    expect(paths).toContain("STRIPE_WEBHOOK_SECRET_CONNECT");
+  });
+
+  it("rejects when STRIPE_WEBHOOK_SECRET_CONNECT is an empty string", () => {
+    const result = envSchema.safeParse({ ...validBase, STRIPE_WEBHOOK_SECRET_CONNECT: "" });
+    expect(result.success).toBe(false);
+    const paths = result.error?.issues.map((i) => i.path).flat();
+    expect(paths).toContain("STRIPE_WEBHOOK_SECRET_CONNECT");
   });
 });

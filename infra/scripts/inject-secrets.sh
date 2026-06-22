@@ -21,7 +21,8 @@
 #   3. Prompt (read -rs) for operator-supplied values:
 #        GOOGLE_GEOCODING_API_KEY
 #        STRIPE_SECRET_KEY
-#        STRIPE_WEBHOOK_SECRET  (may be a placeholder — see note below)
+#        STRIPE_WEBHOOK_SECRET         (may be a placeholder — see note below)
+#        STRIPE_WEBHOOK_SECRET_CONNECT (may be a placeholder — see note below)
 #
 #   All secret values flow via --data-file=- (stdin pipe) or process
 #   substitution — never echoed, never written to a file, never passed as a
@@ -288,6 +289,41 @@ else
         log_ok "STRIPE_WEBHOOK_SECRET stored."
     fi
     unset _WEBHOOK_SECRET
+fi
+
+# ── STRIPE_WEBHOOK_SECRET_CONNECT ─────────────────────────────────────────────
+# Signing secret for the Connected-accounts scoped webhook destination
+# (account.updated, capability.updated, etc.). Registered as a separate webhook
+# destination in the Stripe dashboard with "Connected accounts" scope.
+# Chicken-and-egg: the real whsec_… only exists after the Connect webhook
+# endpoint is registered in the Stripe dashboard. If you don't have it yet,
+# press ENTER to store a clearly-marked placeholder. You MUST replace it before
+# enabling real Connect payment traffic.
+if secret_has_version "STRIPE_WEBHOOK_SECRET_CONNECT"; then
+    log_ok "STRIPE_WEBHOOK_SECRET_CONNECT already has an enabled version — skipping."
+else
+    printf '\nEnter STRIPE_WEBHOOK_SECRET_CONNECT (whsec_…, or press ENTER for placeholder): '
+    read -rs _WEBHOOK_SECRET_CONNECT
+    printf '\n'
+
+    if [[ -z "${_WEBHOOK_SECRET_CONNECT}" ]]; then
+        _PLACEHOLDER="PLACEHOLDER_whsec_CONNECT_REPLACE_AFTER_FIRST_DEPLOY"
+        printf '%s' "${_PLACEHOLDER}" | add_secret_version_from_fd "STRIPE_WEBHOOK_SECRET_CONNECT"
+        unset _PLACEHOLDER
+
+        banner "STRIPE_WEBHOOK_SECRET_CONNECT: PLACEHOLDER STORED"
+        printf "  The secret holds a placeholder. After your first deploy:\n"
+        printf "  1. Register a second webhook destination in the Stripe dashboard\n"
+        printf "     with scope 'Connected accounts'. Subscribe to:\n"
+        printf "     account.updated, capability.updated, account.application.deauthorized\n"
+        printf "  2. Store the real signing secret (whsec_...):\n"
+        printf "       read -rs WHSEC && printf '%%s' \"\$WHSEC\" \\\\\n"
+        printf "         | gcloud secrets versions add STRIPE_WEBHOOK_SECRET_CONNECT --data-file=- && unset WHSEC\n\n"
+    else
+        printf '%s' "${_WEBHOOK_SECRET_CONNECT}" | add_secret_version_from_fd "STRIPE_WEBHOOK_SECRET_CONNECT"
+        log_ok "STRIPE_WEBHOOK_SECRET_CONNECT stored."
+    fi
+    unset _WEBHOOK_SECRET_CONNECT
 fi
 
 # =============================================================================

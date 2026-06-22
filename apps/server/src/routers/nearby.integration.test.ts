@@ -62,6 +62,7 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
     createAccountLink: async () => { throw new Error("stub: not implemented"); },
     retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
     createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
   };
 
   const createCaller = createCallerFactory(appRouter);

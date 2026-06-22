@@ -113,6 +113,11 @@ export function createStripeClient(
       return { id: pi.id, clientSecret: pi.client_secret };
     },
 
+    async retrievePaymentIntent(id) {
+      const pi = await stripe.paymentIntents.retrieve(id);
+      return { status: pi.status };
+    },
+
     constructWebhookEvent(rawBody, signature, webhookSecret) {
       return stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
     },

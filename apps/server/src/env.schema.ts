@@ -82,10 +82,23 @@ export const envSchema = z.object({
   STRIPE_CONNECT_RETURN_URL: httpsUrl.default("https://homegrown.app/connect/return"),
   /**
    * Stripe webhook signing secret (whsec_…) for verifying webhook payloads.
+   * This secret corresponds to the "Your account" (platform) destination in the
+   * Stripe Dashboard — handles payment_intent.* events.
    * Locally: set in .env (gitignored). Production: GCP Secret Manager.
    * No default — never hardcode.
    */
   STRIPE_WEBHOOK_SECRET: z.string().min(1),
+  /**
+   * Stripe webhook signing secret for the "Connected accounts" destination.
+   * This is a SEPARATE secret from STRIPE_WEBHOOK_SECRET — Stripe issues one
+   * signing secret per webhook endpoint, so the connected-accounts endpoint
+   * (account.updated events) requires its own secret.
+   * Required: a missing secret fails loudly at boot rather than silently dropping
+   * connected-account events (which would re-introduce the P0 dropped-events bug).
+   * Locally: set in .env (gitignored). Production: GCP Secret Manager.
+   * No default — never hardcode.
+   */
+  STRIPE_WEBHOOK_SECRET_CONNECT: z.string().min(1),
 });
 
 export type Env = z.infer<typeof envSchema>;

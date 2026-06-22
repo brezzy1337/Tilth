@@ -48,6 +48,9 @@ COPY apps/server/     ./apps/server/
 # Produces apps/server/dist/index.mjs — a single self-contained ESM file that
 # includes @homegrown/shared and all third-party deps. Plain `node` can run it.
 RUN pnpm --filter @homegrown/server build
+# Produces apps/server/dist/reconcile.mjs — the Cloud Run Job entrypoint.
+# Same image carries both bundles; the Job overrides CMD to `node /app/reconcile.mjs`.
+RUN pnpm --filter @homegrown/server build:reconcile
 
 # ── Runtime stage ───────────────────────────────────────────────────────────
 FROM node:22.16.0-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS runtime
@@ -65,8 +68,11 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Copy only the single bundled file from the builder — nothing else.
+# Copy both bundled files from the builder.
+# index.mjs   → started by the Cloud Run Service CMD below.
+# reconcile.mjs → started by the Cloud Run Job (command override: node /app/reconcile.mjs).
 COPY --from=builder /app/apps/server/dist/index.mjs /app/index.mjs
+COPY --from=builder /app/apps/server/dist/reconcile.mjs /app/reconcile.mjs
 
 # Expose is documentation only; Cloud Run binds whatever PORT it injects.
 EXPOSE 8080

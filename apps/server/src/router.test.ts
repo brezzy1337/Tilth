@@ -23,6 +23,7 @@ const stubStripe: Context["stripe"] = {
   createAccountLink: async () => { throw new Error("stub: not implemented"); },
   retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
   createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+  retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
 };
 
 // Minimal stub context that satisfies the Context shape.

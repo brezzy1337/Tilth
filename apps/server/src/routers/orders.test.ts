@@ -58,6 +58,7 @@ function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["st
       id: STRIPE_PI_ID,
       clientSecret: "pi_test_abc123_secret_xyz",
     }),
+    retrievePaymentIntent: async () => ({ status: "succeeded" }),
     ...overrides,
   };
 }
