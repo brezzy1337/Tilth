@@ -80,6 +80,16 @@ spec:
                   name: STRIPE_WEBHOOK_SECRET
                   key: latest
 
+            # STRIPE_WEBHOOK_SECRET_CONNECT — signing secret (whsec_…) for the Connected-accounts
+            # scoped webhook destination (account.updated, capability.updated, etc.). Registered
+            # separately from the platform webhook; version 1 is a placeholder — replace after
+            # the Connect webhook endpoint is registered in the Stripe dashboard.
+            - name: STRIPE_WEBHOOK_SECRET_CONNECT
+              valueFrom:
+                secretKeyRef:
+                  name: STRIPE_WEBHOOK_SECRET_CONNECT
+                  key: latest
+
           resources:
             limits:
               cpu: "1"

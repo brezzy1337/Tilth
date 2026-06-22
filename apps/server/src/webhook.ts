@@ -35,7 +35,14 @@ export function handleStripeWebhookRequest(
   res: ServerResponse,
   opts: {
     db: Db;
-    webhookSecret: string;
+    /**
+     * One signing secret per Stripe webhook destination. For a Connect platform
+     * there are two destinations — the platform ("Your account") and the
+     * connected-accounts endpoint — each with its own `whsec_…` secret.
+     * Verification tries each secret in order; the first that succeeds wins.
+     * Only when ALL secrets fail does the request return 400.
+     */
+    webhookSecrets: string[];
     constructWebhookEvent: (
       rawBody: Buffer,
       signature: string,
@@ -59,18 +66,32 @@ export function handleStripeWebhookRequest(
       return;
     }
 
-    let event: Stripe.Event;
-    try {
-      event = opts.constructWebhookEvent(rawBody, sig, opts.webhookSecret);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Signature verification failed";
+    // Try each signing secret in turn. The first that verifies wins.
+    // Only if every secret throws do we return 400 (same semantics as before,
+    // just extended to multiple destinations).
+    let event: Stripe.Event | undefined;
+    let lastError: string = "Signature verification failed";
+    for (const secret of opts.webhookSecrets) {
+      try {
+        event = opts.constructWebhookEvent(rawBody, sig, secret);
+        break; // verified — stop trying
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : "Signature verification failed";
+        // continue to next secret
+      }
+    }
+
+    if (!event) {
       res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: message }));
+      res.end(JSON.stringify({ error: lastError }));
       return;
     }
 
+    // Capture in a const so TypeScript knows it's non-null inside the async callbacks.
+    const verifiedEvent = event;
+
     // Dispatch; respond 500 on processing errors so Stripe retries delivery.
-    handleStripeEvent(event, opts.db)
+    handleStripeEvent(verifiedEvent, opts.db)
       .then(() => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ received: true }));
@@ -78,7 +99,7 @@ export function handleStripeWebhookRequest(
       .catch((err: unknown) => {
         console.error(
           "[webhook] error processing event",
-          event.type,
+          verifiedEvent.type,
           err instanceof Error ? err.message : String(err),
         );
         // 500 tells Stripe the event was not processed — it will retry.
