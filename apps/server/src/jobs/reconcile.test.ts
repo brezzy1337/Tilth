@@ -76,18 +76,25 @@ function fakeDb(opts: {
   };
 
   // updateResult defaults to [{}] — a non-empty array — so that markOrderPaid
-  // (which checks Array.isArray(result) && result.length > 0) returns true.
+  // (which checks result.length > 0 after .returning()) returns true.
   const resolvedUpdateResult = opts.updateResult !== undefined ? opts.updateResult : [{}];
 
   const updateBuilder: {
     set: (s: unknown) => typeof updateBuilder;
-    where: (...args: unknown[]) => Promise<unknown>;
+    where: (...args: unknown[]) => typeof updateBuilder;
+    returning: (...args: unknown[]) => Promise<unknown>;
+    // Allow direct await on the builder (for update chains without .returning()).
+    then: (resolve: (v: unknown) => void, reject?: (e: unknown) => void) => void;
   } = {
     set: (s: unknown) => {
       opts.onUpdate?.(s);
       return updateBuilder;
     },
-    where: () => Promise.resolve(resolvedUpdateResult),
+    where: () => updateBuilder,
+    returning: () => Promise.resolve(resolvedUpdateResult),
+    then: (resolve) => {
+      Promise.resolve(resolvedUpdateResult).then(resolve);
+    },
   };
 
   const updateFn = () => updateBuilder;
@@ -480,6 +487,35 @@ describe("reconcile — abandoned-PI sweeper", () => {
 
     expect(summary.pisCancelled).toBe(0);
     expect(summary.errors).toBe(0);
+  });
+
+  it("Pass 2/Pass 3 windows are disjoint: an abandoned order is swept (Pass 3) and NOT reconciled (Pass 2)", async () => {
+    // The fake DB returns the abandoned order ONLY in the third select (Pass 3).
+    // Pass 2's select (second call) returns empty — simulating the lower-bound
+    // SQL filter that excludes orders older than abandonAfterHours.
+    // This verifies the contract: retrievePaymentIntent is never called for an
+    // abandoned order; cancelPaymentIntent IS called.
+    const abandonedOrder = { id: UUID_ORDER_1, stripePaymentIntentId: "pi_abandoned_old" };
+
+    const retrievePaymentIntent = vi.fn().mockResolvedValue({ status: "succeeded" });
+    const cancelPaymentIntent = vi.fn().mockResolvedValue({ status: "canceled" });
+
+    const db = fakeDb({
+      // stores: empty | Pass 2 (stale): empty | Pass 3 (abandoned): one order
+      selectSequence: [[], [], [abandonedOrder]],
+    });
+
+    await reconcile({
+      db,
+      stripe: makeStripeStub({ retrievePaymentIntent, cancelPaymentIntent }),
+    });
+
+    // Pass 2 must NOT have fetched the PI (the order is in Pass 3's exclusive window).
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+
+    // Pass 3 must have cancelled the PI.
+    expect(cancelPaymentIntent).toHaveBeenCalledOnce();
+    expect(cancelPaymentIntent).toHaveBeenCalledWith("pi_abandoned_old");
   });
 });
 

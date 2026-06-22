@@ -36,7 +36,7 @@
  * Errors are logged and counted; the function always returns a summary.
  */
 
-import { and, eq, isNotNull, or, lt, sql } from "drizzle-orm";
+import { and, eq, isNotNull, or, lt, gte, sql } from "drizzle-orm";
 import type { Db, StripeClient } from "../context";
 import { stores, orders } from "../db/schema";
 import { markOrderPaid } from "../db/order-transitions";
@@ -144,8 +144,16 @@ export async function reconcile(deps: {
   // Pass 2: Stale pending-payment reconcile
   // ---------------------------------------------------------------------------
   // Select orders stuck in pending_payment with a PI that's older than the
-  // stale threshold. The comparison is done in SQL to avoid timezone drift.
+  // stale threshold BUT newer than the abandon cutoff. The upper and lower
+  // bounds are both expressed in SQL to avoid timezone drift.
+  //
+  // The lower bound (gte abandonCutoff) makes the Pass 2 and Pass 3 windows
+  // disjoint: orders older than abandonAfterHours are exclusively handled by
+  // Pass 3 (the sweeper). Without this bound both passes would select the same
+  // old orders in the same run, wasting a retrievePaymentIntent call and
+  // risking a "cancel a succeeded PI" error from the sweeper.
   const staleCutoff = sql`now() - make_interval(mins => ${staleAfterMinutes})`;
+  const abandonCutoffForPass2 = sql`now() - make_interval(hours => ${abandonAfterHours})`;
 
   const staleOrders = await db
     .select({
@@ -158,6 +166,7 @@ export async function reconcile(deps: {
         eq(orders.status, "pending_payment"),
         isNotNull(orders.stripePaymentIntentId),
         lt(orders.createdAt, staleCutoff),
+        gte(orders.createdAt, abandonCutoffForPass2),
       ),
     );
 
@@ -196,11 +205,11 @@ export async function reconcile(deps: {
   // Pass 3: Abandoned-PI sweeper
   // ---------------------------------------------------------------------------
   // Select orders still in pending_payment that have a PI and are older than
-  // abandonAfterHours. For each, cancel the PI on Stripe. Do NOT flip the order
-  // status here — the resulting payment_intent.canceled webhook is the source of
-  // truth and will transition the order to 'cancelled'.
-  const abandonCutoff = sql`now() - make_interval(hours => ${abandonAfterHours})`;
-
+  // abandonAfterHours. Pass 2 excluded these same orders via its upper bound
+  // (gte abandonCutoffForPass2), so the two windows are disjoint.
+  // For each, cancel the PI on Stripe. Do NOT flip the order status here —
+  // the resulting payment_intent.canceled webhook is the source of truth and
+  // will transition the order to 'cancelled'.
   const abandonedOrders = await db
     .select({
       id: orders.id,
@@ -211,7 +220,7 @@ export async function reconcile(deps: {
       and(
         eq(orders.status, "pending_payment"),
         isNotNull(orders.stripePaymentIntentId),
-        lt(orders.createdAt, abandonCutoff),
+        lt(orders.createdAt, abandonCutoffForPass2),
       ),
     );
 

@@ -136,6 +136,24 @@ export async function handleStripeEvent(
 ): Promise<void> {
   const { db, stripe } = deps;
 
+  // Pre-fetch any external data a handler needs BEFORE opening the DB transaction.
+  // No network I/O may occur while a pooled DB connection/transaction is held —
+  // doing so risks pool exhaustion under load or Stripe latency spikes.
+  //
+  // A duplicate account.updated event makes one wasted Stripe read before the
+  // dedup claim reveals it's a dup — acceptable; duplicates are rare and
+  // correctness is fully preserved (claim + write still commit atomically).
+  let accountStatus:
+    | { chargesEnabled: boolean; payoutsEnabled: boolean; detailsSubmitted: boolean }
+    | undefined;
+  if (event.type === "account.updated") {
+    const account = event.data.object as Stripe.Account;
+    // Do NOT blind-write the webhook payload — Stripe delivers events
+    // asynchronously and out-of-order delivery would corrupt the flags.
+    // Always re-read the authoritative state from the Stripe API.
+    accountStatus = await stripe.retrieveAccountStatus(account.id);
+  }
+
   // Wrap the ENTIRE dispatch in a single DB transaction that first claims the
   // event id. If the claim INSERT returns no rows the event is a duplicate and
   // we exit without side effects (exactly-once semantics). A crash mid-handler
@@ -228,16 +246,16 @@ export async function handleStripeEvent(
 
       case "account.updated": {
         const account = event.data.object as Stripe.Account;
-        // Do NOT blind-write the webhook payload — Stripe delivers events
-        // asynchronously and out-of-order delivery would corrupt the flags.
-        // Instead, always re-read the authoritative state from the Stripe API.
-        const acctStatus = await stripe.retrieveAccountStatus(account.id);
+        // accountStatus was fetched before the transaction opened (see above).
+        // The non-null assertion is safe: this branch is only reached when
+        // event.type === "account.updated", which is exactly when accountStatus
+        // was populated.
         await tx
           .update(stores)
           .set({
-            chargesEnabled: acctStatus.chargesEnabled,
-            payoutsEnabled: acctStatus.payoutsEnabled,
-            detailsSubmitted: acctStatus.detailsSubmitted,
+            chargesEnabled: accountStatus!.chargesEnabled,
+            payoutsEnabled: accountStatus!.payoutsEnabled,
+            detailsSubmitted: accountStatus!.detailsSubmitted,
           })
           .where(eq(stores.stripeConnectAccountId, account.id));
         break;

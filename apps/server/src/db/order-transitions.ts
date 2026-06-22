@@ -49,11 +49,11 @@ export async function markOrderPaid(dbOrTx: DbOrTx, piId: string): Promise<boole
         eq(orders.stripePaymentIntentId, piId),
         eq(orders.status, "pending_payment"),
       ),
-    );
+    )
+    .returning({ id: orders.id });
 
-  // postgres-js driver returns an array-like result; rowCount is the number of
-  // rows actually modified. A value > 0 means the transition happened.
-  // Drizzle with postgres-js exposes the raw result as the array; its length
-  // equals affected rows for UPDATE statements.
-  return Array.isArray(result) ? result.length > 0 : false;
+  // With .returning(), Drizzle + postgres-js populates the result array only for
+  // rows that were actually updated. An empty array means the WHERE clause matched
+  // nothing (order was already in a terminal state — idempotent re-delivery).
+  return result.length > 0;
 }

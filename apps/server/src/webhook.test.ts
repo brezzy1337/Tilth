@@ -546,6 +546,65 @@ describe("handleStripeEvent — account.updated", () => {
       detailsSubmitted: true,
     });
   });
+
+  it("fetches Stripe account status BEFORE the DB transaction opens (no network I/O inside tx)", async () => {
+    // Verify ordering: retrieveAccountStatus resolves before the DB transaction
+    // callback is invoked. We track the call sequence via an ordered log.
+    const callLog: string[] = [];
+
+    // Wrap the base db to observe when transaction() is entered.
+    const baseDb = fakeEventDb({ onTxUpdate: () => {} });
+    const instrumentedDb = {
+      transaction: async (fn: Parameters<typeof baseDb.transaction>[0]) => {
+        callLog.push("tx:open");
+        return baseDb.transaction(fn);
+      },
+    } as unknown as import("./context").Db;
+
+    const retrieveAccountStatus = vi.fn().mockImplementation(async () => {
+      callLog.push("stripe:retrieveAccountStatus");
+      return { chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true };
+    });
+
+    const event: Stripe.Event = {
+      id: "evt_acct_order_check",
+      type: "account.updated",
+      data: {
+        object: { id: "acct_order_check" } as Stripe.Account,
+      },
+    } as Stripe.Event;
+
+    await handleStripeEvent(event, { db: instrumentedDb, stripe: { retrieveAccountStatus } });
+
+    // retrieveAccountStatus must appear BEFORE tx:open in the call log.
+    const stripeIdx = callLog.indexOf("stripe:retrieveAccountStatus");
+    const txIdx = callLog.indexOf("tx:open");
+    expect(stripeIdx).toBeGreaterThanOrEqual(0);
+    expect(txIdx).toBeGreaterThanOrEqual(0);
+    expect(stripeIdx).toBeLessThan(txIdx);
+  });
+
+  it("does NOT call retrieveAccountStatus for non-account events (pre-fetch is event-type-gated)", async () => {
+    const retrieveAccountStatus = vi.fn().mockResolvedValue({
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: true,
+    });
+
+    const updates: unknown[] = [];
+    const db = fakeEventDb({ onTxUpdate: (s) => updates.push(s) });
+
+    const event: Stripe.Event = {
+      id: "evt_pi_succeeded_no_stripe_read",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_no_stripe_read" } as Stripe.PaymentIntent },
+    } as Stripe.Event;
+
+    await handleStripeEvent(event, { db, stripe: { retrieveAccountStatus } });
+
+    // retrieveAccountStatus must NOT be called for unrelated event types.
+    expect(retrieveAccountStatus).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
