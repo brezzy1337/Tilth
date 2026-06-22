@@ -56,6 +56,7 @@ export const orderStatusEnum = pgEnum("order_status", [
   "fulfilled",
   "cancelled",
   "refunded",
+  "disputed",
 ]);
 
 export const listingCategoryEnum = pgEnum("listing_category", [
@@ -112,6 +113,14 @@ export const stores = pgTable("stores", {
   payoutsEnabled: boolean("payouts_enabled").notNull().default(false),
   /** Whether the seller has submitted their Connect details. Kept fresh by account.updated webhook. */
   detailsSubmitted: boolean("details_submitted").notNull().default(false),
+  /**
+   * Platform-protection ledger: tracks cents owed by the platform to the seller
+   * (or owed to the platform from the seller) when a refund or dispute reverse-transfer
+   * cannot be fully recovered from an empty connected-account balance. Positive = platform
+   * owes the seller; negative = seller owes the platform. Settled out-of-band or via
+   * future payouts sweeper.
+   */
+  amountOwedCents: integer("amount_owed_cents").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
@@ -184,6 +193,9 @@ export const orders = pgTable(
     totalCents: integer("total_cents").notNull(),
     /** Stripe PaymentIntent id — set after PI creation; used for webhook dispatch. */
     stripePaymentIntentId: text("stripe_payment_intent_id").unique(),
+    /** Running total of refunded cents. Accumulates on partial refunds; order
+     *  flips to "refunded" only when refundedCents reaches totalCents. */
+    refundedCents: integer("refunded_cents").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -211,3 +223,21 @@ export const orderItems = pgTable(
   },
   (t) => [index("order_items_order_id_idx").on(t.orderId)],
 );
+
+// ---------------------------------------------------------------------------
+// Processed Stripe events — exactly-once webhook dedup table
+// ---------------------------------------------------------------------------
+
+/**
+ * Records every Stripe event id that has been successfully processed.
+ * Webhook handlers INSERT here (with ON CONFLICT DO NOTHING) before acting;
+ * if the row already exists the event is a duplicate and the handler is a no-op.
+ */
+export const processedStripeEvents = pgTable("processed_stripe_events", {
+  /** Stripe event.id (e.g. "evt_…"). Primary key = natural dedup key. */
+  id: text("id").primaryKey(),
+  /** Stripe event type (e.g. "payment_intent.succeeded") — for observability. */
+  type: text("type").notNull(),
+  /** Wall-clock time the event was first received by the webhook handler. */
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+});
