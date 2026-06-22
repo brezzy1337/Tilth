@@ -1612,6 +1612,208 @@ describe("orders.declineRefund", () => {
 });
 
 // ---------------------------------------------------------------------------
+// orders.markFulfilled
+// ---------------------------------------------------------------------------
+
+describe("orders.markFulfilled", () => {
+  it("store owner marks a paid order fulfilled — sets status='fulfilled', returns updated order", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+    const fulfilledRow = { ...orderRow, status: "fulfilled", updatedAt: new Date("2026-06-22T14:00:00Z") };
+
+    // selectSequence:
+    //   slot 0 — innerJoin load (joinUsesSelectSlot)
+    //   slot 1 — re-fetch after claim (loadOrderById plain select)
+    //   slot 2 — order items
+    // updateSequence:
+    //   call 0 — guarded UPDATE returns a row (claim wins)
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow],       // slot 0 — innerJoin load
+        [fulfilledRow],   // slot 1 — re-fetch after update
+        [],               // slot 2 — order items
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID });
+
+    // The guarded UPDATE must set status='fulfilled' and updatedAt
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.status).toBe("fulfilled");
+    expect(updatePayload.updatedAt).toBeInstanceOf(Date);
+
+    // Return value must reflect the fulfilled state
+    expect(result.status).toBe("fulfilled");
+  });
+
+  it("non-owner (storeUserId !== ctx.user.id) → NOT_FOUND; no update", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_BUYER, // buyer, not seller
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+    // No update must have been issued
+    expect(updates).toHaveLength(0);
+  });
+
+  it("order not found → NOT_FOUND; no update", async () => {
+    const updates: unknown[] = [];
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[]], // empty — order does not exist
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("status guard: pending_payment → BAD_REQUEST, no transition", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "pending_payment", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("status guard: fulfilled → BAD_REQUEST, no transition", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "fulfilled", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("status guard: refunded → BAD_REQUEST, no transition", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "refunded", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("status guard: cancelled → BAD_REQUEST, no transition", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "cancelled", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("status guard: disputed → BAD_REQUEST, no transition", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "disputed", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("guarded UPDATE returns 0 rows (status raced away) → BAD_REQUEST", async () => {
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    // Pre-check passes (status is 'paid') but the guarded UPDATE returns 0 rows
+    // (race: concurrent webhook moved the order to fulfilled/refunded/etc. first)
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // initial innerJoin load — pre-check passes
+      ],
+      updateSequence: [
+        [], // guarded UPDATE returns 0 rows
+      ],
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // orders.listForMyStore — paginated output { orders, nextCursor }
 // ---------------------------------------------------------------------------
 

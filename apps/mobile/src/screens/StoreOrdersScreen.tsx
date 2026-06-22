@@ -136,6 +136,53 @@ function RefundActions({ order }: { order: Order }) {
 }
 
 // ---------------------------------------------------------------------------
+// FulfillAction — "Mark fulfilled" button for a paid, non-refund-pending order
+// ---------------------------------------------------------------------------
+
+function FulfillAction({ order }: { order: Order }) {
+  const utils = trpc.useUtils();
+
+  const markFulfilled = trpc.orders.markFulfilled.useMutation({
+    onSuccess: () => {
+      void utils.orders.listForMyStore.invalidate();
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message ?? "Could not mark order as fulfilled. Please try again.");
+    },
+  });
+
+  function handleFulfill() {
+    Alert.alert(
+      "Mark as fulfilled",
+      `Mark order #${order.id.slice(0, 8).toUpperCase()} as fulfilled?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark fulfilled",
+          onPress: () => {
+            markFulfilled.mutate({ orderId: order.id });
+          },
+        },
+      ],
+    );
+  }
+
+  return (
+    <View style={styles.fulfillBlock}>
+      <Pressable
+        style={[styles.fulfillButton, markFulfilled.isPending && styles.actionButtonDisabled]}
+        onPress={handleFulfill}
+        disabled={markFulfilled.isPending}
+      >
+        <Text style={styles.fulfillButtonText}>
+          {markFulfilled.isPending ? "Marking…" : "Mark fulfilled"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // OrderRow
 // ---------------------------------------------------------------------------
 
@@ -157,6 +204,9 @@ function OrderRow({ order }: { order: Order }) {
         <Text style={styles.orderTotal}>${formatCents(order.totalCents)}</Text>
       </View>
       {isPendingRefund(order) ? <RefundActions order={order} /> : null}
+      {!isPendingRefund(order) && order.status === "paid" ? (
+        <FulfillAction order={order} />
+      ) : null}
     </View>
   );
 }
@@ -380,5 +430,23 @@ const styles = StyleSheet.create({
   },
   actionButtonDisabled: {
     opacity: 0.5,
+  },
+  // Fulfill block
+  fulfillBlock: {
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: "#f0f0f0",
+    paddingTop: 10,
+  },
+  fulfillButton: {
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "#2d6a4f",
+    alignItems: "center",
+  },
+  fulfillButtonText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

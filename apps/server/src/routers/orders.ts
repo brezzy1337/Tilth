@@ -24,6 +24,7 @@ import {
   requestRefundInput,
   approveRefundInput,
   declineRefundInput,
+  markFulfilledInput,
   listForMyStoreInput,
   listForMyStoreOutput,
   order as orderSchema,
@@ -820,6 +821,77 @@ export const ordersRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Refund already declined" });
         }
         throw new TRPCError({ code: "BAD_REQUEST", message: "No refund requested for this order" });
+      }
+
+      return loadOrderById(ctx.db, orderId);
+    }),
+
+  /**
+   * Mark an order as fulfilled (SELLER / store owner only).
+   *
+   * Transition: paid → fulfilled.
+   * This is a seller operational action, not a Stripe/webhook concern.
+   * Webhooks own payment state (paid, refunded, disputed); fulfillment is seller-set.
+   *
+   * Uses an atomic guarded UPDATE to prevent races:
+   *   UPDATE orders SET status = 'fulfilled', updatedAt = now()
+   *     WHERE id = ? AND storeId = ? AND status = 'paid' RETURNING { id }
+   *
+   * A 0-row result means the order's status changed between the pre-check read
+   * and the guarded UPDATE — surfaces as BAD_REQUEST with the same message as the
+   * pre-check so the error is unambiguous without leaking concurrent state.
+   * No Stripe call is made.
+   */
+  markFulfilled: protectedProcedure
+    .input(markFulfilledInput)
+    .output(orderSchema)
+    .mutation(async ({ input, ctx }) => {
+      const orderId = input.orderId;
+
+      // Load order joined to stores for ownership check — same pattern as approveRefund/declineRefund
+      const [foundOrder] = await ctx.db
+        .select(orderColumnsWithStore)
+        .from(orders)
+        .innerJoin(stores, eq(orders.storeId, stores.id))
+        .where(eq(orders.id, orderId))
+        .limit(1);
+
+      // Surface as NOT_FOUND when not found or caller is not the store owner
+      // (avoid leaking order existence to non-owners)
+      if (!foundOrder || foundOrder.storeUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+      }
+
+      // Pre-check: give a precise error before the atomic claim
+      if (foundOrder.status !== "paid") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid orders can be marked fulfilled",
+        });
+      }
+
+      const now = new Date();
+      // Atomic guarded UPDATE — prevents races where a concurrent webhook or seller
+      // action transitions the order out of 'paid' between the pre-check and this UPDATE.
+      const claimed = await ctx.db
+        .update(orders)
+        .set({ status: "fulfilled", updatedAt: now })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, foundOrder.storeId),
+            eq(orders.status, "paid"),
+          ),
+        )
+        .returning({ id: orders.id });
+
+      if (claimed.length === 0) {
+        // Status raced away between the pre-check read and the guarded UPDATE.
+        // A generic clear message is fine — the caller just needs to retry or reload.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid orders can be marked fulfilled",
+        });
       }
 
       return loadOrderById(ctx.db, orderId);

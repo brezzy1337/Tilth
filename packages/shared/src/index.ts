@@ -347,6 +347,11 @@ export const declineRefundInput = z.object({
 
 export type DeclineRefundInput = z.infer<typeof declineRefundInput>;
 
+/** Input to `orders.markFulfilled` (protected, caller must own the store). */
+export const markFulfilledInput = z.object({ orderId: z.string().uuid() });
+
+export type MarkFulfilledInput = z.infer<typeof markFulfilledInput>;
+
 /** Input to `orders.listForMyStore` (protected, caller must own the store). */
 export const listForMyStoreInput = z.object({
   cursor: z.string().optional(),
