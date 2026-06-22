@@ -255,6 +255,8 @@ export const nearbyInput = z.object({
   radiusKm: z.number().positive().max(200),
   /** Optional category filter applied before the PostGIS distance query. */
   category: listingCategory.optional(),
+  /** Optional case-insensitive substring match on listing name. */
+  query: z.string().trim().min(1).max(100).optional(),
 });
 
 export type NearbyInput = z.infer<typeof nearbyInput>;
