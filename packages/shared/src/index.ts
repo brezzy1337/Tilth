@@ -347,6 +347,14 @@ export const declineRefundInput = z.object({
 
 export type DeclineRefundInput = z.infer<typeof declineRefundInput>;
 
+/** Input to `orders.listForMyStore` (protected, caller must own the store). */
+export const listForMyStoreInput = z.object({
+  cursor: z.string().optional(),
+  limit: z.number().int().positive().max(50).default(20),
+});
+
+export type ListForMyStoreInput = z.infer<typeof listForMyStoreInput>;
+
 /** A fulfilled order item returned by `orders.get` / `orders.listMine`. */
 export const orderItemOutput = z.object({
   id: z.string().uuid(),
@@ -385,6 +393,17 @@ export const order = z.object({
 });
 
 export type Order = z.infer<typeof order>;
+
+/**
+ * Paginated response from `orders.listForMyStore`.
+ * `nextCursor` is null when the caller has reached the last page.
+ */
+export const listForMyStoreOutput = z.object({
+  orders: z.array(order),
+  nextCursor: z.string().nullable(),
+});
+
+export type ListForMyStoreOutput = z.infer<typeof listForMyStoreOutput>;
 
 /**
  * Response from `orders.create`.
