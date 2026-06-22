@@ -45,6 +45,7 @@ const STATUS_BANNER: Record<OrderStatus, { label: string; bg: string; text: stri
   fulfilled:       { label: "Order fulfilled",       bg: "#e0f2f1", text: "#00695c" },
   cancelled:       { label: "Order cancelled",       bg: "#fce4ec", text: "#b71c1c" },
   refunded:        { label: "Order refunded",        bg: "#f3e5f5", text: "#6a1b9a" },
+  disputed:        { label: "Payment disputed",      bg: "#fff3e0", text: "#e65100" },
 };
 
 function StatusBanner({ status }: { status: OrderStatus }) {
