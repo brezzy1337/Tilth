@@ -117,7 +117,10 @@ export function StoreProfileScreen({ route }: Props) {
           <>
             {/* Store header */}
             <View style={styles.storeHeader}>
-              {profile?.logo ? (
+              {/* Defense-in-depth: only render an https logo URL, so a non-https /
+                  javascript: / data: value (which z.string().url() would accept)
+                  can't reach <Image>. */}
+              {profile?.logo && /^https:\/\//i.test(profile.logo) ? (
                 <Image
                   source={{ uri: profile.logo }}
                   style={styles.logo}

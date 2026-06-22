@@ -102,10 +102,10 @@ export const getStoreInput = z.object({
 export type GetStoreInput = z.infer<typeof getStoreInput>;
 
 /**
- * Public store profile returned by `stores.get` and `stores.getMine`.
- * `stripeConnectAccountId` is included so the mobile client can detect whether
- * the seller has completed Connect Express onboarding, but it carries no secret
- * (the account ID is not a credential).
+ * Full store record — the OWNER-FACING shape returned by `stores.create` and
+ * `stores.getMine`. Includes `userId` + `stripeConnectAccountId` (so the owner's
+ * client can detect Connect onboarding state). NOT public: the public
+ * `stores.get` returns `storeProfile` (below), which omits those internal fields.
  */
 export const store = z.object({
   id: z.string().uuid(),
