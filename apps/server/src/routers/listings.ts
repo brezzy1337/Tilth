@@ -198,18 +198,26 @@ export const listingsRouter = router({
    *
    * PostGIS ST_DWithin filters by radius, ST_Distance computes the distance,
    * ordered ascending. Capped at 50 results. Optional category filter.
+   * Optional case-insensitive substring name search via `query` (ILIKE, parameterized).
    * Never does app-side distance math.
    */
   nearby: publicProcedure
     .input(nearbyInput)
     .output(nearbyListingSchema.array())
     .query(async ({ input, ctx }) => {
-      const { lat, lng, radiusKm, category } = input;
+      const { lat, lng, radiusKm, category, query } = input;
       const radiusMeters = radiusKm * 1000;
 
       // Build category filter clause — omit entirely when not supplied
       const categoryFilter = category
         ? sql`AND l.category = ${category}::"listing_category"`
+        : sql``;
+
+      // Build name filter clause — case-insensitive substring match.
+      // `query` is a bound parameter; the `%` wildcards are added in SQL (not via
+      // string concatenation), so this is safe against SQL injection.
+      const nameFilter = query
+        ? sql`AND l.name ILIKE '%' || ${query} || '%'`
         : sql``;
 
       type NearbyRow = {
@@ -244,6 +252,7 @@ export const listingsRouter = router({
         JOIN locations loc ON loc.store_id = s.id
         WHERE ST_DWithin(loc.geog, ST_MakePoint(${lng}, ${lat})::geography, ${radiusMeters})
         ${categoryFilter}
+        ${nameFilter}
         ORDER BY ST_Distance(loc.geog, ST_MakePoint(${lng}, ${lat})::geography) ASC
         LIMIT 50
       `);

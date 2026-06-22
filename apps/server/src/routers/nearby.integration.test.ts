@@ -349,4 +349,75 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
 
     expect(results.length).toBeLessThanOrEqual(50);
   });
+
+  it("query filter returns only listings whose name matches (case-insensitive)", async () => {
+    const caller = createCaller(makeCtx());
+
+    // "tomatoes" (lowercase) should match "SF Tomatoes" but not "SF Honey" or "Oakland Apples"
+    const results = await caller.listings.nearby({
+      lat: 37.7749,
+      lng: -122.4194,
+      radiusKm: 10,
+      query: "tomatoes",
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const r of results) {
+      expect(r.name.toLowerCase()).toContain("tomatoes");
+    }
+
+    const names = results.map((r) => r.name);
+    expect(names).toContain("SF Tomatoes");
+    expect(names).not.toContain("SF Honey");
+    expect(names).not.toContain("Oakland Apples");
+  });
+
+  it("omitting query behaves identically to no name filter", async () => {
+    const caller = createCaller(makeCtx());
+
+    // Without query — should return all within-radius listings
+    const withoutQuery = await caller.listings.nearby({
+      lat: 37.7749,
+      lng: -122.4194,
+      radiusKm: 10,
+    });
+
+    // With query explicitly absent (undefined is the same as not supplying it)
+    const withUndefinedQuery = await caller.listings.nearby({
+      lat: 37.7749,
+      lng: -122.4194,
+      radiusKm: 10,
+      query: undefined,
+    });
+
+    expect(withUndefinedQuery.length).toBe(withoutQuery.length);
+    expect(withUndefinedQuery.map((r) => r.id).sort()).toEqual(
+      withoutQuery.map((r) => r.id).sort()
+    );
+  });
+
+  it("query + category both apply when combined", async () => {
+    const caller = createCaller(makeCtx());
+
+    // category=vegetable AND query="sf" — should match "SF Tomatoes" (vegetable, name has "sf")
+    // but NOT "SF Honey" (honey category) or "Oakland Apples" (fruit, name has no "sf")
+    const results = await caller.listings.nearby({
+      lat: 37.7749,
+      lng: -122.4194,
+      radiusKm: 10,
+      category: "vegetable",
+      query: "sf",
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const r of results) {
+      expect(r.category).toBe("vegetable");
+      expect(r.name.toLowerCase()).toContain("sf");
+    }
+
+    const names = results.map((r) => r.name);
+    expect(names).toContain("SF Tomatoes");
+    expect(names).not.toContain("SF Honey");
+    expect(names).not.toContain("Oakland Apples");
+  });
 });
