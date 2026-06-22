@@ -27,18 +27,8 @@ locals {
   server_image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/server:latest"
 
   # Cloud SQL connection name used for unix-socket DATABASE_URL.
+  # Single definition — referenced here and in outputs.tf.
   cloudsql_connection_name = "${var.project_id}:${var.region}:${var.cloudsql_instance}"
-
-  # The six runtime secrets the job needs (same as the service; MIGRATE_DATABASE_URL
-  # is CI-only and must NOT be injected into runtime containers).
-  reconcile_secrets = [
-    "DATABASE_URL",
-    "JWT_SECRET",
-    "GOOGLE_GEOCODING_API_KEY",
-    "STRIPE_SECRET_KEY",
-    "STRIPE_WEBHOOK_SECRET",
-    "STRIPE_WEBHOOK_SECRET_CONNECT",
-  ]
 }
 
 # ── Scheduler invoker service account ────────────────────────────────────────
@@ -66,12 +56,6 @@ resource "google_cloud_run_v2_job" "reconcile" {
     parallelism = 1
     task_count  = 1
 
-    # Cloud SQL sidecar — required for the unix-socket DATABASE_URL to resolve.
-    # The annotation must sit on the outer template block (not template.template).
-    annotations = {
-      "run.googleapis.com/cloudsql-instances" = local.cloudsql_connection_name
-    }
-
     template {
       # Reuse the runtime SA — it already has secretAccessor on all six runtime
       # secrets (google_secret_manager_secret_iam_member.runtime_secret_accessor
@@ -83,9 +67,24 @@ resource "google_cloud_run_v2_job" "reconcile" {
 
       max_retries = 1
 
+      # Cloud SQL unix-socket volume — canonical v2 attachment mechanism.
+      # Exposes the socket at /cloudsql/<PROJECT>:<REGION>:<INSTANCE>, which
+      # matches the ?host=/cloudsql/<conn> form in the DATABASE_URL secret.
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [local.cloudsql_connection_name]
+        }
+      }
+
       containers {
         image   = local.server_image
         command = ["node", "/app/reconcile.mjs"]
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
 
         resources {
           limits = {
@@ -100,12 +99,12 @@ resource "google_cloud_run_v2_job" "reconcile" {
           value = "production"
         }
 
-        # ── Secret-backed env vars (all six runtime secrets) ───────────────
+        # ── Secret-backed env vars (same six runtime secrets as the service) ──
         # Values are never inlined — each references a Secret Manager secret by
         # resource ID and asks for the "latest" enabled version.
 
         dynamic "env" {
-          for_each = local.reconcile_secrets
+          for_each = local.runtime_secrets
           content {
             name = env.value
             value_source {

@@ -684,13 +684,20 @@ relies on Stripe webhooks to keep seller onboarding state and payment status cur
 Webhooks can be delayed or dropped (Stripe retries for 72 h but only delivers once
 per attempt). The reconcile job covers the gap:
 
-- **Seller onboarding resync** — calls the Stripe API for every seller whose
-  `stripeOnboarded` flag is `false` or stale, and sets it `true` once
-  `charges_enabled && payouts_enabled`. Stripe webhooks (`account.updated`) are
-  the real-time path; this job is the catch-up path.
-- **Stale-payment reconciliation** — finds `PaymentIntent` rows in state
-  `requires_capture` or `processing` that are older than the configured threshold
-  and re-fetches their status from Stripe, updating the DB accordingly.
+- **Pass 1 — Seller onboarding resync** — selects `stores` rows that have a
+  `stripeConnectAccountId` but where at least one of `chargesEnabled`,
+  `payoutsEnabled`, or `detailsSubmitted` is still `false`. For each, reads
+  authoritative values from Stripe via `accounts.retrieve` and updates all three
+  boolean flags if any differ. This unblocks `orders.create`, which gates on
+  `chargesEnabled`, for sellers who completed onboarding after the
+  `account.updated` webhook was missed. Stripe webhooks are the real-time path;
+  this job is the catch-up path.
+- **Pass 2 — Stale pending-payment reconcile** — selects `orders` with
+  `status = 'pending_payment'` and a `stripePaymentIntentId`, older than the
+  stale threshold (default 10 minutes). For each, retrieves the `PaymentIntent`
+  from Stripe; if its status is `succeeded`, transitions the order to `paid`
+  using the same idempotent `WHERE status = 'pending_payment'` guard the webhook
+  handler uses. All other PI statuses are left unchanged.
 
 The marketplace can transact only once both paths are operating. This job is the
 non-webhook path.

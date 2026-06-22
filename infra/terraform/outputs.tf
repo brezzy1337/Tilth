@@ -15,7 +15,7 @@ output "runtime_sa_email" {
 
 output "cloudsql_connection_name" {
   description = "Cloud SQL instance connection name (PROJECT:REGION:INSTANCE) — used in --add-cloudsql-instances."
-  value       = "${var.project_id}:${var.region}:${var.cloudsql_instance}"
+  value       = local.cloudsql_connection_name
 }
 
 output "project_number" {
