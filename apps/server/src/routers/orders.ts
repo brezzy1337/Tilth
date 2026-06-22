@@ -30,6 +30,7 @@ import {
   type Order,
   type OrderItemOutput,
 } from "@homegrown/shared";
+import { z } from "zod";
 import { eq, inArray, desc, and, isNull, isNotNull, lt, or } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
 import { orders, orderItems, listings, stores } from "../db/schema";
@@ -66,6 +67,40 @@ const orderColumns = {
   createdAt: orders.createdAt,
   updatedAt: orders.updatedAt,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Cursor codec — base64 keyset cursor for listForMyStore pagination
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a (createdAt, id) pair as an opaque base64 cursor string.
+ * The payload is always ASCII (ISO date + UUID) so btoa is safe.
+ */
+function encodeCursor(createdAt: Date, id: string): string {
+  return btoa(`${createdAt.toISOString()}|${id}`);
+}
+
+/**
+ * Decode an opaque cursor back to (createdAt, id).
+ * Validates the id with z.string().uuid() and the date with !isNaN(getTime()).
+ * Throws TRPCError BAD_REQUEST "Invalid cursor" on any malformed part.
+ */
+function decodeCursor(raw: string): { createdAt: Date; id: string } {
+  try {
+    const decoded = atob(raw);
+    const sepIdx = decoded.indexOf("|");
+    if (sepIdx === -1) throw new Error("missing separator");
+    const dateStr = decoded.slice(0, sepIdx);
+    const id = decoded.slice(sepIdx + 1);
+    const parsedDate = new Date(dateStr);
+    if (isNaN(parsedDate.getTime())) throw new Error("bad date");
+    // Validate id is a valid UUID
+    z.string().uuid().parse(id);
+    return { createdAt: parsedDate, id };
+  } catch {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
+  }
+}
 
 /**
  * Extends orderColumns with `storeUserId` for procedures that join stores.
@@ -622,6 +657,13 @@ export const ordersRouter = router({
       // Pre-check: surface a precise error before the atomic claim so the caller
       // gets an informative message even when the read→check→claim is non-atomic.
       // The claim itself is the real race-safety mechanism.
+      if (foundOrder.status !== "paid" && foundOrder.status !== "fulfilled") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid or fulfilled orders can be refunded",
+        });
+      }
+
       if (foundOrder.refundRequestedAt === null) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -632,15 +674,19 @@ export const ordersRouter = router({
       const paymentIntentId = foundOrder.stripePaymentIntentId;
 
       // Atomic claim: exactly one concurrent caller wins this UPDATE.
-      // Guards: refundRequestedAt IS NOT NULL AND refundApprovedAt IS NULL AND refundDeclinedAt IS NULL
-      const now = new Date();
+      // Guards: status IN (paid, fulfilled) AND refundRequestedAt IS NOT NULL
+      //         AND refundApprovedAt IS NULL AND refundDeclinedAt IS NULL
+      // The status condition is included atomically so a concurrent webhook that moves
+      // the order to 'refunded' or 'disputed' cannot be double-refunded.
+      const claimNow = new Date();
       const claimed = await ctx.db
         .update(orders)
-        .set({ refundApprovedAt: now, updatedAt: now })
+        .set({ refundApprovedAt: claimNow, updatedAt: claimNow })
         .where(
           and(
             eq(orders.id, orderId),
             eq(orders.storeId, foundOrder.storeId),
+            or(eq(orders.status, "paid"), eq(orders.status, "fulfilled")),
             isNotNull(orders.refundRequestedAt),
             isNull(orders.refundApprovedAt),
             isNull(orders.refundDeclinedAt),
@@ -677,12 +723,16 @@ export const ordersRouter = router({
         });
       } catch (err) {
         // Revert the claim: clear refundApprovedAt so a retry can re-enter the claim path.
-        // The stable idempotency key makes a retried Stripe call a no-op if the first actually
-        // succeeded despite throwing (network timeout, etc.).
+        // Scoped to the exact timestamp this call set so a concurrent caller's claim is
+        // never accidentally cleared. The stable idempotency key makes a retried Stripe call
+        // a no-op if the first actually succeeded despite throwing (network timeout, etc.).
+        // Edge case: if Stripe timed out but actually processed the refund, the
+        // charge.refunded webhook will arrive and set status='refunded'; the restored
+        // status gate (above) will then block any subsequent re-claim, self-healing the race.
         await ctx.db
           .update(orders)
           .set({ refundApprovedAt: null, updatedAt: new Date() })
-          .where(eq(orders.id, orderId));
+          .where(and(eq(orders.id, orderId), eq(orders.refundApprovedAt, claimNow)));
         throw err;
       }
 
@@ -719,8 +769,19 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
       }
 
+      // Pre-check: give a precise error for non-refundable statuses.
+      // The claim WHERE below is the real atomic guard.
+      if (foundOrder.status !== "paid" && foundOrder.status !== "fulfilled") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid or fulfilled orders can be refunded",
+        });
+      }
+
       const now = new Date();
       // Guarded UPDATE — atomically claims the decline.
+      // The status condition closes the race where the order moves to 'refunded'
+      // or 'disputed' between the pre-check read and this UPDATE.
       const claimed = await ctx.db
         .update(orders)
         .set({
@@ -732,6 +793,7 @@ export const ordersRouter = router({
           and(
             eq(orders.id, orderId),
             eq(orders.storeId, foundOrder.storeId),
+            or(eq(orders.status, "paid"), eq(orders.status, "fulfilled")),
             isNotNull(orders.refundRequestedAt),
             isNull(orders.refundApprovedAt),
             isNull(orders.refundDeclinedAt),
@@ -785,28 +847,15 @@ export const ordersRouter = router({
 
       const { limit, cursor } = input;
 
-      // Decode and validate cursor.
+      // Decode and validate cursor using the module-level decodeCursor helper.
       // Uses atob/btoa (globally available in Node 16+ and React Native) rather than
       // Buffer so the server file type-checks under mobile's tsconfig (no node types).
       let cursorCreatedAt: Date | null = null;
       let cursorId: string | null = null;
       if (cursor) {
-        try {
-          const decoded = atob(cursor);
-          const sepIdx = decoded.indexOf("|");
-          if (sepIdx === -1) throw new Error("malformed");
-          const dateStr = decoded.slice(0, sepIdx);
-          const id = decoded.slice(sepIdx + 1);
-          const parsedDate = new Date(dateStr);
-          if (isNaN(parsedDate.getTime()) || !id) throw new Error("malformed");
-          cursorCreatedAt = parsedDate;
-          cursorId = id;
-        } catch {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Invalid pagination cursor",
-          });
-        }
+        const decoded = decodeCursor(cursor);
+        cursorCreatedAt = decoded.createdAt;
+        cursorId = decoded.id;
       }
 
       // Build the keyset predicate: (createdAt < cursorCreatedAt) OR (createdAt = cursorCreatedAt AND id < cursorId)
@@ -831,14 +880,11 @@ export const ordersRouter = router({
         .limit(limit + 1);
 
       // Determine next cursor before trimming.
-      // Uses btoa (globally available in Node 16+ and React Native) — cursor payload is
-      // always ASCII (ISO date + UUID), so btoa is safe here.
       let nextCursor: string | null = null;
       if (storeOrders.length > limit) {
-        // The limit-th row (0-indexed) is the last row of this page
+        // storeOrders[limit - 1] = last row of this page (1-indexed: row `limit`); storeOrders[limit] is the probe row signalling there's more
         const lastRow = storeOrders[limit - 1]!;
-        const cursorPayload = `${lastRow.createdAt.toISOString()}|${lastRow.id}`;
-        nextCursor = btoa(cursorPayload);
+        nextCursor = encodeCursor(lastRow.createdAt, lastRow.id);
       }
 
       // Trim to limit

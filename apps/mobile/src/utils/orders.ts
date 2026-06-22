@@ -11,8 +11,8 @@ import type { Order } from "@homegrown/shared";
  */
 export function isPendingRefund(o: Order): boolean {
   return (
-    o.refundRequestedAt != null &&
-    o.refundApprovedAt == null &&
-    o.refundDeclinedAt == null
+    o.refundRequestedAt !== null &&
+    o.refundApprovedAt === null &&
+    o.refundDeclinedAt === null
   );
 }
