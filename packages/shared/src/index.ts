@@ -325,6 +325,21 @@ export const createOrderInput = z.object({
 
 export type CreateOrderInput = z.infer<typeof createOrderInput>;
 
+/** Input to `orders.requestRefund` (protected, caller must be the buyer). */
+export const requestRefundInput = z.object({
+  orderId: z.string().uuid(),
+  reason: z.string().trim().max(500).optional(),
+});
+
+export type RequestRefundInput = z.infer<typeof requestRefundInput>;
+
+/** Input to `orders.approveRefund` (protected, caller must own the store). */
+export const approveRefundInput = z.object({
+  orderId: z.string().uuid(),
+});
+
+export type ApproveRefundInput = z.infer<typeof approveRefundInput>;
+
 /** A fulfilled order item returned by `orders.get` / `orders.listMine`. */
 export const orderItemOutput = z.object({
   id: z.string().uuid(),
@@ -347,6 +362,12 @@ export const order = z.object({
   applicationFeeCents: z.number().int(),
   totalCents: z.number().int(),
   stripePaymentIntentId: z.string().nullable(),
+  /** ISO 8601 datetime or null — set when the buyer submits a refund request. */
+  refundRequestedAt: z.string().datetime().nullable(),
+  /** Free-text reason supplied by the buyer at request time, or null. */
+  refundReason: z.string().nullable(),
+  /** ISO 8601 datetime or null — set when the seller approves the refund. */
+  refundApprovedAt: z.string().datetime().nullable(),
   items: z.array(orderItemOutput),
   /** ISO 8601 datetime string. */
   createdAt: z.string().datetime(),

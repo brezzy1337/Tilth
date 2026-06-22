@@ -17,11 +17,13 @@ import { TRPCError } from "@trpc/server";
 import {
   createOrderInput,
   createOrderResponse,
+  requestRefundInput,
+  approveRefundInput,
   order as orderSchema,
   type Order,
   type OrderItemOutput,
 } from "@homegrown/shared";
-import { eq, inArray, desc } from "drizzle-orm";
+import { eq, inArray, desc, and } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
 import { orders, orderItems, listings, stores } from "../db/schema";
 
@@ -64,6 +66,9 @@ function mapOrder(
     applicationFeeCents: number;
     totalCents: number;
     stripePaymentIntentId: string | null;
+    refundRequestedAt: Date | null;
+    refundReason: string | null;
+    refundApprovedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   },
@@ -78,6 +83,9 @@ function mapOrder(
     applicationFeeCents: orderRow.applicationFeeCents,
     totalCents: orderRow.totalCents,
     stripePaymentIntentId: orderRow.stripePaymentIntentId ?? null,
+    refundRequestedAt: orderRow.refundRequestedAt?.toISOString() ?? null,
+    refundReason: orderRow.refundReason ?? null,
+    refundApprovedAt: orderRow.refundApprovedAt?.toISOString() ?? null,
     items: itemRows.map(mapOrderItem),
     createdAt: orderRow.createdAt.toISOString(),
     updatedAt: orderRow.updatedAt.toISOString(),
@@ -320,6 +328,9 @@ export const ordersRouter = router({
         applicationFeeCents,
         totalCents,
         stripePaymentIntentId: paymentIntentId,
+        refundRequestedAt: null,
+        refundReason: null,
+        refundApprovedAt: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -343,6 +354,9 @@ export const ordersRouter = router({
           applicationFeeCents: orders.applicationFeeCents,
           totalCents: orders.totalCents,
           stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
           createdAt: orders.createdAt,
           updatedAt: orders.updatedAt,
         })
@@ -396,6 +410,9 @@ export const ordersRouter = router({
           applicationFeeCents: orders.applicationFeeCents,
           totalCents: orders.totalCents,
           stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
           createdAt: orders.createdAt,
           updatedAt: orders.updatedAt,
           storeUserId: stores.userId,
@@ -430,5 +447,294 @@ export const ordersRouter = router({
         .where(eq(orderItems.orderId, foundOrder.id));
 
       return mapOrder(foundOrder, fetchedItems);
+    }),
+
+  /**
+   * Request a refund for an order (BUYER only).
+   *
+   * Asserts:
+   *   - Caller is the buyer (else NOT_FOUND to avoid leaking order existence).
+   *   - Status is 'paid' or 'fulfilled' (else BAD_REQUEST).
+   *   - No refund has been requested yet (else BAD_REQUEST).
+   *
+   * Sets refund_requested_at = now() and refund_reason = input.reason (nullable).
+   * Does NOT call Stripe — that happens in approveRefund.
+   */
+  requestRefund: protectedProcedure
+    .input(requestRefundInput)
+    .output(orderSchema)
+    .mutation(async ({ input, ctx }) => {
+      const [foundOrder] = await ctx.db
+        .select({
+          id: orders.id,
+          storeId: orders.storeId,
+          buyerId: orders.buyerId,
+          status: orders.status,
+          subtotalCents: orders.subtotalCents,
+          applicationFeeCents: orders.applicationFeeCents,
+          totalCents: orders.totalCents,
+          stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      // Surface as NOT_FOUND when not found or caller is not the buyer
+      if (!foundOrder || foundOrder.buyerId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+      }
+
+      if (foundOrder.status !== "paid" && foundOrder.status !== "fulfilled") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid or fulfilled orders can be refunded",
+        });
+      }
+
+      if (foundOrder.refundRequestedAt !== null) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Refund already requested",
+        });
+      }
+
+      const now = new Date();
+      await ctx.db
+        .update(orders)
+        .set({
+          refundRequestedAt: now,
+          refundReason: input.reason ?? null,
+          updatedAt: now,
+        })
+        .where(and(eq(orders.id, input.orderId), eq(orders.buyerId, ctx.user.id)));
+
+      // Re-fetch to return the authoritative post-update state
+      const [updatedOrder] = await ctx.db
+        .select({
+          id: orders.id,
+          storeId: orders.storeId,
+          buyerId: orders.buyerId,
+          status: orders.status,
+          subtotalCents: orders.subtotalCents,
+          applicationFeeCents: orders.applicationFeeCents,
+          totalCents: orders.totalCents,
+          stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      if (!updatedOrder) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to fetch updated order" });
+      }
+
+      const fetchedItems = await ctx.db
+        .select({
+          id: orderItems.id,
+          listingId: orderItems.listingId,
+          nameSnapshot: orderItems.nameSnapshot,
+          unitPriceCents: orderItems.unitPriceCents,
+          quantity: orderItems.quantity,
+          lineTotalCents: orderItems.lineTotalCents,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, updatedOrder.id));
+
+      return mapOrder(updatedOrder, fetchedItems);
+    }),
+
+  /**
+   * Approve a refund request (SELLER / store owner only).
+   *
+   * Asserts:
+   *   - Caller owns the store (else NOT_FOUND to avoid leaking order existence).
+   *   - A refund was requested (else BAD_REQUEST).
+   *   - Status is 'paid' or 'fulfilled' and stripePaymentIntentId is present.
+   *
+   * Calls Stripe refundPayment with a stable per-order idempotency key (full refund).
+   * Sets refund_approved_at = now(). Does NOT set status='refunded' — the
+   * charge.refunded webhook is the source of truth for that transition.
+   */
+  approveRefund: protectedProcedure
+    .input(approveRefundInput)
+    .output(orderSchema)
+    .mutation(async ({ input, ctx }) => {
+      const [foundOrder] = await ctx.db
+        .select({
+          id: orders.id,
+          storeId: orders.storeId,
+          buyerId: orders.buyerId,
+          status: orders.status,
+          subtotalCents: orders.subtotalCents,
+          applicationFeeCents: orders.applicationFeeCents,
+          totalCents: orders.totalCents,
+          stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+          storeUserId: stores.userId,
+        })
+        .from(orders)
+        .innerJoin(stores, eq(orders.storeId, stores.id))
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      // Surface as NOT_FOUND when not found or caller is not the store owner
+      if (!foundOrder || foundOrder.storeUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+      }
+
+      if (foundOrder.refundRequestedAt === null) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No refund requested for this order",
+        });
+      }
+
+      if (foundOrder.refundApprovedAt !== null) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Refund already approved" });
+      }
+
+      if (foundOrder.status !== "paid" && foundOrder.status !== "fulfilled") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid or fulfilled orders can be refunded",
+        });
+      }
+
+      if (!foundOrder.stripePaymentIntentId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Order has no payment intent; cannot refund",
+        });
+      }
+
+      // Full refund — omit amountCents. Stable per-order key makes a double-approve a Stripe no-op.
+      await ctx.stripe.refundPayment({
+        paymentIntentId: foundOrder.stripePaymentIntentId,
+        idempotencyKey: `refund-${foundOrder.id}`,
+      });
+
+      const now = new Date();
+      await ctx.db
+        .update(orders)
+        .set({
+          refundApprovedAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(orders.id, input.orderId), eq(orders.storeId, foundOrder.storeId)));
+
+      // Re-fetch to return the authoritative post-update state
+      const [updatedOrder] = await ctx.db
+        .select({
+          id: orders.id,
+          storeId: orders.storeId,
+          buyerId: orders.buyerId,
+          status: orders.status,
+          subtotalCents: orders.subtotalCents,
+          applicationFeeCents: orders.applicationFeeCents,
+          totalCents: orders.totalCents,
+          stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      if (!updatedOrder) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to fetch updated order" });
+      }
+
+      const fetchedItems = await ctx.db
+        .select({
+          id: orderItems.id,
+          listingId: orderItems.listingId,
+          nameSnapshot: orderItems.nameSnapshot,
+          unitPriceCents: orderItems.unitPriceCents,
+          quantity: orderItems.quantity,
+          lineTotalCents: orderItems.lineTotalCents,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, updatedOrder.id));
+
+      return mapOrder(updatedOrder, fetchedItems);
+    }),
+
+  /**
+   * List all orders for the caller's store (SELLER only), newest first.
+   * Returns an empty array if the caller has no store.
+   */
+  listForMyStore: protectedProcedure
+    .output(orderSchema.array())
+    .query(async ({ ctx }) => {
+      // Resolve the caller's store
+      const [myStore] = await ctx.db
+        .select({ id: stores.id })
+        .from(stores)
+        .where(eq(stores.userId, ctx.user.id))
+        .limit(1);
+
+      if (!myStore) return [];
+
+      const storeOrders = await ctx.db
+        .select({
+          id: orders.id,
+          storeId: orders.storeId,
+          buyerId: orders.buyerId,
+          status: orders.status,
+          subtotalCents: orders.subtotalCents,
+          applicationFeeCents: orders.applicationFeeCents,
+          totalCents: orders.totalCents,
+          stripePaymentIntentId: orders.stripePaymentIntentId,
+          refundRequestedAt: orders.refundRequestedAt,
+          refundReason: orders.refundReason,
+          refundApprovedAt: orders.refundApprovedAt,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+        })
+        .from(orders)
+        .where(eq(orders.storeId, myStore.id))
+        .orderBy(desc(orders.createdAt));
+
+      if (storeOrders.length === 0) return [];
+
+      const orderIds = storeOrders.map((o) => o.id);
+      const allItems = await ctx.db
+        .select({
+          id: orderItems.id,
+          orderId: orderItems.orderId,
+          listingId: orderItems.listingId,
+          nameSnapshot: orderItems.nameSnapshot,
+          unitPriceCents: orderItems.unitPriceCents,
+          quantity: orderItems.quantity,
+          lineTotalCents: orderItems.lineTotalCents,
+        })
+        .from(orderItems)
+        .where(inArray(orderItems.orderId, orderIds));
+
+      const itemsByOrder = new Map<string, typeof allItems>();
+      for (const item of allItems) {
+        const list = itemsByOrder.get(item.orderId) ?? [];
+        list.push(item);
+        itemsByOrder.set(item.orderId, list);
+      }
+
+      return storeOrders.map((o) => mapOrder(o, itemsByOrder.get(o.id) ?? []));
     }),
 });

@@ -18,6 +18,7 @@
 import React from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   SafeAreaView,
@@ -29,6 +30,7 @@ import {
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { OrderStatus } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { useAuth } from "../auth/AuthContext";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
 import { capitalise } from "../utils/text";
@@ -68,6 +70,8 @@ function StatusBanner({ status }: { status: OrderStatus }) {
 
 export function OrderDetailScreen({ route }: Props) {
   const { orderId } = route.params;
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
 
   const { data: order, isLoading, error, refetch } = trpc.orders.get.useQuery(
     { id: orderId },
@@ -79,6 +83,32 @@ export function OrderDetailScreen({ route }: Props) {
       },
     },
   );
+
+  const requestRefund = trpc.orders.requestRefund.useMutation({
+    onSuccess: () => {
+      void utils.orders.get.invalidate({ id: orderId });
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message ?? "Could not submit refund request. Please try again.");
+    },
+  });
+
+  function handleRequestRefund() {
+    Alert.alert(
+      "Request a refund",
+      "Request a refund for this order?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Request refund",
+          style: "destructive",
+          onPress: () => {
+            requestRefund.mutate({ orderId });
+          },
+        },
+      ],
+    );
+  }
 
   if (isLoading) {
     return (
@@ -156,6 +186,35 @@ export function OrderDetailScreen({ route }: Props) {
             <Text style={styles.summaryTotalValue}>${formatCents(order.totalCents)}</Text>
           </View>
         </View>
+
+        {/* Refund section — buyer only */}
+        {user && order.buyerId === user.id && (
+          <>
+            {order.refundApprovedAt ? (
+              <View style={styles.refundBadge}>
+                <Text style={styles.refundApprovedText}>Refund approved</Text>
+              </View>
+            ) : order.refundRequestedAt ? (
+              <View style={styles.refundBadge}>
+                <Text style={styles.refundRequestedText}>Refund requested</Text>
+              </View>
+            ) : (order.status === "paid" || order.status === "fulfilled") ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.refundButton,
+                  pressed && styles.refundButtonPressed,
+                  requestRefund.isPending && styles.refundButtonDisabled,
+                ]}
+                onPress={handleRequestRefund}
+                disabled={requestRefund.isPending}
+              >
+                <Text style={styles.refundButtonText}>
+                  {requestRefund.isPending ? "Requesting…" : "Request refund"}
+                </Text>
+              </Pressable>
+            ) : null}
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -306,6 +365,45 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   retryText: {
+    color: "#2d6a4f",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  // Refund affordance
+  refundButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e65100",
+    alignItems: "center",
+  },
+  refundButtonPressed: {
+    backgroundColor: "#fff3e0",
+  },
+  refundButtonDisabled: {
+    opacity: 0.5,
+  },
+  refundButtonText: {
+    color: "#e65100",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  refundBadge: {
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: "#fff3e0",
+    alignItems: "center",
+  },
+  refundRequestedText: {
+    color: "#e65100",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  refundApprovedText: {
     color: "#2d6a4f",
     fontSize: 14,
     fontWeight: "600",

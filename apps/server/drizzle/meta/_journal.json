@@ -43,6 +43,13 @@
       "when": 1782148407012,
       "tag": "0005_peaceful_sunfire",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782156401027,
+      "tag": "0006_supreme_black_knight",
+      "breakpoints": true
     }
   ]
 }

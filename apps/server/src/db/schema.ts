@@ -196,6 +196,12 @@ export const orders = pgTable(
     /** Running total of refunded cents. Accumulates on partial refunds; order
      *  flips to "refunded" only when refundedCents reaches totalCents. */
     refundedCents: integer("refunded_cents").notNull().default(0),
+    /** Set when the buyer submits a refund request; null until requested. */
+    refundRequestedAt: timestamp("refund_requested_at", { withTimezone: true }),
+    /** Free-text reason supplied by the buyer at refund-request time; null if not provided. */
+    refundReason: text("refund_reason"),
+    /** Set when the seller approves the refund; null until approved. */
+    refundApprovedAt: timestamp("refund_approved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

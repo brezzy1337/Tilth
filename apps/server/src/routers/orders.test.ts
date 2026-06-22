@@ -760,3 +760,474 @@ describe("connect.status", () => {
     expect(result.detailsSubmitted).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helpers for refund procedure tests
+// ---------------------------------------------------------------------------
+
+const UUID_SELLER = "aa00bc99-9c0b-4ef8-bb6d-6bb9bd380aaa";
+const UUID_ORDER_PAID = "bb00bc99-9c0b-4ef8-bb6d-6bb9bd380abb";
+
+/**
+ * A base order row matching the mapOrder shape.
+ * All refund fields start null; tests override specific fields.
+ */
+function makeOrderRow(overrides: Partial<{
+  id: string;
+  storeId: string;
+  buyerId: string;
+  status: string;
+  stripePaymentIntentId: string | null;
+  refundRequestedAt: Date | null;
+  refundReason: string | null;
+  refundApprovedAt: Date | null;
+  storeUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}> = {}) {
+  return {
+    id: UUID_ORDER_PAID,
+    storeId: UUID_STORE,
+    buyerId: UUID_BUYER,
+    status: "paid",
+    subtotalCents: 500,
+    applicationFeeCents: 50,
+    totalCents: 500,
+    stripePaymentIntentId: STRIPE_PI_ID,
+    refundRequestedAt: null,
+    refundReason: null,
+    refundApprovedAt: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+    storeUserId: UUID_SELLER,
+    ...overrides,
+  };
+}
+
+/**
+ * Build a fake DB for refund procedure tests.
+ *
+ * `selectSequence` — ordered list of row arrays to return per select() call.
+ *   Plain selects AND innerJoin selects each consume one slot.
+ * `captureUpdates` — each update().set() payload is pushed here.
+ */
+function makeRefundDb(opts: {
+  selectSequence: unknown[][];
+  captureUpdates?: unknown[];
+}) {
+  let selectIdx = 0;
+
+  const updates: unknown[] = opts.captureUpdates ?? [];
+
+  const selectFn = () => {
+    const slotIdx = selectIdx++;
+    const rows = opts.selectSequence[slotIdx] ?? [];
+
+    const b: {
+      from: () => typeof b;
+      where: () => typeof b;
+      limit: () => Promise<unknown[]>;
+      orderBy: () => typeof b;
+      then: (resolve: (v: unknown[]) => void) => void;
+      innerJoin: (table: unknown, cond: unknown) => { where: () => { limit: () => Promise<unknown[]> } };
+    } = {
+      from: () => b,
+      where: () => b,
+      limit: () => Promise.resolve(rows),
+      orderBy: () => b,
+      innerJoin: (_table: unknown, _cond: unknown) => {
+        // innerJoin uses the same slot already consumed by this select() call
+        return {
+          where: () => ({ limit: () => Promise.resolve(rows) }),
+        };
+      },
+      then: (resolve: (v: unknown[]) => void) => Promise.resolve(rows).then(resolve),
+    };
+    return b;
+  };
+
+  const updateBuilder = {
+    set: (s: unknown) => {
+      updates.push(s);
+      return updateBuilder;
+    },
+    where: () => updateBuilder,
+    returning: () => Promise.resolve([]),
+  };
+
+  return {
+    select: selectFn,
+    update: () => updateBuilder,
+    insert: () => ({ values: () => ({ returning: () => Promise.resolve([]) }) }),
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ insert: () => ({ values: () => ({ returning: () => Promise.resolve([]) }) }) }),
+  } as unknown as Context["db"];
+}
+
+function makeRefundCtx(db: Context["db"], userId: string, stripeOverrides: Partial<Context["stripe"]> = {}): Context {
+  return {
+    db,
+    jwtSecret: TEST_SECRET,
+    auth: stubAuth,
+    geocode: async () => null,
+    stripe: makeStripeStub(stripeOverrides),
+    user: { id: userId },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// orders.requestRefund
+// ---------------------------------------------------------------------------
+
+describe("orders.requestRefund", () => {
+  it("sets refundRequestedAt when buyer requests on a paid order", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid" });
+    // sequence: [initial load], [re-fetch after update], [order items]
+    const db = makeRefundDb({
+      selectSequence: [
+        [orderRow],         // initial load (no join for requestRefund)
+        [{ ...orderRow, refundRequestedAt: new Date("2026-06-22T10:00:00Z"), refundReason: "damaged" }], // re-fetch
+        [],                  // order items
+      ],
+      captureUpdates: updates,
+    });
+
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.requestRefund({
+      orderId: UUID_ORDER_PAID,
+      reason: "damaged",
+    });
+
+    // The update must have set refundRequestedAt (a Date) and refundReason
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.refundRequestedAt).toBeInstanceOf(Date);
+    expect(updatePayload.refundReason).toBe("damaged");
+
+    // Status must NOT be changed
+    expect(updatePayload).not.toHaveProperty("status");
+
+    // Return value should reflect the updated state
+    expect(result.refundRequestedAt).toBe("2026-06-22T10:00:00.000Z");
+    expect(result.refundReason).toBe("damaged");
+  });
+
+  it("sets refundRequestedAt on a fulfilled order", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "fulfilled" });
+    const db = makeRefundDb({
+      selectSequence: [
+        [orderRow],
+        [{ ...orderRow, refundRequestedAt: new Date("2026-06-22T10:00:00Z") }],
+        [],
+      ],
+      captureUpdates: updates,
+    });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await caller.orders.requestRefund({ orderId: UUID_ORDER_PAID });
+
+    expect(updates).toHaveLength(1);
+    const payload = updates[0] as Record<string, unknown>;
+    expect(payload.refundRequestedAt).toBeInstanceOf(Date);
+  });
+
+  it("returns NOT_FOUND when the caller is not the buyer", async () => {
+    const orderRow = makeOrderRow({ buyerId: UUID_BUYER }); // buyer is UUID_BUYER, caller is UUID_SELLER
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_SELLER); // wrong user
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  });
+
+  it("returns NOT_FOUND when order does not exist", async () => {
+    const db = makeRefundDb({ selectSequence: [[]] }); // no rows
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  });
+
+  it("rejects with BAD_REQUEST when order is pending_payment", async () => {
+    const orderRow = makeOrderRow({ status: "pending_payment" });
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  it("rejects with BAD_REQUEST when order is cancelled", async () => {
+    const orderRow = makeOrderRow({ status: "cancelled" });
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  it("rejects with BAD_REQUEST when order is already refunded", async () => {
+    const orderRow = makeOrderRow({ status: "refunded" });
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  it("rejects with BAD_REQUEST when order is disputed", async () => {
+    const orderRow = makeOrderRow({ status: "disputed" });
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  it("rejects with BAD_REQUEST on a double-request (refundRequestedAt already set)", async () => {
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+    });
+    const db = makeRefundDb({ selectSequence: [[orderRow]] });
+    const ctx = makeRefundCtx(db, UUID_BUYER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("already requested") }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// orders.approveRefund
+// ---------------------------------------------------------------------------
+
+describe("orders.approveRefund", () => {
+  it("calls refundPayment with stable idempotencyKey and sets refundApprovedAt — does NOT change status", async () => {
+    const refundPayment = vi.fn().mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
+    const updates: unknown[] = [];
+
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+
+    // selectSequence for approveRefund:
+    // slot 0 — consumed by select() + innerJoin (same slot, reused within the builder)
+    // slot 1 — re-fetch after update (plain select, no join)
+    // slot 2 — order items
+    const db = makeRefundDb({
+      selectSequence: [
+        [orderRow],  // slot 0 — for initial innerJoin load
+        [{ ...orderRow, refundApprovedAt: new Date("2026-06-22T12:00:00Z") }], // re-fetch
+        [],           // order items
+      ],
+      captureUpdates: updates,
+    });
+
+    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.approveRefund({ orderId: UUID_ORDER_PAID });
+
+    // Stripe refundPayment must be called with the stable key (no amountCents = full refund)
+    expect(refundPayment).toHaveBeenCalledOnce();
+    const refundCall = refundPayment.mock.calls[0]![0] as { paymentIntentId: string; idempotencyKey: string; amountCents?: number };
+    expect(refundCall.paymentIntentId).toBe(STRIPE_PI_ID);
+    expect(refundCall.idempotencyKey).toBe(`refund-${UUID_ORDER_PAID}`);
+    expect(refundCall.amountCents).toBeUndefined();
+
+    // The DB update must set refundApprovedAt but NOT status
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.refundApprovedAt).toBeInstanceOf(Date);
+    expect(updatePayload).not.toHaveProperty("status");
+
+    // Return value must reflect the approved state
+    expect(result.refundApprovedAt).toBe("2026-06-22T12:00:00.000Z");
+    // Status remains 'paid' — webhook transition is the source of truth
+    expect(result.status).toBe("paid");
+  });
+
+  it("returns NOT_FOUND when caller is not the store owner", async () => {
+    const orderRow = makeOrderRow({ storeUserId: UUID_SELLER });
+    const db = makeRefundDb({
+      selectSequence: [[orderRow]],
+    });
+    const ctx = makeRefundCtx(db, UUID_BUYER); // buyer, not seller
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  });
+
+  it("rejects with BAD_REQUEST when no refund was requested", async () => {
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: null, // not yet requested
+      storeUserId: UUID_SELLER,
+    });
+    const db = makeRefundDb({
+      selectSequence: [[orderRow]],
+    });
+    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("No refund requested") }));
+  });
+
+  it("rejects with PRECONDITION_FAILED when stripePaymentIntentId is missing", async () => {
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      stripePaymentIntentId: null,
+      storeUserId: UUID_SELLER,
+    });
+    const db = makeRefundDb({
+      selectSequence: [[orderRow]],
+    });
+    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
+  });
+
+  it("rejects with BAD_REQUEST on double-approve (refundApprovedAt already set) and does NOT call refundPayment a second time", async () => {
+    const refundPayment = vi.fn().mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
+
+    // Order already has refundApprovedAt set (already approved once)
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      refundApprovedAt: new Date("2026-06-21T08:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+
+    const db = makeRefundDb({
+      selectSequence: [[orderRow]],
+    });
+
+    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already approved") }),
+    );
+
+    // Stripe must NOT have been called — the guard fires before the Stripe call
+    expect(refundPayment).not.toHaveBeenCalled();
+  });
+
+  it("rejects with BAD_REQUEST when order is in a non-refundable status (e.g. cancelled)", async () => {
+    const refundPayment = vi.fn();
+
+    const orderRow = makeOrderRow({
+      status: "cancelled",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      refundApprovedAt: null,
+      storeUserId: UUID_SELLER,
+    });
+
+    const db = makeRefundDb({
+      selectSequence: [[orderRow]],
+    });
+
+    const ctx = makeRefundCtx(db, UUID_SELLER, { refundPayment });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+
+    // Stripe must not be called for a non-refundable-status order
+    expect(refundPayment).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// orders.listForMyStore
+// ---------------------------------------------------------------------------
+
+describe("orders.listForMyStore", () => {
+  it("returns [] when the caller has no store", async () => {
+    // selectSequence: store lookup returns empty
+    const db = makeRefundDb({ selectSequence: [[]] });
+    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.listForMyStore();
+    expect(result).toEqual([]);
+  });
+
+  it("returns [] when the store has no orders", async () => {
+    const db = makeRefundDb({
+      selectSequence: [
+        [{ id: UUID_STORE }],  // store lookup
+        [],                     // orders for store (empty)
+      ],
+    });
+    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.listForMyStore();
+    expect(result).toEqual([]);
+  });
+
+  it("returns only the caller's store's orders in newest-first order", async () => {
+    const orderRow1 = makeOrderRow({
+      id: "cc00bc99-9c0b-4ef8-bb6d-6bb9bd380acc",
+      createdAt: new Date("2026-06-22T12:00:00Z"),
+      updatedAt: new Date("2026-06-22T12:00:00Z"),
+    });
+    const orderRow2 = makeOrderRow({
+      id: "dd00bc99-9c0b-4ef8-bb6d-6bb9bd380add",
+      createdAt: new Date("2026-06-21T10:00:00Z"),
+      updatedAt: new Date("2026-06-21T10:00:00Z"),
+    });
+
+    const db = makeRefundDb({
+      selectSequence: [
+        [{ id: UUID_STORE }],         // store lookup
+        [orderRow1, orderRow2],        // store orders (already newest-first from DB)
+        [],                             // order items for both
+      ],
+    });
+    const ctx = makeRefundCtx(db, UUID_SELLER);
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.listForMyStore();
+    expect(result).toHaveLength(2);
+    // First result is the newer order
+    expect(result[0]!.id).toBe("cc00bc99-9c0b-4ef8-bb6d-6bb9bd380acc");
+    expect(result[1]!.id).toBe("dd00bc99-9c0b-4ef8-bb6d-6bb9bd380add");
+    // All three refund fields present and null
+    expect(result[0]!.refundRequestedAt).toBeNull();
+    expect(result[0]!.refundReason).toBeNull();
+    expect(result[0]!.refundApprovedAt).toBeNull();
+  });
+});
