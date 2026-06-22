@@ -291,7 +291,8 @@ export type NearbyListing = z.infer<typeof nearbyListing>;
 
 /**
  * Order status progression.
- * pending_payment → paid (via webhook) → fulfilled → cancelled / refunded.
+ * pending_payment → paid (via webhook) → fulfilled → cancelled / refunded / disputed.
+ * disputed is set when a buyer files a chargeback (charge.dispute.created webhook).
  */
 export const orderStatus = z.enum([
   "pending_payment",
@@ -299,6 +300,7 @@ export const orderStatus = z.enum([
   "fulfilled",
   "cancelled",
   "refunded",
+  "disputed",
 ]);
 
 export type OrderStatus = z.infer<typeof orderStatus>;
