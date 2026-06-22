@@ -50,6 +50,7 @@ const STATUS_CONFIG: Record<
   fulfilled:       { label: "Fulfilled",  bg: "#e0f2f1", text: "#00695c" },
   cancelled:       { label: "Cancelled",  bg: "#fce4ec", text: "#b71c1c" },
   refunded:        { label: "Refunded",   bg: "#f3e5f5", text: "#6a1b9a" },
+  disputed:        { label: "Disputed",   bg: "#fff3e0", text: "#e65100" },
 };
 
 // ---------------------------------------------------------------------------

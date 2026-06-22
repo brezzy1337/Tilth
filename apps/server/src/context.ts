@@ -96,6 +96,29 @@ export interface StripeClient {
    * by the webhook (e.g. when the connected-account webhook was not yet wired).
    */
   retrievePaymentIntent(id: string): Promise<{ status: string }>;
+  /**
+   * Cancel a PaymentIntent.
+   * Used by the abandoned-PI sweeper in the reconciliation poller.
+   * Returns the new status (should be "canceled" after a successful cancel call).
+   */
+  cancelPaymentIntent(id: string): Promise<{ status: string }>;
+  /**
+   * Issue a refund for a destination-charge PaymentIntent.
+   *
+   * Uses `reverse_transfer: true` and `refund_application_fee: true` to claw
+   * back the seller's transfer and return the platform fee — the correct shape
+   * for platform-as-merchant-of-record destination charges.
+   *
+   * `amountCents` is optional; omit for a full refund.
+   * `idempotencyKey` prevents duplicate refunds on client retries.
+   *
+   * TODO(PR3): wire caller + amount_owed accounting on reverse-transfer shortfall.
+   */
+  refundPayment(input: {
+    paymentIntentId: string;
+    amountCents?: number;
+    idempotencyKey: string;
+  }): Promise<{ id: string; status: string; amountRefunded: number }>;
 }
 
 /** The database type — Drizzle + our schema. */

@@ -59,6 +59,8 @@ function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["st
       clientSecret: "pi_test_abc123_secret_xyz",
     }),
     retrievePaymentIntent: async () => ({ status: "succeeded" }),
+    cancelPaymentIntent: async () => ({ status: "canceled" }),
+    refundPayment: async () => ({ id: "re_stub", status: "succeeded", amountRefunded: 0 }),
     ...overrides,
   };
 }
@@ -153,53 +155,136 @@ const createCaller = createCallerFactory(appRouter);
 // handleStripeEvent — webhook unit tests
 // ---------------------------------------------------------------------------
 
+/**
+ * Build a minimal fake DB for webhook tests that supports the transaction wrapper.
+ * The transaction callback receives a `tx` with insert (claim + dedup), update, select.
+ *
+ * `claimResult` controls whether the dedup claim returns a row (new event) or empty (dupe).
+ * `onTxUpdate` captures the `set` payload from any tx.update().set() call.
+ */
+function fakeWebhookDb(opts: {
+  claimResult?: { id: string }[];
+  onTxUpdate?: (set: unknown) => void;
+  txUpdateRows?: unknown[];
+}): Context["db"] {
+  const claimRows = opts.claimResult ?? [{ id: "evt_test" }]; // default: claim succeeds
+
+  const txInsertBuilder = {
+    values: () => txInsertBuilder,
+    onConflictDoNothing: () => txInsertBuilder,
+    returning: () => Promise.resolve(claimRows),
+  };
+
+  const txUpdateBuilder = {
+    set: (s: unknown) => {
+      opts.onTxUpdate?.(s);
+      return txUpdateBuilder;
+    },
+    where: () => txUpdateBuilder,
+    returning: () => Promise.resolve(opts.txUpdateRows ?? []),
+  };
+
+  const tx = {
+    insert: () => txInsertBuilder,
+    update: () => txUpdateBuilder,
+    select: () => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }),
+  };
+
+  const db = {
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
+    update: () => txUpdateBuilder,
+    insert: () => txInsertBuilder,
+  } as unknown as Context["db"];
+
+  return db;
+}
+
+const stubStripeForWebhook = makeStripeStub();
+
 describe("handleStripeEvent — payment_intent.succeeded", () => {
   it("transitions pending_payment order to paid", async () => {
     const updates: unknown[] = [];
-    const db = fakeDb({
-      updateRows: [{ id: UUID_ORDER, status: "paid" }],
-      updateFn: (set) => updates.push(set),
-    });
+    const db = fakeWebhookDb({ onTxUpdate: (s) => updates.push(s) });
 
     const event = {
+      id: "evt_pi_succeeded_1",
       type: "payment_intent.succeeded",
       data: {
         object: { id: STRIPE_PI_ID } as Stripe.PaymentIntent,
       },
     } as Stripe.Event;
 
-    await handleStripeEvent(event, db);
+    await handleStripeEvent(event, { db, stripe: stubStripeForWebhook });
     // Just verify no error is thrown — the update would succeed via fake db
     expect(true).toBe(true);
   });
 
   it("is idempotent — re-delivery of succeeded event does not throw", async () => {
-    // DB stub returns no rows (already paid — nothing to update)
-    const db = fakeDb({ updateRows: [] });
+    // Simulate a duplicate: claim returns empty (already processed)
+    const db = fakeWebhookDb({ claimResult: [] });
 
     const event = {
+      id: "evt_pi_succeeded_dup",
       type: "payment_intent.succeeded",
       data: { object: { id: STRIPE_PI_ID } as Stripe.PaymentIntent },
     } as Stripe.Event;
 
-    // Should not throw even when 0 rows updated
-    await expect(handleStripeEvent(event, db)).resolves.toBeUndefined();
+    // Should not throw even when 0 rows updated (dedup short-circuit)
+    await expect(handleStripeEvent(event, { db, stripe: stubStripeForWebhook })).resolves.toBeUndefined();
   });
 });
 
 describe("handleStripeEvent — account.updated", () => {
-  it("syncs chargesEnabled/payoutsEnabled/detailsSubmitted to the store", async () => {
+  it("calls retrieveAccountStatus and writes authoritative flags to store", async () => {
     const captured: unknown[] = [];
-    const updateBuilder = {
-      set: (s: unknown) => { captured.push(s); return updateBuilder; },
-      where: () => updateBuilder,
-      returning: () => Promise.resolve([]),
-    };
-    const db = {
-      update: () => updateBuilder,
-    } as unknown as Context["db"];
+    const db = fakeWebhookDb({ onTxUpdate: (s) => captured.push(s) });
+
+    const retrieveAccountStatus = vi.fn().mockResolvedValue({
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: true,
+    });
 
     const event = {
+      id: "evt_acct_updated_1",
+      type: "account.updated",
+      data: {
+        object: {
+          id: STRIPE_ACCOUNT_ID,
+          charges_enabled: false, // payload says false — but we ignore the payload
+          payouts_enabled: false,
+          details_submitted: false,
+        } as Stripe.Account,
+      },
+    } as Stripe.Event;
+
+    await handleStripeEvent(event, { db, stripe: { ...stubStripeForWebhook, retrieveAccountStatus } });
+
+    // retrieveAccountStatus should have been called with the account id
+    expect(retrieveAccountStatus).toHaveBeenCalledWith(STRIPE_ACCOUNT_ID);
+    // The authoritative values (from retrieveAccountStatus, not the payload) should be written
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: true,
+    });
+  });
+
+  it("writes false flags from retrieveAccountStatus (not from payload)", async () => {
+    const captured: unknown[] = [];
+    const db = fakeWebhookDb({ onTxUpdate: (s) => captured.push(s) });
+
+    const retrieveAccountStatus = vi.fn().mockResolvedValue({
+      chargesEnabled: false,
+      payoutsEnabled: false,
+      detailsSubmitted: false,
+    });
+
+    const event = {
+      id: "evt_acct_updated_2",
       type: "account.updated",
       data: {
         object: {
@@ -211,38 +296,7 @@ describe("handleStripeEvent — account.updated", () => {
       },
     } as Stripe.Event;
 
-    await handleStripeEvent(event, db);
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({
-      chargesEnabled: true,
-      payoutsEnabled: true,
-      detailsSubmitted: true,
-    });
-  });
-
-  it("defaults missing boolean fields to false", async () => {
-    const captured: unknown[] = [];
-    const updateBuilder = {
-      set: (s: unknown) => { captured.push(s); return updateBuilder; },
-      where: () => updateBuilder,
-      returning: () => Promise.resolve([]),
-    };
-    const db = { update: () => updateBuilder } as unknown as Context["db"];
-
-    const event = {
-      type: "account.updated",
-      data: {
-        object: {
-          id: STRIPE_ACCOUNT_ID,
-          charges_enabled: undefined,
-          payouts_enabled: undefined,
-          details_submitted: undefined,
-        } as unknown as Stripe.Account,
-      },
-    } as Stripe.Event;
-
-    await handleStripeEvent(event, db);
+    await handleStripeEvent(event, { db, stripe: { ...stubStripeForWebhook, retrieveAccountStatus } });
     expect(captured[0]).toMatchObject({
       chargesEnabled: false,
       payoutsEnabled: false,
@@ -253,13 +307,14 @@ describe("handleStripeEvent — account.updated", () => {
 
 describe("handleStripeEvent — unknown event type", () => {
   it("ignores unknown event types without throwing", async () => {
-    const db = fakeDb({});
+    const db = fakeWebhookDb({});
     const event = {
+      id: "evt_customer_created",
       type: "customer.created",
       data: { object: {} },
     } as unknown as Stripe.Event;
 
-    await expect(handleStripeEvent(event, db)).resolves.toBeUndefined();
+    await expect(handleStripeEvent(event, { db, stripe: stubStripeForWebhook })).resolves.toBeUndefined();
   });
 });
 

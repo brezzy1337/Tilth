@@ -118,6 +118,29 @@ export function createStripeClient(
       return { status: pi.status };
     },
 
+    async cancelPaymentIntent(id) {
+      const pi = await stripe.paymentIntents.cancel(id);
+      return { status: pi.status };
+    },
+
+    async refundPayment(input) {
+      // reverse_transfer: true — claws back the destination transfer to the seller.
+      // refund_application_fee: true — returns the platform fee to the buyer.
+      // Together these are the correct platform-protection refund shape for
+      // destination charges where the platform is the merchant of record.
+      // TODO(PR3): wire caller + amount_owed accounting on reverse-transfer shortfall.
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: input.paymentIntentId,
+          ...(input.amountCents !== undefined ? { amount: input.amountCents } : {}),
+          reverse_transfer: true,
+          refund_application_fee: true,
+        },
+        { idempotencyKey: input.idempotencyKey },
+      );
+      return { id: refund.id, status: refund.status ?? "unknown", amountRefunded: refund.amount };
+    },
+
     constructWebhookEvent(rawBody, signature, webhookSecret) {
       return stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
     },

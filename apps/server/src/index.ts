@@ -49,6 +49,7 @@ const server = createServer(
       handle: handleStripeWebhookRequest,
       opts: {
         db,
+        stripe,
         // Two Stripe webhook destinations → two signing secrets.
         // STRIPE_WEBHOOK_SECRET      = "Your account" (platform) destination — payment_intent.* events
         // STRIPE_WEBHOOK_SECRET_CONNECT = "Connected accounts" destination — account.updated events
