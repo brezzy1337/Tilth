@@ -148,7 +148,13 @@ async function loadOrderById(db: Db, orderId: string): Promise<Order> {
     .limit(1);
 
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+    // loadOrderById is only called immediately after a successful, ownership-checked
+    // mutation, so a missing row here is a server-side integrity failure (the row was
+    // just updated), not a client "not found". Surface 500, matching pre-refactor behavior.
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to load order after update",
+    });
   }
 
   const fetchedItems = await db
