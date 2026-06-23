@@ -63,23 +63,21 @@ describe("geocodeAddress", () => {
     expect(result?.lng).toBe(-89.2);
   });
 
-  it("encodes the address and passes the key as a header (not in the URL)", async () => {
+  it("encodes the address and passes the key as the `key` query parameter", async () => {
     const fetchSpy = mockFetch(googleOkResponse(40.1, -89.2));
     vi.stubGlobal("fetch", fetchSpy);
 
     await geocodeAddress(INPUT, FAKE_API_KEY);
 
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("maps.googleapis.com/maps/api/geocode/json");
-    // Key must NOT appear in the URL query string
-    expect(url).not.toContain("key=");
     // Address must be URL-encoded and present
     expect(url).toContain("address=");
     expect(url).toContain("Springfield");
-    // Key must be sent as a request header instead
-    const headers = init?.headers as Record<string, string>;
-    expect(headers?.["X-Goog-Api-Key"]).toBe(FAKE_API_KEY);
+    // Key MUST be the `key` query parameter — the legacy Geocoding REST API does
+    // not honour the X-Goog-Api-Key header, so a header-only request fails.
+    expect(url).toContain(`key=${encodeURIComponent(FAKE_API_KEY)}`);
   });
 
   it("returns null on ZERO_RESULTS", async () => {
