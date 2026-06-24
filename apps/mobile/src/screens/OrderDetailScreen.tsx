@@ -151,6 +151,21 @@ export function OrderDetailScreen({ route }: Props) {
           })}
         </Text>
 
+        {/* Fulfillment */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Fulfillment</Text>
+          {order.fulfillmentMethod === "delivery" ? (
+            <View style={styles.fulfillmentRow}>
+              <Text style={styles.fulfillmentLabel}>Delivery</Text>
+              {order.deliveryAddress ? (
+                <Text style={styles.fulfillmentAddress}>{order.deliveryAddress}</Text>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={styles.fulfillmentLabel}>Pickup at seller&apos;s stand</Text>
+          )}
+        </View>
+
         {/* Line items */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Items</Text>
@@ -403,5 +418,17 @@ const styles = StyleSheet.create({
   refundBadgeWrapper: {
     marginTop: 16,
     alignItems: "flex-start",
+  },
+  fulfillmentRow: {
+    gap: 4,
+  },
+  fulfillmentLabel: {
+    fontSize: 14,
+    color: "#1a1a1a",
+    fontWeight: "500",
+  },
+  fulfillmentAddress: {
+    fontSize: 13,
+    color: "#666",
   },
 });
