@@ -464,3 +464,7 @@ export const connectStatus = z.object({
 });
 
 export type ConnectStatus = z.infer<typeof connectStatus>;
+
+/** Response from `connect.dashboardLink` — a one-time Stripe Express Dashboard URL. */
+export const connectDashboardLinkResponse = z.object({ url: z.string().url() });
+export type ConnectDashboardLinkResponse = z.infer<typeof connectDashboardLinkResponse>;

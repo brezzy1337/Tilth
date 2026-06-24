@@ -16,6 +16,7 @@ import { TRPCError } from "@trpc/server";
 import {
   connectOnboardingInput,
   connectOnboardingResponse,
+  connectDashboardLinkResponse,
   connectStatus,
 } from "@homegrown/shared";
 import { eq } from "drizzle-orm";
@@ -96,4 +97,46 @@ export const connectRouter = router({
       detailsSubmitted: store.detailsSubmitted,
     };
   }),
+
+  /**
+   * Generate a one-time Stripe Express Dashboard login link.
+   *
+   * The Stripe Express Dashboard shows the seller their balance and payout
+   * history without requiring HomeGrown to build that UI.
+   *
+   * Requires that the seller has completed onboarding (`detailsSubmitted=true`).
+   * `accounts.createLoginLink` will reject for non-onboarded accounts — we
+   * guard explicitly so we surface a clean PRECONDITION_FAILED instead of an
+   * opaque Stripe error.
+   *
+   * This is a mutation because it creates a one-time link (not cacheable).
+   */
+  dashboardLink: protectedProcedure
+    .output(connectDashboardLinkResponse)
+    .mutation(async ({ ctx }) => {
+      const store = await resolveCallerStoreWithConnect(ctx.db, ctx.user.id);
+
+      if (!store.stripeConnectAccountId || !store.detailsSubmitted) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Complete Stripe onboarding before viewing earnings.",
+        });
+      }
+
+      let link: { url: string };
+      try {
+        link = await ctx.stripe.createDashboardLink(store.stripeConnectAccountId);
+      } catch (err) {
+        console.error(
+          "[connect.dashboardLink] login link creation failed",
+          err instanceof Error ? err.message : String(err),
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to generate dashboard link. Please try again.",
+        });
+      }
+
+      return { url: link.url };
+    }),
 });

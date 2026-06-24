@@ -25,6 +25,7 @@
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -203,6 +204,15 @@ function PaymentsSection() {
     },
   });
 
+  const dashboardLinkMutation = trpc.connect.dashboardLink.useMutation({
+    onSuccess: async (data) => {
+      await WebBrowser.openBrowserAsync(data.url);
+    },
+    onError: (err) => {
+      Alert.alert("Could not open dashboard", err.message ?? "Please try again.");
+    },
+  });
+
   function handleSetupPress() {
     setBrowserError(null);
     onboardingMutation.mutate({});
@@ -236,11 +246,29 @@ function PaymentsSection() {
 
       {/* State: Ready — charges enabled */}
       {status?.chargesEnabled ? (
-        <View style={styles.successCard}>
-          <Text style={styles.successText}>
-            Payments active — you can accept orders.
-            {status.payoutsEnabled ? " Payouts are also enabled." : ""}
-          </Text>
+        <View>
+          <View style={styles.successCard}>
+            <Text style={styles.successText}>
+              Payments active — you can accept orders.
+              {status.payoutsEnabled ? " Payouts are also enabled." : ""}
+            </Text>
+          </View>
+          {status.detailsSubmitted ? (
+            <Pressable
+              style={[
+                styles.button,
+                dashboardLinkMutation.isPending ? styles.buttonDisabled : null,
+              ]}
+              onPress={() => dashboardLinkMutation.mutate()}
+              disabled={dashboardLinkMutation.isPending}
+            >
+              {dashboardLinkMutation.isPending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>{"View earnings & payouts"}</Text>
+              )}
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 

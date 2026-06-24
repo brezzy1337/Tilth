@@ -141,6 +141,11 @@ export function createStripeClient(
       return { id: refund.id, status: refund.status ?? "unknown", amountRefunded: refund.amount };
     },
 
+    async createDashboardLink(accountId) {
+      const link = await stripe.accounts.createLoginLink(accountId);
+      return { url: link.url };
+    },
+
     constructWebhookEvent(rawBody, signature, webhookSecret) {
       return stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
     },
