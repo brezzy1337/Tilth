@@ -158,6 +158,18 @@ function SearchView({ lat, lng, onNavigateToStore }: SearchViewProps) {
           <Text style={styles.stateSubText}>
             Try adjusting your search term or selecting a different category.
           </Text>
+          {inputText.length > 0 || activeCategory !== "all" ? (
+            <Pressable
+              style={styles.clearFiltersButton}
+              onPress={() => {
+                setInputText("");
+                setDebouncedQuery(undefined);
+                setActiveCategory("all");
+              }}
+            >
+              <Text style={styles.clearFiltersText}>Clear filters</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
@@ -302,6 +314,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#888",
     textAlign: "center",
+  },
+  clearFiltersButton: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: "#2d6a4f",
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+  clearFiltersText: {
+    fontSize: 14,
+    color: "#2d6a4f",
+    fontWeight: "600",
   },
   listContent: {
     paddingHorizontal: 16,
