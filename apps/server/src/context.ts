@@ -103,6 +103,12 @@ export interface StripeClient {
    */
   cancelPaymentIntent(id: string): Promise<{ status: string }>;
   /**
+   * Generate a one-time Express Dashboard login link for a connected account.
+   * Only works for Express accounts that have completed onboarding
+   * (`details_submitted = true`). Callers must verify this before calling.
+   */
+  createDashboardLink(accountId: string): Promise<{ url: string }>;
+  /**
    * Issue a refund for a destination-charge PaymentIntent.
    *
    * Uses `reverse_transfer: true` and `refund_application_fee: true` to claw

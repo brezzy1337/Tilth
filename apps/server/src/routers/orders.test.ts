@@ -63,6 +63,7 @@ function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["st
     retrievePaymentIntent: async () => ({ status: "succeeded" }),
     cancelPaymentIntent: async () => ({ status: "canceled" }),
     refundPayment: async () => ({ id: "re_stub", status: "succeeded", amountRefunded: 0 }),
+    createDashboardLink: async () => ({ url: "https://connect.stripe.com/express/dashboard/test" }),
     ...overrides,
   };
 }
@@ -807,6 +808,107 @@ describe("connect.status", () => {
     expect(result.chargesEnabled).toBe(true);
     expect(result.payoutsEnabled).toBe(true);
     expect(result.detailsSubmitted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connect.dashboardLink — unit tests
+// ---------------------------------------------------------------------------
+
+describe("connect.dashboardLink", () => {
+  const DASHBOARD_URL = "https://connect.stripe.com/express/dashboard/test";
+
+  /** Build a context for dashboardLink tests using the same pattern as createOnboardingLink. */
+  function makeDashboardCtx(opts: {
+    stripeConnectAccountId?: string | null;
+    detailsSubmitted?: boolean;
+    stripeOverrides?: Partial<Context["stripe"]>;
+  }): Context {
+    const storeRow = {
+      id: UUID_STORE,
+      stripeConnectAccountId: opts.stripeConnectAccountId ?? null,
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: opts.detailsSubmitted ?? false,
+    };
+
+    const b = {
+      from: () => b,
+      where: () => b,
+      limit: () => Promise.resolve([storeRow]),
+      then: (resolve: (v: unknown[]) => void) => Promise.resolve([storeRow]).then(resolve),
+    };
+    const db = { select: () => b } as unknown as Context["db"];
+
+    return {
+      db,
+      jwtSecret: TEST_SECRET,
+      auth: stubAuth,
+      geocode: async () => null,
+      stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+      user: { id: UUID_BUYER },
+    };
+  }
+
+  it("returns { url } when account is onboarded (detailsSubmitted=true)", async () => {
+    const createDashboardLink = vi.fn().mockResolvedValue({ url: DASHBOARD_URL });
+    const ctx = makeDashboardCtx({
+      stripeConnectAccountId: STRIPE_ACCOUNT_ID,
+      detailsSubmitted: true,
+      stripeOverrides: { createDashboardLink },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.connect.dashboardLink();
+
+    expect(result.url).toBe(DASHBOARD_URL);
+    expect(createDashboardLink).toHaveBeenCalledOnce();
+    expect(createDashboardLink).toHaveBeenCalledWith(STRIPE_ACCOUNT_ID);
+  });
+
+  it("throws PRECONDITION_FAILED and does NOT call createDashboardLink when no connect account", async () => {
+    const createDashboardLink = vi.fn();
+    const ctx = makeDashboardCtx({
+      stripeConnectAccountId: null,
+      detailsSubmitted: false,
+      stripeOverrides: { createDashboardLink },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(caller.connect.dashboardLink()).rejects.toThrow(
+      expect.objectContaining({ code: "PRECONDITION_FAILED" }),
+    );
+    expect(createDashboardLink).not.toHaveBeenCalled();
+  });
+
+  it("throws PRECONDITION_FAILED and does NOT call createDashboardLink when detailsSubmitted=false", async () => {
+    const createDashboardLink = vi.fn();
+    const ctx = makeDashboardCtx({
+      stripeConnectAccountId: STRIPE_ACCOUNT_ID,
+      detailsSubmitted: false,
+      stripeOverrides: { createDashboardLink },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(caller.connect.dashboardLink()).rejects.toThrow(
+      expect.objectContaining({
+        code: "PRECONDITION_FAILED",
+        message: "Complete Stripe onboarding before viewing earnings.",
+      }),
+    );
+    expect(createDashboardLink).not.toHaveBeenCalled();
+  });
+
+  it("throws UNAUTHORIZED when unauthenticated", async () => {
+    const ctx = makeDashboardCtx({
+      stripeConnectAccountId: STRIPE_ACCOUNT_ID,
+      detailsSubmitted: true,
+    });
+    const caller = createCaller({ ...ctx, user: null });
+
+    await expect(caller.connect.dashboardLink()).rejects.toThrow(
+      expect.objectContaining({ code: "UNAUTHORIZED" }),
+    );
   });
 });
 
