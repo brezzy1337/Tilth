@@ -317,6 +317,10 @@ export const orderStatus = z.enum([
 
 export type OrderStatus = z.infer<typeof orderStatus>;
 
+/** How the buyer receives the order. */
+export const fulfillmentMethod = z.enum(["pickup", "delivery"]);
+export type FulfillmentMethod = z.infer<typeof fulfillmentMethod>;
+
 /** One line item within an order (input). */
 export const orderItem = z.object({
   listingId: z.string().uuid(),
@@ -331,9 +335,16 @@ export type OrderItem = z.infer<typeof orderItem>;
  * Per-order caps: at most 50 line items, each with at most 1 000 units, to prevent
  * integer overflow of `priceCents × quantity` from reaching `application_fee_amount`.
  */
-export const createOrderInput = z.object({
-  items: z.array(orderItem).min(1).max(50),
-});
+export const createOrderInput = z
+  .object({
+    items: z.array(orderItem).min(1).max(50),
+    fulfillmentMethod,
+    deliveryAddress: z.string().trim().min(1).max(300).optional(),
+  })
+  .refine(
+    (v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0,
+    { path: ["deliveryAddress"], message: "Delivery address is required for delivery" },
+  );
 
 export type CreateOrderInput = z.infer<typeof createOrderInput>;
 
@@ -394,6 +405,8 @@ export const order = z.object({
   applicationFeeCents: z.number().int(),
   totalCents: z.number().int(),
   stripePaymentIntentId: z.string().nullable(),
+  fulfillmentMethod,
+  deliveryAddress: z.string().nullable(),
   /** ISO 8601 datetime or null — set when the buyer submits a refund request. */
   refundRequestedAt: z.string().datetime().nullable(),
   /** Free-text reason supplied by the buyer at request time, or null. */
