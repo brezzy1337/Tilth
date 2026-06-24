@@ -61,6 +61,8 @@ const orderColumns = {
   applicationFeeCents: orders.applicationFeeCents,
   totalCents: orders.totalCents,
   stripePaymentIntentId: orders.stripePaymentIntentId,
+  fulfillmentMethod: orders.fulfillmentMethod,
+  deliveryAddress: orders.deliveryAddress,
   refundRequestedAt: orders.refundRequestedAt,
   refundReason: orders.refundReason,
   refundApprovedAt: orders.refundApprovedAt,
@@ -166,6 +168,8 @@ function mapOrder(
     applicationFeeCents: number;
     totalCents: number;
     stripePaymentIntentId: string | null;
+    fulfillmentMethod: Order["fulfillmentMethod"];
+    deliveryAddress: string | null;
     refundRequestedAt: Date | null;
     refundReason: string | null;
     refundApprovedAt: Date | null;
@@ -184,6 +188,8 @@ function mapOrder(
     applicationFeeCents: orderRow.applicationFeeCents,
     totalCents: orderRow.totalCents,
     stripePaymentIntentId: orderRow.stripePaymentIntentId ?? null,
+    fulfillmentMethod: orderRow.fulfillmentMethod,
+    deliveryAddress: orderRow.deliveryAddress ?? null,
     refundRequestedAt: orderRow.refundRequestedAt?.toISOString() ?? null,
     refundReason: orderRow.refundReason ?? null,
     refundApprovedAt: orderRow.refundApprovedAt?.toISOString() ?? null,
@@ -242,6 +248,21 @@ export const ordersRouter = router({
     .input(createOrderInput)
     .output(createOrderResponse)
     .mutation(async ({ input, ctx }) => {
+      // Server-side re-validation of the delivery address requirement.
+      // The shared zod schema already enforces this via .refine(), but we guard
+      // again here so the check happens BEFORE any DB insert or Stripe call —
+      // preventing orphaned PaymentIntents if the shared schema is ever relaxed.
+      if (input.fulfillmentMethod === "delivery" && !input.deliveryAddress?.trim()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Delivery address is required for delivery",
+        });
+      }
+
+      // Normalise: pickup orders never store a delivery address.
+      const deliveryAddress =
+        input.fulfillmentMethod === "delivery" ? (input.deliveryAddress ?? null) : null;
+
       const listingIds = input.items.map((i) => i.listingId);
 
       // Fetch all listings in one query
@@ -343,6 +364,8 @@ export const ordersRouter = router({
               subtotalCents,
               applicationFeeCents,
               totalCents,
+              fulfillmentMethod: input.fulfillmentMethod,
+              deliveryAddress,
             })
             .returning({ id: orders.id });
 
@@ -461,6 +484,8 @@ export const ordersRouter = router({
         applicationFeeCents,
         totalCents,
         stripePaymentIntentId: paymentIntentId,
+        fulfillmentMethod: input.fulfillmentMethod,
+        deliveryAddress,
         refundRequestedAt: null,
         refundReason: null,
         refundApprovedAt: null,

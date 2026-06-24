@@ -59,6 +59,11 @@ export const orderStatusEnum = pgEnum("order_status", [
   "disputed",
 ]);
 
+export const orderFulfillmentMethodEnum = pgEnum("order_fulfillment_method", [
+  "pickup",
+  "delivery",
+]);
+
 export const listingCategoryEnum = pgEnum("listing_category", [
   "vegetable",
   "fruit",
@@ -193,6 +198,12 @@ export const orders = pgTable(
     totalCents: integer("total_cents").notNull(),
     /** Stripe PaymentIntent id — set after PI creation; used for webhook dispatch. */
     stripePaymentIntentId: text("stripe_payment_intent_id").unique(),
+    /** How the buyer receives the order. Defaults to pickup so existing rows are valid. */
+    fulfillmentMethod: orderFulfillmentMethodEnum("fulfillment_method")
+      .notNull()
+      .default("pickup"),
+    /** Delivery address supplied by the buyer; null for pickup orders. */
+    deliveryAddress: text("delivery_address"),
     /** Running total of refunded cents. Accumulates on partial refunds; order
      *  flips to "refunded" only when refundedCents reaches totalCents. */
     refundedCents: integer("refunded_cents").notNull().default(0),

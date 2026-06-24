@@ -28,10 +28,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useStripe } from "@stripe/stripe-react-native";
+import type { FulfillmentMethod } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useCart } from "../cart/CartContext";
 import type { AuthedStackParamList } from "../navigation/types";
@@ -49,6 +51,9 @@ export function CartScreen({ navigation }: Props) {
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
 
   const createOrder = trpc.orders.create.useMutation();
+
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<FulfillmentMethod>("pickup");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
 
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
@@ -75,7 +80,11 @@ export function CartScreen({ navigation }: Props) {
       const orderItems = items.map((i) => ({ listingId: i.listingId, quantity: i.quantity }));
       let orderResult: Awaited<ReturnType<typeof createOrder.mutateAsync>>;
       try {
-        orderResult = await createOrder.mutateAsync({ items: orderItems });
+        orderResult = await createOrder.mutateAsync({
+          items: orderItems,
+          fulfillmentMethod,
+          deliveryAddress: fulfillmentMethod === "delivery" ? deliveryAddress.trim() : undefined,
+        });
       } catch (err) {
         if (!mountedRef.current) return;
         const msg = err instanceof Error ? err.message : "Could not create order. Try again.";
@@ -204,6 +213,60 @@ export function CartScreen({ navigation }: Props) {
           <Text style={styles.summaryValue}>${formatCents(subtotalCents)}</Text>
         </View>
 
+        {/* Fulfillment selector */}
+        <View style={styles.fulfillmentRow}>
+          <Pressable
+            style={[
+              styles.fulfillmentChip,
+              fulfillmentMethod === "pickup" && styles.fulfillmentChipActive,
+            ]}
+            onPress={() => setFulfillmentMethod("pickup")}
+          >
+            <Text
+              style={[
+                styles.fulfillmentChipText,
+                fulfillmentMethod === "pickup" && styles.fulfillmentChipTextActive,
+              ]}
+            >
+              Pickup
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.fulfillmentChip,
+              fulfillmentMethod === "delivery" && styles.fulfillmentChipActive,
+            ]}
+            onPress={() => setFulfillmentMethod("delivery")}
+          >
+            <Text
+              style={[
+                styles.fulfillmentChipText,
+                fulfillmentMethod === "delivery" && styles.fulfillmentChipTextActive,
+              ]}
+            >
+              Delivery
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* Delivery address input — shown only when Delivery is selected */}
+        {fulfillmentMethod === "delivery" ? (
+          <TextInput
+            style={styles.addressInput}
+            placeholder="Delivery address"
+            placeholderTextColor="#aaa"
+            value={deliveryAddress}
+            onChangeText={setDeliveryAddress}
+            autoCorrect={false}
+            returnKeyType="done"
+          />
+        ) : null}
+
+        {/* Delivery address hint when empty */}
+        {fulfillmentMethod === "delivery" && deliveryAddress.trim().length === 0 ? (
+          <Text style={styles.addressHint}>Enter a delivery address to continue.</Text>
+        ) : null}
+
         {/* Checkout status / error */}
         {checkoutStatus ? (
           <Text style={styles.statusText}>{checkoutStatus}</Text>
@@ -213,17 +276,24 @@ export function CartScreen({ navigation }: Props) {
         ) : null}
 
         {/* Pay button */}
-        <Pressable
-          style={[styles.payButton, isCheckingOut ? styles.payButtonDisabled : null]}
-          onPress={() => void handleCheckout()}
-          disabled={isCheckingOut}
-        >
-          {isCheckingOut ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.payButtonText}>Pay ${formatCents(subtotalCents)}</Text>
-          )}
-        </Pressable>
+        {(() => {
+          const deliveryBlocked =
+            fulfillmentMethod === "delivery" && deliveryAddress.trim().length === 0;
+          const disabled = isCheckingOut || deliveryBlocked;
+          return (
+            <Pressable
+              style={[styles.payButton, disabled ? styles.payButtonDisabled : null]}
+              onPress={() => void handleCheckout()}
+              disabled={disabled}
+            >
+              {isCheckingOut ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.payButtonText}>Pay ${formatCents(subtotalCents)}</Text>
+              )}
+            </Pressable>
+          );
+        })()}
       </ScrollView>
     </SafeAreaView>
   );
@@ -381,5 +451,45 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 17,
     fontWeight: "700",
+  },
+  fulfillmentRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+  },
+  fulfillmentChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#2d6a4f",
+    alignItems: "center",
+  },
+  fulfillmentChipActive: {
+    backgroundColor: "#2d6a4f",
+  },
+  fulfillmentChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#2d6a4f",
+  },
+  fulfillmentChipTextActive: {
+    color: "#fff",
+  },
+  addressInput: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: "#1a1a1a",
+    backgroundColor: "#fff",
+    marginBottom: 8,
+  },
+  addressHint: {
+    fontSize: 12,
+    color: "#888",
+    marginBottom: 8,
   },
 });

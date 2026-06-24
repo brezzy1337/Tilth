@@ -57,6 +57,13 @@
       "when": 1782159482134,
       "tag": "0007_colossal_siren",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782269565342,
+      "tag": "0008_faulty_swarm",
+      "breakpoints": true
     }
   ]
 }

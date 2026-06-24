@@ -488,6 +488,7 @@ describe("orders.create", () => {
 
     const result = await caller.orders.create({
       items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "pickup",
     });
 
     expect(result.order.subtotalCents).toBe(400);
@@ -509,6 +510,7 @@ describe("orders.create", () => {
 
     await caller.orders.create({
       items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "pickup",
     });
 
     expect(piInput).toHaveBeenCalledOnce();
@@ -536,6 +538,7 @@ describe("orders.create", () => {
           { listingId: UUID_LISTING_1, quantity: 1 },
           { listingId: UUID_LISTING_2, quantity: 1 },
         ],
+        fulfillmentMethod: "pickup",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
   });
@@ -555,6 +558,7 @@ describe("orders.create", () => {
     await expect(
       caller.orders.create({
         items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "pickup",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
   });
@@ -574,6 +578,7 @@ describe("orders.create", () => {
     await expect(
       caller.orders.create({
         items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "pickup",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
   });
@@ -583,7 +588,7 @@ describe("orders.create", () => {
     const caller = createCaller({ ...ctx, user: null });
 
     await expect(
-      caller.orders.create({ items: [{ listingId: UUID_LISTING_1, quantity: 1 }] }),
+      caller.orders.create({ items: [{ listingId: UUID_LISTING_1, quantity: 1 }], fulfillmentMethod: "pickup" }),
     ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 
@@ -602,8 +607,77 @@ describe("orders.create", () => {
           { listingId: UUID_LISTING_1, quantity: 1 },
           { listingId: UUID_LISTING_2, quantity: 1 }, // this one is missing from DB
         ],
+        fulfillmentMethod: "pickup",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  it("pickup order: succeeds with no address; row has fulfillmentMethod=pickup, deliveryAddress=null", async () => {
+    const ctx = makeOrderCtx({});
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.create({
+      items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "pickup",
+    });
+
+    expect(result.order.fulfillmentMethod).toBe("pickup");
+    expect(result.order.deliveryAddress).toBeNull();
+  });
+
+  it("delivery order: succeeds with valid address; row has method=delivery + the address", async () => {
+    const ctx = makeOrderCtx({});
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.create({
+      items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "delivery",
+      deliveryAddress: "123 Main St",
+    });
+
+    expect(result.order.fulfillmentMethod).toBe("delivery");
+    expect(result.order.deliveryAddress).toBe("123 Main St");
+  });
+
+  it("delivery order with missing address: BAD_REQUEST before any PI created (createPaymentIntent not called)", async () => {
+    const createPaymentIntent = vi.fn().mockResolvedValue({
+      id: STRIPE_PI_ID,
+      clientSecret: "pi_test_abc123_secret_xyz",
+    });
+
+    const ctx = makeOrderCtx({
+      stripeOverrides: { createPaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.create({
+        items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "delivery",
+        // deliveryAddress intentionally omitted
+      }),
+    ).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Delivery address is required") }),
+    );
+
+    // Critical: Stripe must NOT have been called
+    expect(createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("pickup order ignores any supplied deliveryAddress (stores null)", async () => {
+    const ctx = makeOrderCtx({});
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.create({
+      items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+      fulfillmentMethod: "pickup",
+      // A client may send an address even for pickup (the shared schema allows it);
+      // the server must NORMALIZE it to null for pickup orders.
+      deliveryAddress: "999 Should Be Ignored Rd",
+    });
+
+    expect(result.order.fulfillmentMethod).toBe("pickup");
+    expect(result.order.deliveryAddress).toBeNull();
   });
 });
 
@@ -929,6 +1003,8 @@ function makeOrderRow(overrides: Partial<{
   buyerId: string;
   status: string;
   stripePaymentIntentId: string | null;
+  fulfillmentMethod: "pickup" | "delivery";
+  deliveryAddress: string | null;
   refundRequestedAt: Date | null;
   refundReason: string | null;
   refundApprovedAt: Date | null;
@@ -946,6 +1022,8 @@ function makeOrderRow(overrides: Partial<{
     applicationFeeCents: 50,
     totalCents: 500,
     stripePaymentIntentId: STRIPE_PI_ID,
+    fulfillmentMethod: "pickup" as const,
+    deliveryAddress: null,
     refundRequestedAt: null,
     refundReason: null,
     refundApprovedAt: null,

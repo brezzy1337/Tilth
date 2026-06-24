@@ -187,6 +187,11 @@ function FulfillAction({ order }: { order: Order }) {
 // ---------------------------------------------------------------------------
 
 function OrderRow({ order }: { order: Order }) {
+  const fulfillmentLine =
+    order.fulfillmentMethod === "delivery"
+      ? `Delivery${order.deliveryAddress ? ` — ${order.deliveryAddress}` : ""}`
+      : "Pickup";
+
   return (
     <View style={styles.orderCard}>
       <View style={styles.orderRow}>
@@ -203,6 +208,7 @@ function OrderRow({ order }: { order: Order }) {
         </Text>
         <Text style={styles.orderTotal}>${formatCents(order.totalCents)}</Text>
       </View>
+      <Text style={styles.fulfillmentLine}>{fulfillmentLine}</Text>
       {isPendingRefund(order) ? <RefundActions order={order} /> : null}
       {!isPendingRefund(order) && order.status === "paid" ? (
         <FulfillAction order={order} />
@@ -378,6 +384,11 @@ const styles = StyleSheet.create({
   footerSpinner: {
     paddingVertical: 16,
     alignItems: "center",
+  },
+  fulfillmentLine: {
+    fontSize: 13,
+    color: "#555",
+    fontWeight: "500",
   },
   // Refund block
   refundBlock: {
