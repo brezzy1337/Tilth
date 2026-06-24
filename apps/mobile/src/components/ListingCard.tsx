@@ -102,6 +102,13 @@ export function ListingCard({ item, onPressStore }: Props) {
       <Text style={styles.price}>
         ${formatCents(item.priceCents)} / {item.unit}
       </Text>
+      {item.quantity > 0 ? (
+        <Text style={styles.availability}>
+          {item.quantity} {item.unit} available
+        </Text>
+      ) : (
+        <Text style={styles.soldOut}>Sold out</Text>
+      )}
       {item.storeName !== undefined ? (
         <Text style={styles.meta}>
           {capitalise(item.category)} ·{" "}
@@ -163,6 +170,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#2d6a4f",
     fontWeight: "700",
+    marginBottom: 4,
+  },
+  availability: {
+    fontSize: 13,
+    color: "#555",
+    marginBottom: 4,
+  },
+  soldOut: {
+    fontSize: 13,
+    color: "#b71c1c",
+    fontWeight: "600",
     marginBottom: 4,
   },
   meta: {
