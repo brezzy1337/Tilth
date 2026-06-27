@@ -54,10 +54,16 @@ export function CartScreen({ navigation }: Props) {
 
   const [fulfillmentMethod, setFulfillmentMethod] = useState<FulfillmentMethod>("pickup");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [showTip, setShowTip] = useState(false);
+  const [tipText, setTipText] = useState("");
 
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  // Tip: parse tipText to integer cents; clamp to [0, 100_000].
+  const tipCents = Math.min(Math.round((parseFloat(tipText) || 0) * 100), 100000);
+  const totalCents = subtotalCents + tipCents;
 
   // Unmount guard — prevents setState calls on an unmounted component.
   const mountedRef = useRef(true);
@@ -84,6 +90,7 @@ export function CartScreen({ navigation }: Props) {
           items: orderItems,
           fulfillmentMethod,
           deliveryAddress: fulfillmentMethod === "delivery" ? deliveryAddress.trim() : undefined,
+          ...(tipCents > 0 ? { tipCents } : {}),
         });
       } catch (err) {
         if (!mountedRef.current) return;
@@ -207,10 +214,33 @@ export function CartScreen({ navigation }: Props) {
           )}
         />
 
-        {/* Subtotal */}
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Subtotal</Text>
-          <Text style={styles.summaryValue}>${formatCents(subtotalCents)}</Text>
+        {/* Order summary: subtotal + optional tip */}
+        <View style={styles.tipSection}>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Subtotal</Text>
+            <Text style={styles.summaryValue}>${formatCents(subtotalCents)}</Text>
+          </View>
+          {!showTip ? (
+            <Pressable onPress={() => setShowTip(true)} style={styles.tipLink}>
+              <Text style={styles.tipLinkText}>Add a tip for your grower (optional)</Text>
+            </Pressable>
+          ) : (
+            <TextInput
+              style={styles.tipInput}
+              placeholder="0.00"
+              placeholderTextColor="#aaa"
+              keyboardType="decimal-pad"
+              value={tipText}
+              onChangeText={setTipText}
+              returnKeyType="done"
+            />
+          )}
+          {tipCents > 0 ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Tip</Text>
+              <Text style={styles.summaryValue}>${formatCents(tipCents)}</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Fulfillment selector */}
@@ -289,7 +319,7 @@ export function CartScreen({ navigation }: Props) {
               {isCheckingOut ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.payButtonText}>Pay ${formatCents(subtotalCents)}</Text>
+                <Text style={styles.payButtonText}>Pay ${formatCents(totalCents)}</Text>
               )}
             </Pressable>
           );
@@ -408,13 +438,39 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginLeft: "auto",
   },
+  tipSection: {
+    marginTop: 8,
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
   summaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 8,
-    marginBottom: 20,
-    paddingHorizontal: 4,
+    marginBottom: 4,
+  },
+  tipLink: {
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  tipLinkText: {
+    fontSize: 12,
+    color: "#888",
+    textDecorationLine: "underline",
+  },
+  tipInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    fontSize: 14,
+    color: "#1a1a1a",
+    backgroundColor: "#fff",
+    marginTop: 6,
+    marginBottom: 4,
+    alignSelf: "flex-start",
+    minWidth: 100,
   },
   summaryLabel: {
     fontSize: 16,

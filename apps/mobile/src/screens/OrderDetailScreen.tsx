@@ -193,6 +193,12 @@ export function OrderDetailScreen({ route }: Props) {
             <Text style={styles.summaryLabel}>Subtotal</Text>
             <Text style={styles.summaryValue}>${formatCents(order.subtotalCents)}</Text>
           </View>
+          {order.tipCents > 0 ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Tip</Text>
+              <Text style={styles.summaryValue}>${formatCents(order.tipCents)}</Text>
+            </View>
+          ) : null}
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Platform fee</Text>
             <Text style={styles.summaryValue}>${formatCents(order.applicationFeeCents)}</Text>
