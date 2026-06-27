@@ -204,6 +204,10 @@ export const orders = pgTable(
       .default("pickup"),
     /** Delivery address supplied by the buyer; null for pickup orders. */
     deliveryAddress: text("delivery_address"),
+    /** Optional tip in cents paid by the buyer; goes 100% to the seller.
+     *  The platform's 10% application fee is computed on subtotalCents only — the
+     *  tip is NEVER included in the fee base. */
+    tipCents: integer("tip_cents").notNull().default(0),
     /** Running total of refunded cents. Accumulates on partial refunds; order
      *  flips to "refunded" only when refundedCents reaches totalCents. */
     refundedCents: integer("refunded_cents").notNull().default(0),

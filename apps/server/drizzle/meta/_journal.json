@@ -64,6 +64,13 @@
       "when": 1782269565342,
       "tag": "0008_faulty_swarm",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782593190616,
+      "tag": "0009_crazy_ultimo",
+      "breakpoints": true
     }
   ]
 }

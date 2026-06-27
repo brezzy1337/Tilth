@@ -60,6 +60,7 @@ const orderColumns = {
   subtotalCents: orders.subtotalCents,
   applicationFeeCents: orders.applicationFeeCents,
   totalCents: orders.totalCents,
+  tipCents: orders.tipCents,
   stripePaymentIntentId: orders.stripePaymentIntentId,
   fulfillmentMethod: orders.fulfillmentMethod,
   deliveryAddress: orders.deliveryAddress,
@@ -167,6 +168,7 @@ function mapOrder(
     subtotalCents: number;
     applicationFeeCents: number;
     totalCents: number;
+    tipCents: number;
     stripePaymentIntentId: string | null;
     fulfillmentMethod: Order["fulfillmentMethod"];
     deliveryAddress: string | null;
@@ -187,6 +189,7 @@ function mapOrder(
     subtotalCents: orderRow.subtotalCents,
     applicationFeeCents: orderRow.applicationFeeCents,
     totalCents: orderRow.totalCents,
+    tipCents: orderRow.tipCents,
     stripePaymentIntentId: orderRow.stripePaymentIntentId ?? null,
     fulfillmentMethod: orderRow.fulfillmentMethod,
     deliveryAddress: orderRow.deliveryAddress ?? null,
@@ -337,9 +340,12 @@ export const ordersRouter = router({
       });
 
       const subtotalCents = lines.reduce((sum, l) => sum + l.lineTotalCents, 0);
+      // Application fee is computed on the SUBTOTAL only — the tip is never in the fee base.
+      // Net effect: seller receives 0.9·subtotal + full tip; platform keeps 10% of subtotal, 0% of tip.
       const applicationFeeCents = Math.round((subtotalCents * PLATFORM_FEE_BPS) / 10000);
-      // Buyer pays the subtotal; the platform fee is withheld from the seller's transfer
-      const totalCents = subtotalCents;
+      const tipCents = input.tipCents ?? 0;
+      // Buyer pays subtotal + tip; fee is withheld from the seller's transfer via application_fee_amount.
+      const totalCents = subtotalCents + tipCents;
 
       // Insert order + items in a transaction
       let orderId: string;
@@ -364,6 +370,7 @@ export const ordersRouter = router({
               subtotalCents,
               applicationFeeCents,
               totalCents,
+              tipCents,
               fulfillmentMethod: input.fulfillmentMethod,
               deliveryAddress,
             })
@@ -483,6 +490,7 @@ export const ordersRouter = router({
         subtotalCents,
         applicationFeeCents,
         totalCents,
+        tipCents,
         stripePaymentIntentId: paymentIntentId,
         fulfillmentMethod: input.fulfillmentMethod,
         deliveryAddress,

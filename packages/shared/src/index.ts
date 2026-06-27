@@ -340,6 +340,7 @@ export const createOrderInput = z
     items: z.array(orderItem).min(1).max(50),
     fulfillmentMethod,
     deliveryAddress: z.string().trim().min(1).max(300).optional(),
+    tipCents: z.number().int().nonnegative().max(100000).optional(),
   })
   .refine(
     (v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0,
@@ -404,6 +405,7 @@ export const order = z.object({
   subtotalCents: z.number().int(),
   applicationFeeCents: z.number().int(),
   totalCents: z.number().int(),
+  tipCents: z.number().int(),
   stripePaymentIntentId: z.string().nullable(),
   fulfillmentMethod,
   deliveryAddress: z.string().nullable(),

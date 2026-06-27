@@ -481,7 +481,7 @@ describe("orders.create", () => {
     };
   }
 
-  it("computes subtotal, applicationFee (10%), and totalCents correctly", async () => {
+  it("computes subtotal, applicationFee (10%), and totalCents correctly (no tip)", async () => {
     // 2 × Tomatoes @ 200¢ = 400¢ subtotal, fee = round(400 × 1000 / 10000) = 40¢
     const ctx = makeOrderCtx({});
     const caller = createCaller(ctx);
@@ -494,10 +494,11 @@ describe("orders.create", () => {
     expect(result.order.subtotalCents).toBe(400);
     expect(result.order.applicationFeeCents).toBe(40);
     expect(result.order.totalCents).toBe(400);
+    expect(result.order.tipCents).toBe(0);
     expect(result.clientSecret).toBe("pi_test_abc123_secret_xyz");
   });
 
-  it("passes applicationFeeCents, destinationAccountId, and idempotencyKey to Stripe", async () => {
+  it("passes applicationFeeCents, destinationAccountId, and idempotencyKey to Stripe (no tip)", async () => {
     const piInput = vi.fn().mockResolvedValue({
       id: STRIPE_PI_ID,
       clientSecret: "pi_test_abc123_secret_xyz",
@@ -521,6 +522,54 @@ describe("orders.create", () => {
     expect(call.metadata.orderId).toBe(UUID_ORDER);
     // Idempotency key must be the orderId — prevents duplicate PIs on client retries
     expect(call.idempotencyKey).toBe(UUID_ORDER);
+  });
+
+  it("with tip: totalCents = subtotal + tip; applicationFeeCents = 10% of subtotal only (tip excluded from fee base)", async () => {
+    // Subtotal S = 2 × 200¢ = 400¢. Tip = 500¢.
+    // Expected totalCents = 400 + 500 = 900¢.
+    // Expected applicationFeeCents = round(400 × 1000 / 10000) = 40¢ — tip does NOT inflate the fee.
+    const piInput = vi.fn().mockResolvedValue({
+      id: STRIPE_PI_ID,
+      clientSecret: "pi_test_abc123_secret_xyz",
+    });
+
+    const ctx = makeOrderCtx({ stripeOverrides: { createPaymentIntent: piInput } });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.create({
+      items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "pickup",
+      tipCents: 500,
+    });
+
+    // Money assertions on the returned order
+    expect(result.order.subtotalCents).toBe(400);
+    expect(result.order.tipCents).toBe(500);
+    expect(result.order.totalCents).toBe(900);
+    // Explicit proof tip is NOT in the fee base: fee equals the no-tip fee for the same subtotal
+    expect(result.order.applicationFeeCents).toBe(40);
+
+    // Stripe must be called with total (subtotal + tip) but fee on subtotal only
+    expect(piInput).toHaveBeenCalledOnce();
+    const call = piInput.mock.calls[0]![0];
+    expect(call.amountCents).toBe(900);
+    expect(call.applicationFeeCents).toBe(40);
+  });
+
+  it("without tip: tipCents defaults to 0, totalCents = subtotal, fee unchanged", async () => {
+    // Confirming omitting tipCents leaves everything identical to pre-tip behavior
+    const ctx = makeOrderCtx({});
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.create({
+      items: [{ listingId: UUID_LISTING_1, quantity: 2 }],
+      fulfillmentMethod: "pickup",
+      // tipCents intentionally omitted
+    });
+
+    expect(result.order.tipCents).toBe(0);
+    expect(result.order.totalCents).toBe(400);           // totalCents === subtotalCents
+    expect(result.order.applicationFeeCents).toBe(40);   // fee unchanged
   });
 
   it("rejects items from multiple stores with BAD_REQUEST", async () => {
@@ -1002,6 +1051,10 @@ function makeOrderRow(overrides: Partial<{
   storeId: string;
   buyerId: string;
   status: string;
+  subtotalCents: number;
+  applicationFeeCents: number;
+  totalCents: number;
+  tipCents: number;
   stripePaymentIntentId: string | null;
   fulfillmentMethod: "pickup" | "delivery";
   deliveryAddress: string | null;
@@ -1021,6 +1074,7 @@ function makeOrderRow(overrides: Partial<{
     subtotalCents: 500,
     applicationFeeCents: 50,
     totalCents: 500,
+    tipCents: 0,
     stripePaymentIntentId: STRIPE_PI_ID,
     fulfillmentMethod: "pickup" as const,
     deliveryAddress: null,
