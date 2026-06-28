@@ -42,10 +42,24 @@ export const connectRouter = router({
 
       if (!accountId) {
         // Create a new Connect Express account.
-        // Idempotency key = store.id: stable per store, prevents a duplicate account
-        // if the create succeeds but DB persistence is retried.
+        //
+        // Idempotency key: time-bucketed per store (~60-second window).
+        //
+        // WHY NOT store.id alone: Stripe caches accounts.create responses against
+        // the idempotency key for 24h — including error responses. A static store.id
+        // key means any transient or terminal error (e.g. "You can only create new
+        // accounts if you've signed up for Connect", observed 2026-06-27) poisons the
+        // key for 24h, wedging the store even after the root cause is fixed.
+        //
+        // WHY time-bucketing works: a ~60-second bucket caps the poison window to one
+        // minute while still deduplicating rapid concurrent retries within the same
+        // bucket (the create→persist race: create succeeds, DB persist fails and
+        // retries within the same minute → same key → Stripe returns the cached
+        // success, no duplicate account is created).
+        //
+        // DO NOT simplify this back to `store.id` — the time component is load-bearing.
         const created = await ctx.stripe.createConnectedAccount({
-          idempotencyKey: store.id,
+          idempotencyKey: `${store.id}:${Math.floor(Date.now() / 60_000)}`,
         });
         accountId = created.id;
 

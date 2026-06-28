@@ -798,9 +798,12 @@ describe("connect.createOnboardingLink", () => {
     const result = await caller.connect.createOnboardingLink({});
 
     expect(createConnectedAccount).toHaveBeenCalledOnce();
-    // idempotencyKey = store.id must be passed through
+    // idempotencyKey must embed the store id; it is time-bucketed (see connect.ts for
+    // the full rationale — the format is `${store.id}:${minuteBucket}`).
     expect(createConnectedAccount).toHaveBeenCalledWith(
-      expect.objectContaining({ idempotencyKey: UUID_STORE }),
+      expect.objectContaining({
+        idempotencyKey: expect.stringMatching(new RegExp(`^${UUID_STORE}:\\d+$`)),
+      }),
     );
     expect(result.accountId).toBe(STRIPE_ACCOUNT_ID);
     expect(result.url).toBe("https://connect.stripe.com/setup/test");
