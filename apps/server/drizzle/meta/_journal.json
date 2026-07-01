@@ -71,6 +71,13 @@
       "when": 1782593190616,
       "tag": "0009_crazy_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782938498430,
+      "tag": "0010_mysterious_manta",
+      "breakpoints": true
     }
   ]
 }

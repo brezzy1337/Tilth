@@ -136,6 +136,50 @@ function RefundActions({ order }: { order: Order }) {
 }
 
 // ---------------------------------------------------------------------------
+// PreparationAction — "Start packing" / "Mark ready" button that advances a
+// paid order's operational preparationState (null → packing → ready). Moves
+// no money; orthogonal to the "Mark fulfilled" capture action below.
+// ---------------------------------------------------------------------------
+
+function PreparationAction({ order }: { order: Order }) {
+  const utils = trpc.useUtils();
+
+  const setPreparationState = trpc.orders.setPreparationState.useMutation({
+    onSuccess: () => {
+      void utils.orders.listForMyStore.invalidate();
+    },
+    onError: (err) => {
+      Alert.alert("Error", err.message ?? "Could not update order. Please try again.");
+    },
+  });
+
+  if (order.preparationState === "ready") {
+    return null;
+  }
+
+  const nextState = order.preparationState === "packing" ? "ready" : "packing";
+  const label = nextState === "packing" ? "Start packing" : "Mark ready";
+
+  function handleAdvance() {
+    setPreparationState.mutate({ orderId: order.id, state: nextState });
+  }
+
+  return (
+    <View style={styles.prepBlock}>
+      <Pressable
+        style={[styles.prepButton, setPreparationState.isPending && styles.actionButtonDisabled]}
+        onPress={handleAdvance}
+        disabled={setPreparationState.isPending}
+      >
+        <Text style={styles.prepButtonText}>
+          {setPreparationState.isPending ? "Saving…" : label}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FulfillAction — "Mark fulfilled" button for a paid, non-refund-pending order
 // ---------------------------------------------------------------------------
 
@@ -196,7 +240,7 @@ function OrderRow({ order }: { order: Order }) {
     <View style={styles.orderCard}>
       <View style={styles.orderRow}>
         <Text style={styles.orderId}>#{order.id.slice(0, 8).toUpperCase()}</Text>
-        <StatusPill status={order.status} />
+        <StatusPill status={order.status} preparationState={order.preparationState} />
       </View>
       <View style={styles.orderRow}>
         <Text style={styles.orderDate}>
@@ -211,7 +255,10 @@ function OrderRow({ order }: { order: Order }) {
       <Text style={styles.fulfillmentLine}>{fulfillmentLine}</Text>
       {isPendingRefund(order) ? <RefundActions order={order} /> : null}
       {!isPendingRefund(order) && order.status === "paid" ? (
-        <FulfillAction order={order} />
+        <>
+          <PreparationAction order={order} />
+          <FulfillAction order={order} />
+        </>
       ) : null}
     </View>
   );
@@ -441,6 +488,25 @@ const styles = StyleSheet.create({
   },
   actionButtonDisabled: {
     opacity: 0.5,
+  },
+  // Preparation block
+  prepBlock: {
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: "#f0f0f0",
+    paddingTop: 10,
+  },
+  prepButton: {
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#b45309",
+    alignItems: "center",
+  },
+  prepButtonText: {
+    color: "#b45309",
+    fontSize: 13,
+    fontWeight: "600",
   },
   // Fulfill block
   fulfillBlock: {

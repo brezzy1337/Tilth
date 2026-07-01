@@ -29,6 +29,7 @@ import {
   approveRefundInput,
   declineRefundInput,
   markFulfilledInput,
+  setPreparationStateInput,
   listForMyStoreInput,
   listForMyStoreOutput,
   order as orderSchema,
@@ -61,6 +62,7 @@ const orderColumns = {
   storeId: orders.storeId,
   buyerId: orders.buyerId,
   status: orders.status,
+  preparationState: orders.preparationState,
   subtotalCents: orders.subtotalCents,
   applicationFeeCents: orders.applicationFeeCents,
   totalCents: orders.totalCents,
@@ -169,6 +171,7 @@ function mapOrder(
     storeId: string;
     buyerId: string;
     status: Order["status"];
+    preparationState: Order["preparationState"];
     subtotalCents: number;
     applicationFeeCents: number;
     totalCents: number;
@@ -190,6 +193,7 @@ function mapOrder(
     storeId: orderRow.storeId,
     buyerId: orderRow.buyerId,
     status: orderRow.status,
+    preparationState: orderRow.preparationState ?? null,
     subtotalCents: orderRow.subtotalCents,
     applicationFeeCents: orderRow.applicationFeeCents,
     totalCents: orderRow.totalCents,
@@ -491,6 +495,7 @@ export const ordersRouter = router({
         storeId,
         buyerId: ctx.user.id,
         status: "pending_payment" as const,
+        preparationState: null,
         subtotalCents,
         applicationFeeCents,
         totalCents,
@@ -1015,6 +1020,103 @@ export const ordersRouter = router({
           .set({ status: "paid", updatedAt: new Date() })
           .where(and(eq(orders.id, orderId), eq(orders.status, "fulfilled")));
         throw err;
+      }
+
+      return loadOrderById(ctx.db, orderId);
+    }),
+
+  /**
+   * Set the preparation sub-state of an order (SELLER / store owner only).
+   *
+   * F-029 — an ORTHOGONAL operational sub-state layered on top of `status='paid'`
+   * (buyer authorized, funds held under F-026 manual capture). Progresses
+   * null → packing → ready. This is a PURE DB state update: it moves NO money and
+   * makes NO Stripe call. `markFulfilled` remains the only capture/fulfillment action.
+   *
+   * Uses an atomic guarded UPDATE (same pattern as markFulfilled) to prevent races
+   * where the order's status changes (e.g. via a concurrent webhook or refund) between
+   * the pre-check read and the write:
+   *   UPDATE orders SET preparation_state = ?, updatedAt = now()
+   *     WHERE id = ? AND storeId = ? AND status = 'paid' RETURNING { id }
+   *
+   * A 0-row result means status raced away from 'paid' — surfaces as BAD_REQUEST
+   * with the same message as the pre-check.
+   */
+  setPreparationState: protectedProcedure
+    .input(setPreparationStateInput)
+    .output(orderSchema)
+    .mutation(async ({ input, ctx }) => {
+      const orderId = input.orderId;
+
+      // Load order joined to stores for ownership check — same pattern as markFulfilled
+      const [foundOrder] = await ctx.db
+        .select(orderColumnsWithStore)
+        .from(orders)
+        .innerJoin(stores, eq(orders.storeId, stores.id))
+        .where(eq(orders.id, orderId))
+        .limit(1);
+
+      // Surface as NOT_FOUND when not found or caller is not the store owner
+      // (avoid leaking order existence to non-owners)
+      if (!foundOrder || foundOrder.storeUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+      }
+
+      // Pre-check: give a precise error before the atomic claim
+      if (foundOrder.status !== "paid") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid orders can be prepared",
+        });
+      }
+
+      // Enforce forward-only progression server-side (the mobile UI only advances,
+      // but the server is the authority — reject an out-of-order or replayed request).
+      // Allowed: null → packing → ready. Re-setting the current state is a tolerated
+      // idempotent no-op; going backward (ready → packing) or skipping (null → ready)
+      // is rejected.
+      //   target "packing" → prior must be null or "packing"
+      //   target "ready"   → prior must be "packing" or "ready"
+      const prior = foundOrder.preparationState;
+      const validTransition =
+        input.state === "packing"
+          ? prior === null || prior === "packing"
+          : prior === "packing" || prior === "ready";
+      if (!validTransition) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Preparation must advance in order (packing → ready)",
+        });
+      }
+
+      const now = new Date();
+      // Atomic guarded UPDATE — prevents races where a concurrent webhook or seller
+      // action transitions the order out of 'paid' (or advances preparation) between
+      // the pre-check and this UPDATE. The prior-state guard makes the transition
+      // race-safe, not just the pre-check above.
+      const validPriorState =
+        input.state === "packing"
+          ? or(isNull(orders.preparationState), eq(orders.preparationState, "packing"))
+          : or(eq(orders.preparationState, "packing"), eq(orders.preparationState, "ready"));
+      const claimed = await ctx.db
+        .update(orders)
+        .set({ preparationState: input.state, updatedAt: now })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, foundOrder.storeId),
+            eq(orders.status, "paid"),
+            validPriorState,
+          ),
+        )
+        .returning({ id: orders.id });
+
+      if (claimed.length === 0) {
+        // Status raced away between the pre-check read and the guarded UPDATE.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only paid orders can be prepared",
+        });
       }
 
       return loadOrderById(ctx.db, orderId);

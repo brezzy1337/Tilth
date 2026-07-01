@@ -32,6 +32,7 @@ import type { OrderStatus } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { ColorBadge } from "../components/ColorBadge";
+import { PREPARATION_STATE_CONFIG } from "../components/StatusPill";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
 import { capitalise } from "../utils/text";
@@ -165,6 +166,20 @@ export function OrderDetailScreen({ route }: Props) {
             <Text style={styles.fulfillmentLabel}>Pickup at seller&apos;s stand</Text>
           )}
         </View>
+
+        {/* Preparation — read-only; the seller advances this from StoreOrdersScreen.
+            Moves no money and is orthogonal to `status`, so it's only meaningful
+            while the order sits at `paid`. */}
+        {order.status === "paid" && order.preparationState ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Preparation</Text>
+            <ColorBadge
+              label={PREPARATION_STATE_CONFIG[order.preparationState].label}
+              bg={PREPARATION_STATE_CONFIG[order.preparationState].bg}
+              text={PREPARATION_STATE_CONFIG[order.preparationState].text}
+            />
+          </View>
+        ) : null}
 
         {/* Line items */}
         <View style={styles.section}>

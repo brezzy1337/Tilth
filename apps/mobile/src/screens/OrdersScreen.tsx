@@ -152,7 +152,7 @@ export function OrdersScreen({ navigation }: Props) {
             >
               <View style={styles.orderRow}>
                 <Text style={styles.orderId}>#{item.id.slice(0, 8).toUpperCase()}</Text>
-                <StatusPill status={item.status} />
+                <StatusPill status={item.status} preparationState={item.preparationState} />
               </View>
               <View style={styles.orderRow}>
                 <Text style={styles.orderDate}>

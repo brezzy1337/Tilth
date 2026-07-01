@@ -1055,6 +1055,7 @@ function makeOrderRow(overrides: Partial<{
   storeId: string;
   buyerId: string;
   status: string;
+  preparationState: "packing" | "ready" | null;
   subtotalCents: number;
   applicationFeeCents: number;
   totalCents: number;
@@ -1075,6 +1076,7 @@ function makeOrderRow(overrides: Partial<{
     storeId: UUID_STORE,
     buyerId: UUID_BUYER,
     status: "paid",
+    preparationState: null,
     subtotalCents: 500,
     applicationFeeCents: 50,
     totalCents: 500,
@@ -2247,6 +2249,207 @@ describe("orders.markFulfilled", () => {
       caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
     ).rejects.toThrow(
       expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// orders.setPreparationState
+// ---------------------------------------------------------------------------
+
+describe("orders.setPreparationState", () => {
+  it("store owner sets 'packing' on a paid order — updates preparationState, NO Stripe call", async () => {
+    const updates: unknown[] = [];
+    const capturePaymentIntent = vi.fn();
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+    const packingRow = { ...orderRow, preparationState: "packing" as const };
+
+    // selectSequence:
+    //   slot 0 — innerJoin load
+    //   slot 1 — re-fetch after claim (loadOrderById plain select)
+    //   slot 2 — order items
+    // updateSequence:
+    //   call 0 — guarded UPDATE returns a row (claim wins)
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow],   // slot 0 — innerJoin load
+        [packingRow], // slot 1 — re-fetch after update
+        [],           // slot 2 — order items
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.setPreparationState({
+      orderId: UUID_ORDER_PAID,
+      state: "packing",
+    });
+
+    // The guarded UPDATE must set preparationState='packing' and updatedAt
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.preparationState).toBe("packing");
+    expect(updatePayload.updatedAt).toBeInstanceOf(Date);
+    // No `status` field should be touched — this is orthogonal to payment status.
+    expect(updatePayload).not.toHaveProperty("status");
+
+    // No Stripe call — this is a pure DB state update, unlike markFulfilled.
+    expect(capturePaymentIntent).not.toHaveBeenCalled();
+
+    expect(result.preparationState).toBe("packing");
+  });
+
+  it("store owner sets 'ready' on a paid order — updates preparationState, NO Stripe call", async () => {
+    const updates: unknown[] = [];
+    const capturePaymentIntent = vi.fn();
+    const orderRow = makeOrderRow({
+      status: "paid",
+      preparationState: "packing",
+      storeUserId: UUID_SELLER,
+    });
+    const readyRow = { ...orderRow, preparationState: "ready" as const };
+
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // slot 0 — innerJoin load
+        [readyRow], // slot 1 — re-fetch after update
+        [],         // slot 2 — order items
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.setPreparationState({
+      orderId: UUID_ORDER_PAID,
+      state: "ready",
+    });
+
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.preparationState).toBe("ready");
+
+    expect(capturePaymentIntent).not.toHaveBeenCalled();
+    expect(result.preparationState).toBe("ready");
+  });
+
+  it("rejects an out-of-order transition (null → ready) with BAD_REQUEST; no update", async () => {
+    const updates: unknown[] = [];
+    // Prep is still null (nothing started) — jumping straight to 'ready' skips 'packing'.
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // slot 0 — innerJoin load (pre-check throws before any UPDATE/re-fetch)
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.setPreparationState({ orderId: UUID_ORDER_PAID, state: "ready" }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: "Preparation must advance in order (packing → ready)",
+      }),
+    );
+
+    // Forward-only guard must reject before issuing any UPDATE.
+    expect(updates).toHaveLength(0);
+  });
+
+  it("non-owner (storeUserId !== ctx.user.id) → NOT_FOUND; no update", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_BUYER, // buyer, not seller
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.setPreparationState({ orderId: UUID_ORDER_PAID, state: "packing" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("order not found → NOT_FOUND; no update", async () => {
+    const updates: unknown[] = [];
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[]], // empty — order does not exist
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.setPreparationState({ orderId: UUID_ORDER_PAID, state: "packing" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("non-'paid' order (pre-check) → BAD_REQUEST, no update", async () => {
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "fulfilled", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.setPreparationState({ orderId: UUID_ORDER_PAID, state: "packing" }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders can be prepared"),
+      }),
+    );
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("guarded UPDATE returns 0 rows (status raced away) → BAD_REQUEST", async () => {
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    // Pre-check passes (status is 'paid') but the guarded UPDATE returns 0 rows
+    // (race: concurrent webhook/markFulfilled moved the order out of 'paid' first)
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // initial innerJoin load — pre-check passes
+      ],
+      updateSequence: [
+        [], // guarded UPDATE returns 0 rows
+      ],
+      userId: UUID_SELLER,
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.setPreparationState({ orderId: UUID_ORDER_PAID, state: "packing" }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders can be prepared"),
+      }),
     );
   });
 });

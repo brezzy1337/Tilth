@@ -321,6 +321,17 @@ export type OrderStatus = z.infer<typeof orderStatus>;
 export const fulfillmentMethod = z.enum(["pickup", "delivery"]);
 export type FulfillmentMethod = z.infer<typeof fulfillmentMethod>;
 
+/**
+ * Operational sub-state of a `paid` order, tracking seller prep progress.
+ * Orthogonal to `orderStatus` — moves no money. Progresses packing → ready while
+ * the order sits at `paid`; `orders.markFulfilled` (capture) is the step after
+ * `ready`, marking pickup/hand-off. Null on the order DTO means not yet started
+ * (freshly paid, prep not begun).
+ */
+export const orderPreparationState = z.enum(["packing", "ready"]);
+
+export type OrderPreparationState = z.infer<typeof orderPreparationState>;
+
 /** One line item within an order (input). */
 export const orderItem = z.object({
   listingId: z.string().uuid(),
@@ -376,6 +387,14 @@ export const markFulfilledInput = z.object({ orderId: z.string().uuid() });
 
 export type MarkFulfilledInput = z.infer<typeof markFulfilledInput>;
 
+/** Input to `orders.setPreparationState` (protected, caller must own the store). */
+export const setPreparationStateInput = z.object({
+  orderId: z.string().uuid(),
+  state: orderPreparationState,
+});
+
+export type SetPreparationStateInput = z.infer<typeof setPreparationStateInput>;
+
 /** Input to `orders.listForMyStore` (protected, caller must own the store). */
 export const listForMyStoreInput = z.object({
   cursor: z.string().optional(),
@@ -402,6 +421,8 @@ export const order = z.object({
   storeId: z.string().uuid(),
   buyerId: z.string().uuid(),
   status: orderStatus,
+  /** Operational prep progress while `status` is `paid`; null before prep starts. */
+  preparationState: orderPreparationState.nullable(),
   subtotalCents: z.number().int(),
   applicationFeeCents: z.number().int(),
   totalCents: z.number().int(),

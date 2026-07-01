@@ -64,6 +64,15 @@ export const orderFulfillmentMethodEnum = pgEnum("order_fulfillment_method", [
   "delivery",
 ]);
 
+/**
+ * F-029 — orthogonal operational sub-state for a 'paid' order (packing/prep progress).
+ * Progresses null → packing → ready. Moves NO money; independent of orderStatusEnum.
+ */
+export const orderPreparationStateEnum = pgEnum("order_preparation_state", [
+  "packing",
+  "ready",
+]);
+
 export const listingCategoryEnum = pgEnum("listing_category", [
   "vegetable",
   "fruit",
@@ -193,6 +202,8 @@ export const orders = pgTable(
       .notNull()
       .references(() => users.id),
     status: orderStatusEnum("status").notNull().default("pending_payment"),
+    /** F-029 — orthogonal packing/prep sub-state for 'paid' orders. Null = not started. */
+    preparationState: orderPreparationStateEnum("preparation_state"),
     subtotalCents: integer("subtotal_cents").notNull(),
     applicationFeeCents: integer("application_fee_cents").notNull(),
     totalCents: integer("total_cents").notNull(),
