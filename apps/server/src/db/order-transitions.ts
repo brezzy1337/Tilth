@@ -57,3 +57,42 @@ export async function markOrderPaid(dbOrTx: DbOrTx, piId: string): Promise<boole
   // nothing (order was already in a terminal state — idempotent re-delivery).
   return result.length > 0;
 }
+
+/**
+ * Idempotent `paid → fulfilled` transition.
+ *
+ * Runs:
+ *   UPDATE orders
+ *   SET status = 'fulfilled', updatedAt = now()
+ *   WHERE stripePaymentIntentId = piId
+ *     AND status = 'paid'
+ *
+ * This is the webhook backstop for `orders.markFulfilled`'s capture path: under
+ * manual capture, `payment_intent.succeeded` fires only on CAPTURE (i.e. at
+ * fulfillment). If the seller's capture call succeeded at Stripe but the app's
+ * own DB write was lost or reverted (e.g. a request timeout after the Stripe
+ * call returned), this webhook still self-heals the order to `fulfilled`.
+ *
+ * The `status = 'paid'` guard makes re-delivery safe: if the row is already
+ * fulfilled (or in any other terminal state) the WHERE clause matches nothing
+ * and the function returns false.
+ *
+ * @param dbOrTx  DB or transaction handle — callers inside a transaction pass `tx`.
+ * @param piId    Stripe PaymentIntent id (e.g. "pi_…").
+ * @returns       `true` if a row actually transitioned; `false` if it was already
+ *                in a non-paid state (duplicate delivery / re-run).
+ */
+export async function markOrderFulfilled(dbOrTx: DbOrTx, piId: string): Promise<boolean> {
+  const result = await (dbOrTx as Db)
+    .update(orders)
+    .set({ status: "fulfilled", updatedAt: new Date() })
+    .where(
+      and(
+        eq(orders.stripePaymentIntentId, piId),
+        eq(orders.status, "paid"),
+      ),
+    )
+    .returning({ id: orders.id });
+
+  return result.length > 0;
+}

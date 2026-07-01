@@ -25,6 +25,7 @@ const stubStripe: Context["stripe"] = {
   createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
   retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
   cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
+  capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
   refundPayment: async () => { throw new Error("stub: not implemented"); },
   createDashboardLink: async () => { throw new Error("stub: not implemented"); },
 };

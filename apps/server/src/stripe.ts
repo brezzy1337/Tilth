@@ -102,6 +102,10 @@ export function createStripeClient(
             destination: input.destinationAccountId,
           },
           metadata: input.metadata,
+          // Manual capture: funds are only AUTHORIZED here. Capture (and the
+          // resulting destination transfer + application fee) is deferred until
+          // the seller marks the order fulfilled (see routers/orders.ts markFulfilled).
+          capture_method: "manual",
         },
         { idempotencyKey: input.idempotencyKey },
       );
@@ -120,6 +124,11 @@ export function createStripeClient(
 
     async cancelPaymentIntent(id) {
       const pi = await stripe.paymentIntents.cancel(id);
+      return { status: pi.status };
+    },
+
+    async capturePaymentIntent(id) {
+      const pi = await stripe.paymentIntents.capture(id);
       return { status: pi.status };
     },
 

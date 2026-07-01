@@ -2,12 +2,16 @@
  * Orders router — M4 Payments backbone.
  *
  * `create`        — protected; builds an order from listing ids, creates a Stripe
- *                   destination-charge PaymentIntent, returns the clientSecret.
+ *                   destination-charge PaymentIntent (manual capture — funds are
+ *                   only AUTHORIZED here), returns the clientSecret.
  * `listMine`      — protected; returns the authenticated buyer's orders, newest first.
  * `get`           — protected; returns a single order (caller must be buyer or store owner).
  * `requestRefund` — protected; buyer requests a refund (sets refundRequestedAt).
- * `approveRefund` — protected; store owner approves a refund request (calls Stripe).
+ * `approveRefund` — protected; store owner approves a refund request (voids the
+ *                   authorization via Stripe if uncaptured, else refunds the capture).
  * `declineRefund` — protected; store owner declines a refund request (no Stripe call).
+ * `markFulfilled` — protected; store owner marks an order fulfilled, which CAPTURES
+ *                   the PaymentIntent — releasing the destination transfer + fee.
  * `listForMyStore`— protected; returns paginated orders for the caller's store, newest first.
  *
  * Rules that must hold here:
@@ -660,7 +664,12 @@ export const ordersRouter = router({
    * (refundApprovedAt set back to NULL) so the operation is retryable; the stable
    * idempotency key ensures a retried Stripe call is a no-op.
    *
-   * Does NOT set status='refunded' — the charge.refunded webhook is the source of truth.
+   * Under manual capture, the Stripe call branches on the order's status:
+   *   'paid'      → cancelPaymentIntent (void the uncaptured authorization).
+   *   'fulfilled' → refundPayment (reverse the captured transfer + fee).
+   *
+   * Does NOT set status='refunded'/'cancelled' — the charge.refunded /
+   * payment_intent.canceled webhooks are the source of truth.
    */
   approveRefund: protectedProcedure
     .input(approveRefundInput)
@@ -726,7 +735,7 @@ export const ordersRouter = router({
             isNull(orders.refundDeclinedAt),
           ),
         )
-        .returning({ id: orders.id });
+        .returning({ id: orders.id, status: orders.status });
 
       if (claimed.length === 0) {
         // Re-read to give a precise error message
@@ -749,20 +758,44 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No refund requested for this order" });
       }
 
+      // Decide the Stripe branch from the status the claim actually observed, not
+      // the earlier (non-atomic) pre-check read. The UPDATE above only touches
+      // refundApprovedAt/updatedAt, so the returned status is the row's status at
+      // claim time — race-free against a concurrent markFulfilled that captured the
+      // PI between the pre-check and the claim.
+      //   'paid'      → AUTHORIZED-BUT-UNCAPTURED: void the authorization
+      //                 (cancelPaymentIntent). No money moved; the
+      //                 payment_intent.canceled webhook flips status → cancelled.
+      //   'fulfilled' → captured: issue a real refund (refundPayment). The
+      //                 charge.refunded webhook flips status → refunded.
+      // Non-null: the `claimed.length === 0` guard above already returned/threw.
+      const wasUncaptured = claimed[0]!.status === "paid";
+
       // Claim won — call Stripe. On failure, revert the claim so the operation is retryable.
       try {
-        await ctx.stripe.refundPayment({
-          paymentIntentId,
-          idempotencyKey: `refund-${orderId}`,
-        });
+        if (wasUncaptured) {
+          // 'paid' → authorized but never captured. Void the authorization; no
+          // money moved. The payment_intent.canceled webhook is the source of
+          // truth for the resulting status='cancelled' transition.
+          await ctx.stripe.cancelPaymentIntent(paymentIntentId);
+        } else {
+          // 'fulfilled' → captured. Reverse the transfer + platform fee exactly
+          // as before. The charge.refunded webhook is the source of truth for
+          // the resulting status='refunded' transition.
+          await ctx.stripe.refundPayment({
+            paymentIntentId,
+            idempotencyKey: `refund-${orderId}`,
+          });
+        }
       } catch (err) {
         // Revert the claim: clear refundApprovedAt so a retry can re-enter the claim path.
         // Scoped to the exact timestamp this call set so a concurrent caller's claim is
         // never accidentally cleared. The stable idempotency key makes a retried Stripe call
         // a no-op if the first actually succeeded despite throwing (network timeout, etc.).
-        // Edge case: if Stripe timed out but actually processed the refund, the
-        // charge.refunded webhook will arrive and set status='refunded'; the restored
-        // status gate (above) will then block any subsequent re-claim, self-healing the race.
+        // Edge case: if Stripe timed out but actually processed the void/refund, the
+        // payment_intent.canceled / charge.refunded webhook will arrive and set the
+        // terminal status; the restored status gate (above) will then block any
+        // subsequent re-claim, self-healing the race.
         await ctx.db
           .update(orders)
           .set({ refundApprovedAt: null, updatedAt: new Date() })
@@ -863,8 +896,10 @@ export const ordersRouter = router({
    * Mark an order as fulfilled (SELLER / store owner only).
    *
    * Transition: paid → fulfilled.
-   * This is a seller operational action, not a Stripe/webhook concern.
-   * Webhooks own payment state (paid, refunded, disputed); fulfillment is seller-set.
+   * This is a seller operational action, not a Stripe/webhook concern for the DB
+   * claim — but under manual capture it IS the action that releases money: once
+   * the claim wins, this procedure captures the PaymentIntent, which triggers the
+   * destination transfer + application fee to the seller.
    *
    * Uses an atomic guarded UPDATE to prevent races:
    *   UPDATE orders SET status = 'fulfilled', updatedAt = now()
@@ -873,7 +908,15 @@ export const ordersRouter = router({
    * A 0-row result means the order's status changed between the pre-check read
    * and the guarded UPDATE — surfaces as BAD_REQUEST with the same message as the
    * pre-check so the error is unambiguous without leaking concurrent state.
-   * No Stripe call is made.
+   *
+   * Only the claim winner calls Stripe. On capture failure, we first CONFIRM the
+   * PaymentIntent's real status: if Stripe actually captured it (a false-negative
+   * throw, e.g. a network timeout), the 'fulfilled' claim is kept; otherwise the
+   * claim is reverted (status set back to 'paid') so the operation is retryable —
+   * mirrors the revert-on-Stripe-failure pattern in `approveRefund`. Reverting to
+   * 'paid' also re-arms the `payment_intent.succeeded` webhook backstop
+   * (`markOrderFulfilled`, guarded on 'paid') as a second line of recovery — see
+   * webhook.ts.
    */
   markFulfilled: protectedProcedure
     .input(markFulfilledInput)
@@ -903,6 +946,14 @@ export const ordersRouter = router({
         });
       }
 
+      if (!foundOrder.stripePaymentIntentId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Order has no payment intent; cannot capture",
+        });
+      }
+
+      const paymentIntentId = foundOrder.stripePaymentIntentId;
       const now = new Date();
       // Atomic guarded UPDATE — prevents races where a concurrent webhook or seller
       // action transitions the order out of 'paid' between the pre-check and this UPDATE.
@@ -925,6 +976,45 @@ export const ordersRouter = router({
           code: "BAD_REQUEST",
           message: "Only paid orders can be marked fulfilled",
         });
+      }
+
+      // Claim won — capture the PaymentIntent, releasing funds to the seller via
+      // the destination transfer + application fee.
+      try {
+        await ctx.stripe.capturePaymentIntent(paymentIntentId);
+      } catch (err) {
+        // The capture call threw — but it may have actually SUCCEEDED at Stripe
+        // (e.g. a network timeout after Stripe processed it). We must not blindly
+        // revert 'fulfilled' → 'paid': the claim already flipped the row to
+        // 'fulfilled', which starves the payment_intent.succeeded webhook backstop
+        // (guarded on status='paid'), so a blind revert could permanently strand a
+        // genuinely-captured order at 'paid' with no future event to correct it.
+        //
+        // Confirm the PI's real state before deciding:
+        let piStatus: string | undefined;
+        try {
+          piStatus = (await ctx.stripe.retrievePaymentIntent(paymentIntentId)).status;
+        } catch {
+          // Couldn't confirm — fall through and revert to the recoverable 'paid'
+          // state (see below), which is the safe default.
+        }
+
+        if (piStatus === "succeeded") {
+          // Capture actually happened; money is released. Keep the 'fulfilled'
+          // claim and return success — the thrown error was a false negative.
+          return loadOrderById(ctx.db, orderId);
+        }
+
+        // Not confirmed captured (or couldn't check) — revert 'fulfilled' → 'paid',
+        // scoped to this exact order+status. Reverting to 'paid' is deliberate: it
+        // restores the webhook guard so BOTH a manual retry and the
+        // payment_intent.succeeded backstop can recover if the capture later turns
+        // out to have succeeded.
+        await ctx.db
+          .update(orders)
+          .set({ status: "paid", updatedAt: new Date() })
+          .where(and(eq(orders.id, orderId), eq(orders.status, "fulfilled")));
+        throw err;
       }
 
       return loadOrderById(ctx.db, orderId);

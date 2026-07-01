@@ -21,6 +21,11 @@
  *     - charge.dispute.created → order transitions to 'disputed'.
  *     - account.updated → calls retrieveAccountStatus (not payload), writes authoritative flags.
  *     - payment_intent.payment_failed → no-op (no update).
+ *
+ *   handleStripeEvent — manual-capture (F-026) event handlers:
+ *     - payment_intent.amount_capturable_updated → order transitions to 'paid' (authorization).
+ *     - payment_intent.succeeded → order transitions to 'fulfilled' (capture, not authorization).
+ *     - payment_intent.canceled → cancels from BOTH 'pending_payment' and 'paid'.
  */
 
 import { describe, it, expect, vi } from "vitest";

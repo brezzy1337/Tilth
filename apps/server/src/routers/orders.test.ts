@@ -62,6 +62,7 @@ function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["st
     }),
     retrievePaymentIntent: async () => ({ status: "succeeded" }),
     cancelPaymentIntent: async () => ({ status: "canceled" }),
+    capturePaymentIntent: async () => ({ status: "succeeded" }),
     refundPayment: async () => ({ id: "re_stub", status: "succeeded", amountRefunded: 0 }),
     createDashboardLink: async () => ({ url: "https://connect.stripe.com/express/dashboard/test" }),
     ...overrides,
@@ -1334,12 +1335,13 @@ describe("orders.requestRefund", () => {
 // ---------------------------------------------------------------------------
 
 describe("orders.approveRefund", () => {
-  it("claim wins: calls refundPayment with stable idempotencyKey and sets refundApprovedAt — does NOT change status", async () => {
+  it("claim wins on a FULFILLED (captured) order: calls refundPayment with stable idempotencyKey and sets refundApprovedAt — does NOT change status", async () => {
     const refundPayment = vi.fn().mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
+    const cancelPaymentIntent = vi.fn();
     const updates: unknown[] = [];
 
     const orderRow = makeOrderRow({
-      status: "paid",
+      status: "fulfilled",
       refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
       storeUserId: UUID_SELLER,
     });
@@ -1357,11 +1359,11 @@ describe("orders.approveRefund", () => {
         [],           // order items
       ],
       updateSequence: [
-        [{ id: UUID_ORDER_PAID }], // claim wins
+        [{ id: UUID_ORDER_PAID, status: "fulfilled" }], // claim wins (captured → refund branch)
       ],
       captureUpdates: updates,
       userId: UUID_SELLER,
-      stripeOverrides: { refundPayment },
+      stripeOverrides: { refundPayment, cancelPaymentIntent },
     });
     const caller = createCaller(ctx);
 
@@ -1373,6 +1375,8 @@ describe("orders.approveRefund", () => {
     expect(refundCall.paymentIntentId).toBe(STRIPE_PI_ID);
     expect(refundCall.idempotencyKey).toBe(`refund-${UUID_ORDER_PAID}`);
     expect(refundCall.amountCents).toBeUndefined();
+    // The uncaptured-void branch must NOT be taken for a fulfilled (captured) order.
+    expect(cancelPaymentIntent).not.toHaveBeenCalled();
 
     // The DB claim update must set refundApprovedAt but NOT status
     expect(updates).toHaveLength(1);
@@ -1382,7 +1386,52 @@ describe("orders.approveRefund", () => {
 
     // Return value must reflect the approved state
     expect(result.refundApprovedAt).toBe("2026-06-22T12:00:00.000Z");
-    // Status remains 'paid' — webhook transition is the source of truth
+    // Status remains 'fulfilled' — webhook transition is the source of truth
+    expect(result.status).toBe("fulfilled");
+  });
+
+  it("claim wins on a PAID (authorized-but-uncaptured) order: voids the authorization via cancelPaymentIntent, NOT refundPayment", async () => {
+    const refundPayment = vi.fn();
+    const cancelPaymentIntent = vi.fn().mockResolvedValue({ status: "canceled" });
+    const updates: unknown[] = [];
+
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow],  // slot 0 — innerJoin load
+        [{ ...orderRow, refundApprovedAt: new Date("2026-06-22T12:00:00Z") }], // re-fetch
+        [],           // order items
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID, status: "paid" }], // claim wins (uncaptured → void branch)
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { refundPayment, cancelPaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.approveRefund({ orderId: UUID_ORDER_PAID });
+
+    // Under manual capture, a 'paid' order has no captured charge — void the
+    // authorization instead of refunding.
+    expect(cancelPaymentIntent).toHaveBeenCalledOnce();
+    expect(cancelPaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
+    expect(refundPayment).not.toHaveBeenCalled();
+
+    // The DB claim update must set refundApprovedAt but NOT status — the
+    // payment_intent.canceled webhook is the source of truth for 'cancelled'.
+    expect(updates).toHaveLength(1);
+    const updatePayload = updates[0] as Record<string, unknown>;
+    expect(updatePayload.refundApprovedAt).toBeInstanceOf(Date);
+    expect(updatePayload).not.toHaveProperty("status");
+
+    expect(result.refundApprovedAt).toBe("2026-06-22T12:00:00.000Z");
     expect(result.status).toBe("paid");
   });
 
@@ -1424,13 +1473,13 @@ describe("orders.approveRefund", () => {
     expect(refundPayment).not.toHaveBeenCalled();
   });
 
-  it("Stripe failure: revert UPDATE (refundApprovedAt → null) is issued and error rethrown", async () => {
+  it("Stripe failure (refundPayment, fulfilled order): revert UPDATE (refundApprovedAt → null) is issued and error rethrown", async () => {
     const stripeError = new Error("Stripe network timeout");
     const refundPayment = vi.fn().mockRejectedValue(stripeError);
     const updates: unknown[] = [];
 
     const orderRow = makeOrderRow({
-      status: "paid",
+      status: "fulfilled",
       refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
       storeUserId: UUID_SELLER,
     });
@@ -1443,7 +1492,7 @@ describe("orders.approveRefund", () => {
         [orderRow], // initial innerJoin load
       ],
       updateSequence: [
-        [{ id: UUID_ORDER_PAID }], // claim wins
+        [{ id: UUID_ORDER_PAID, status: "fulfilled" }], // claim wins (captured → refund branch)
         [{ id: UUID_ORDER_PAID }], // revert succeeds
       ],
       captureUpdates: updates,
@@ -1466,6 +1515,46 @@ describe("orders.approveRefund", () => {
     expect(claimPayload.refundApprovedAt).toBeInstanceOf(Date);
 
     // Revert sets refundApprovedAt to null so the operation is retryable
+    expect(revertPayload.refundApprovedAt).toBeNull();
+  });
+
+  it("Stripe failure (cancelPaymentIntent, paid/uncaptured order): revert UPDATE (refundApprovedAt → null) is issued and error rethrown", async () => {
+    const stripeError = new Error("Stripe network timeout");
+    const cancelPaymentIntent = vi.fn().mockRejectedValue(stripeError);
+    const refundPayment = vi.fn();
+    const updates: unknown[] = [];
+
+    const orderRow = makeOrderRow({
+      status: "paid",
+      refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+      storeUserId: UUID_SELLER,
+    });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // initial innerJoin load
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID, status: "paid" }], // claim wins (uncaptured → void branch)
+        [{ id: UUID_ORDER_PAID }], // revert succeeds
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { cancelPaymentIntent, refundPayment },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow("Stripe network timeout");
+
+    expect(cancelPaymentIntent).toHaveBeenCalledOnce();
+    expect(refundPayment).not.toHaveBeenCalled();
+
+    expect(updates).toHaveLength(2);
+    const claimPayload = updates[0] as Record<string, unknown>;
+    const revertPayload = updates[1] as Record<string, unknown>;
+    expect(claimPayload.refundApprovedAt).toBeInstanceOf(Date);
     expect(revertPayload.refundApprovedAt).toBeNull();
   });
 
@@ -1853,8 +1942,9 @@ describe("orders.declineRefund", () => {
 // ---------------------------------------------------------------------------
 
 describe("orders.markFulfilled", () => {
-  it("store owner marks a paid order fulfilled — sets status='fulfilled', returns updated order", async () => {
+  it("store owner marks a paid order fulfilled — captures the PI, sets status='fulfilled', returns updated order", async () => {
     const updates: unknown[] = [];
+    const capturePaymentIntent = vi.fn().mockResolvedValue({ status: "succeeded" });
     const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
     const fulfilledRow = { ...orderRow, status: "fulfilled", updatedAt: new Date("2026-06-22T14:00:00Z") };
 
@@ -1875,6 +1965,7 @@ describe("orders.markFulfilled", () => {
       ],
       captureUpdates: updates,
       userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent },
     });
     const caller = createCaller(ctx);
 
@@ -1886,7 +1977,117 @@ describe("orders.markFulfilled", () => {
     expect(updatePayload.status).toBe("fulfilled");
     expect(updatePayload.updatedAt).toBeInstanceOf(Date);
 
+    // The claim winner must capture the PaymentIntent — this is what actually
+    // releases money (destination transfer + application fee) to the seller.
+    expect(capturePaymentIntent).toHaveBeenCalledOnce();
+    expect(capturePaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
+
     // Return value must reflect the fulfilled state
+    expect(result.status).toBe("fulfilled");
+  });
+
+  it("rejects with PRECONDITION_FAILED when stripePaymentIntentId is missing — no claim attempted", async () => {
+    const updates: unknown[] = [];
+    const capturePaymentIntent = vi.fn();
+    const orderRow = makeOrderRow({
+      status: "paid",
+      stripePaymentIntentId: null,
+      storeUserId: UUID_SELLER,
+    });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [[orderRow]],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
+
+    expect(capturePaymentIntent).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it("Stripe capture failure (PI genuinely uncaptured): reverts status back to 'paid' and rethrows", async () => {
+    const stripeError = new Error("Stripe network timeout");
+    const capturePaymentIntent = vi.fn().mockRejectedValue(stripeError);
+    // Confirm-on-failure retrieve reports the PI is NOT captured → revert is correct.
+    const retrievePaymentIntent = vi.fn().mockResolvedValue({ status: "requires_capture" });
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    // updateSequence:
+    //   call 0 — guarded claim UPDATE (succeeds, returns a row)
+    //   call 1 — revert UPDATE (sets status back to 'paid')
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // initial innerJoin load
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID }], // claim wins
+        [{ id: UUID_ORDER_PAID }], // revert succeeds
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent, retrievePaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
+    ).rejects.toThrow("Stripe network timeout");
+
+    expect(capturePaymentIntent).toHaveBeenCalledOnce();
+    expect(capturePaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
+    // The failure path must confirm the PI's real state before reverting.
+    expect(retrievePaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
+
+    // Two updates must have been issued: the claim and the revert
+    expect(updates).toHaveLength(2);
+    const claimPayload = updates[0] as Record<string, unknown>;
+    const revertPayload = updates[1] as Record<string, unknown>;
+
+    expect(claimPayload.status).toBe("fulfilled");
+
+    // Revert sets status back to 'paid' so the seller can retry marking fulfilled.
+    expect(revertPayload.status).toBe("paid");
+    expect(revertPayload.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it("Stripe capture throws but PI actually succeeded (false negative): keeps 'fulfilled', does NOT revert", async () => {
+    // capture() rejects (e.g. a timeout AFTER Stripe processed the capture) …
+    const capturePaymentIntent = vi.fn().mockRejectedValue(new Error("network timeout"));
+    // … but confirming the PI shows it really is captured. Money moved — the order
+    // must stay 'fulfilled' and NOT be stranded back at 'paid'.
+    const retrievePaymentIntent = vi.fn().mockResolvedValue({ status: "succeeded" });
+    const updates: unknown[] = [];
+    const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
+
+    const ctx = makeRefundCtx({
+      selectSequence: [
+        [orderRow], // slot 0 — innerJoin load
+        [makeOrderRow({ status: "fulfilled", storeUserId: UUID_SELLER })], // slot 1 — loadOrderById re-fetch
+        [], // slot 2 — loadOrderById order items
+      ],
+      updateSequence: [
+        [{ id: UUID_ORDER_PAID }], // claim wins
+      ],
+      captureUpdates: updates,
+      userId: UUID_SELLER,
+      stripeOverrides: { capturePaymentIntent, retrievePaymentIntent },
+    });
+    const caller = createCaller(ctx);
+
+    const result = await caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID });
+
+    expect(capturePaymentIntent).toHaveBeenCalledOnce();
+    expect(retrievePaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
+    // Only the claim UPDATE ran — NO revert.
+    expect(updates).toHaveLength(1);
+    expect((updates[0] as Record<string, unknown>).status).toBe("fulfilled");
     expect(result.status).toBe("fulfilled");
   });
 

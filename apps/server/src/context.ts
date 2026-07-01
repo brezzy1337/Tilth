@@ -103,6 +103,17 @@ export interface StripeClient {
    */
   cancelPaymentIntent(id: string): Promise<{ status: string }>;
   /**
+   * Capture a previously-authorized (manual-capture) PaymentIntent.
+   *
+   * Under HomeGrown's manual-capture destination-charge flow, `createPaymentIntent`
+   * only AUTHORIZES funds; capture is deferred until the seller marks the order
+   * fulfilled (`orders.markFulfilled`). Capturing is what actually moves money —
+   * it triggers the destination transfer + application fee.
+   *
+   * Returns the new status (should be "succeeded" after a successful capture call).
+   */
+  capturePaymentIntent(id: string): Promise<{ status: string }>;
+  /**
    * Generate a one-time Express Dashboard login link for a connected account.
    * Only works for Express accounts that have completed onboarding
    * (`details_submitted = true`). Callers must verify this before calling.

@@ -14,9 +14,17 @@
  *   already exists the handler short-circuits (returns without side effects). A
  *   crash mid-handler rolls back the claim so Stripe's retry reprocesses the event.
  *
- * Event dispatch:
- *   payment_intent.succeeded    → pending_payment → paid (idempotent via markOrderPaid)
- *   payment_intent.canceled     → pending_payment → cancelled (terminal)
+ * Event dispatch (manual-capture destination charges — F-026):
+ *   payment_intent.amount_capturable_updated → pending_payment → paid (idempotent via
+ *                                               markOrderPaid). This is the AUTHORIZATION
+ *                                               event under manual capture.
+ *   payment_intent.succeeded    → paid → fulfilled (idempotent via markOrderFulfilled).
+ *                                 Under manual capture this fires only on CAPTURE, i.e.
+ *                                 at fulfillment — see markOrderFulfilled's doc comment
+ *                                 for why this is a self-healing backstop.
+ *   payment_intent.canceled     → pending_payment|paid → cancelled (terminal). Covers both
+ *                                 a pre-authorization cancel and Stripe voiding an
+ *                                 authorized-but-uncaptured PI (e.g. ~7-day auth expiry).
  *   payment_intent.payment_failed → no-op (buyer can retry)
  *   charge.refunded             → update refundedCents; flip to refunded on full refund
  *   charge.dispute.created      → flip to disputed
@@ -31,10 +39,10 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type Stripe from "stripe";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import type { Db, StripeClient } from "./context";
 import { orders, stores, processedStripeEvents } from "./db/schema";
-import { markOrderPaid } from "./db/order-transitions";
+import { markOrderPaid, markOrderFulfilled } from "./db/order-transitions";
 
 // ---------------------------------------------------------------------------
 // HTTP-level handler — collects raw body, verifies signature, dispatches
@@ -173,26 +181,42 @@ export async function handleStripeEvent(
     // All DB operations inside the switch use `tx` (not `db`) so the side
     // effect and the claim commit atomically together.
     switch (event.type) {
-      case "payment_intent.succeeded": {
+      case "payment_intent.amount_capturable_updated": {
         const pi = event.data.object as Stripe.PaymentIntent;
-        // Idempotent: only transition pending_payment → paid.
+        // Manual capture: this is the AUTHORIZATION event (funds held, not yet
+        // captured). Idempotent: only transitions pending_payment → paid.
         // Re-delivery of an already-paid event is a no-op (markOrderPaid returns false).
         await markOrderPaid(tx, pi.id);
         break;
       }
 
+      case "payment_intent.succeeded": {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        // Under manual capture, "succeeded" fires only when the PI is CAPTURED —
+        // i.e. at fulfillment (orders.markFulfilled calls capturePaymentIntent).
+        // This is a self-healing backstop: if the capture succeeded at Stripe but
+        // the app's own DB write was lost or reverted (e.g. a request timeout
+        // after the Stripe call returned), this webhook still moves the order to
+        // fulfilled. Idempotent: only transitions paid → fulfilled.
+        await markOrderFulfilled(tx, pi.id);
+        break;
+      }
+
       case "payment_intent.canceled": {
         const pi = event.data.object as Stripe.PaymentIntent;
-        // Terminal transition: pending_payment → cancelled.
-        // Only cancels if the order is still in pending_payment; already-terminal
-        // orders are unaffected (idempotent).
+        // Terminal transition: pending_payment|paid → cancelled.
+        // Covers both a pre-authorization cancel (still pending_payment) and
+        // Stripe voiding an authorized-but-uncaptured PI (still paid) — e.g. the
+        // ~7-day auth expiry, or a seller/buyer cancel prior to fulfillment.
+        // Already-terminal orders (fulfilled, refunded, disputed, etc.) are
+        // unaffected (idempotent).
         await tx
           .update(orders)
           .set({ status: "cancelled", updatedAt: new Date() })
           .where(
             and(
               eq(orders.stripePaymentIntentId, pi.id),
-              eq(orders.status, "pending_payment"),
+              or(eq(orders.status, "pending_payment"), eq(orders.status, "paid")),
             ),
           );
         break;
