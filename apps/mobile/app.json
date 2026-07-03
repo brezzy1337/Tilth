@@ -44,11 +44,11 @@
         }
       ]
     ],
+    "owner": "digitalspace-development",
     "extra": {
       "eas": {
-        "projectId": "5784bb2b-cabd-4830-a504-34a6f8a28d7e"
+        "projectId": "7d7c10e7-8600-4005-94a3-a275457decbc"
       }
-    },
-    "owner": "brezzy1337"
+    }
   }
 }
