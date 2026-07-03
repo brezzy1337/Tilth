@@ -183,7 +183,7 @@ export function HomeScreen({ navigation }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>HomeGrown</Text>
+          <Text style={styles.headerTitle}>Tilth</Text>
           {user ? <Text style={styles.greeting}>Hi, {user.username}</Text> : null}
         </View>
         <View style={styles.headerActions}>

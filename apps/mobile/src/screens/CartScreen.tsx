@@ -108,7 +108,7 @@ export function CartScreen({ navigation }: Props) {
       if (!mountedRef.current) return;
       setCheckoutStatus("Initialising payment…");
       const { error: initErr } = await initPaymentSheet({
-        merchantDisplayName: "HomeGrown",
+        merchantDisplayName: "Tilth",
         paymentIntentClientSecret: clientSecret,
         returnURL: "homegrown://stripe-redirect",
       });

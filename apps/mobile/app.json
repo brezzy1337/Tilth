@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "HomeGrown",
+    "name": "Tilth",
     "slug": "homegrown",
     "scheme": "homegrown",
     "version": "1.0.0",
@@ -27,7 +27,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "HomeGrown uses your location to show nearby produce and farms."
+          "locationWhenInUsePermission": "Tilth uses your location to show nearby produce and farms."
         }
       ],
       [

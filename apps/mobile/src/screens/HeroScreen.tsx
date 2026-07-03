@@ -23,7 +23,7 @@ export function HeroScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.title}>HomeGrown</Text>
+        <Text style={styles.title}>Tilth</Text>
         <Text style={styles.subtitle}>Local food, straight from the source.</Text>
 
         <View style={styles.buttonRow}>
