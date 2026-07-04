@@ -3,8 +3,8 @@ packages:
   - "packages/*"
 
 # Supply-chain guard: only adopt package versions ≥ 7 days old (minutes).
-# NOTE: enforced by pnpm 10+. The repo pins pnpm@9.15.0, which ignores this key —
-# bump packageManager to pnpm@10 to make the cooldown real (see Milestone 1 notes).
+# Enforced by pnpm 10+ (the repo pins pnpm@10.34.3 in root package.json), so this
+# key is now active — installs hold back releases younger than the window.
 minimumReleaseAge: 10080
 
 # Single source of truth for dependency versions across the workspace.
