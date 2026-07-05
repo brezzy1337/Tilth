@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Tilth",
-    "slug": "homegrown",
+    "slug": "tilth",
     "scheme": "homegrown",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -47,7 +47,7 @@
     "owner": "digitalspace-development",
     "extra": {
       "eas": {
-        "projectId": "7d7c10e7-8600-4005-94a3-a275457decbc"
+        "projectId": "fcbbd927-bd96-4ef6-bbc0-28a14114f65f"
       }
     }
   }
