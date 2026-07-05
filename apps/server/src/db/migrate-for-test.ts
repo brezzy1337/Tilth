@@ -29,9 +29,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DRIZZLE_DIR = path.resolve(__dirname, "../../drizzle");
 
 // Arbitrary fixed key shared by every test file so they contend on the same
-// lock. Namespaced high to avoid clashing with any application advisory locks.
-const MIGRATION_ADVISORY_LOCK_KEY = 826_051_072; // "MIGR" as int32
+// lock. No application code uses advisory locks, so there is nothing to collide
+// with; any stable constant works as long as all callers use the same one.
+const MIGRATION_ADVISORY_LOCK_KEY = 826_051_072;
 
+/**
+ * @param client - MUST be a single-connection client (`postgres(url, { max: 1 })`).
+ *   The advisory lock is session-scoped: it only guards the migration if the
+ *   lock, `migrate()`, and unlock all run on the same physical connection. A
+ *   pooled client (`max > 1`) could split them across connections and silently
+ *   reintroduce the concurrent-migration race this helper exists to prevent.
+ * @param db - drizzle db wrapping that same client.
+ */
 export async function migrateForTest(
   client: ReturnType<typeof postgres>,
   db: Parameters<typeof migrate>[0],
