@@ -28,18 +28,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { eq } from "drizzle-orm";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type Stripe from "stripe";
 import * as schema from "./db/schema";
+import { migrateForTest } from "./db/migrate-for-test";
 import { handleStripeEvent } from "./webhook";
 import type { Db, StripeClient } from "./context";
 
 const TEST_DB_URL = process.env["TEST_DATABASE_URL"];
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DRIZZLE_DIR = path.resolve(__dirname, "../drizzle");
 
 // Guard: skip all tests if no TEST_DATABASE_URL provided
 const describeWithDb = TEST_DB_URL ? describe : describe.skip;
@@ -80,7 +75,7 @@ describeWithDb("handleStripeEvent — manual-capture transitions (PostGIS/Postgr
   beforeAll(async () => {
     client = postgres(TEST_DB_URL!, { max: 1 });
     db = drizzle(client, { schema });
-    await migrate(db, { migrationsFolder: DRIZZLE_DIR });
+    await migrateForTest(client, db);
 
     const [buyer] = await db
       .insert(schema.users)

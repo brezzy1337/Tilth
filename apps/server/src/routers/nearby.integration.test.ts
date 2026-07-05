@@ -21,9 +21,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { sql, eq } from "drizzle-orm";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { migrateForTest } from "../db/migrate-for-test";
 import * as schema from "../db/schema";
 import { appRouter } from "../router";
 import { createCallerFactory } from "../trpc";
@@ -31,9 +29,6 @@ import type { Context } from "../context";
 import * as authHelpers from "../auth";
 
 const TEST_DB_URL = process.env["TEST_DATABASE_URL"];
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DRIZZLE_DIR = path.resolve(__dirname, "../../drizzle");
 
 // Guard: skip all tests if no TEST_DATABASE_URL provided
 const describeWithDb = TEST_DB_URL ? describe : describe.skip;
@@ -87,7 +82,7 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
     db = drizzle(client, { schema });
 
     // Apply migrations (idempotent)
-    await migrate(db, { migrationsFolder: DRIZZLE_DIR });
+    await migrateForTest(client, db);
 
     // -----------------------------------------------------------------------
     // Seed: 3 stores at known coordinates
