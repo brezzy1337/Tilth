@@ -24,15 +24,17 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import { listingCategory, type ListingCategory } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useDeviceLocation } from "../location/useDeviceLocation";
-import type { AuthedStackParamList } from "../navigation/types";
+import type { SearchTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 
-type Props = NativeStackScreenProps<AuthedStackParamList, "Search">;
+type Props = Omit<BottomTabScreenProps<TabParamList, "Search">, "navigation"> & {
+  navigation: SearchTabNavigationProp;
+};
 
 // ---------------------------------------------------------------------------
 // Constants
