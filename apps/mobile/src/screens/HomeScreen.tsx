@@ -22,18 +22,20 @@ import {
   Text,
   View,
 } from "react-native";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import { listingCategory, type ListingCategory } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useCart } from "../cart/CartContext";
 import { useDeviceLocation } from "../location/useDeviceLocation";
-import type { AuthedStackParamList } from "../navigation/types";
+import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 
-type Props = NativeStackScreenProps<AuthedStackParamList, "Home">;
+type Props = Omit<BottomTabScreenProps<TabParamList, "Home">, "navigation"> & {
+  navigation: HomeTabNavigationProp;
+};
 
 // ---------------------------------------------------------------------------
 // Category filter bar
@@ -210,7 +212,7 @@ export function HomeScreen({ navigation }: Props) {
           >
             <Text style={styles.ordersButtonText}>Orders</Text>
           </Pressable>
-          <Pressable style={styles.standButton} onPress={() => navigation.navigate("YourStand")}>
+          <Pressable style={styles.standButton} onPress={() => navigation.navigate("Sell")}>
             <Text style={styles.standButtonText}>Your Stand</Text>
           </Pressable>
           <Pressable style={styles.signOutButton} onPress={() => void signOut()}>

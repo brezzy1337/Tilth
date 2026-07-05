@@ -29,6 +29,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { Ionicons } from "@expo/vector-icons";
 import { StripeProvider } from "@stripe/stripe-react-native";
 
 import { trpc, API_URL, getAuthToken } from "./src/api/trpc";
@@ -40,6 +42,8 @@ import { SignUpScreen } from "./src/screens/SignUpScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { SearchScreen } from "./src/screens/SearchScreen";
 import { YourStandScreen } from "./src/screens/YourStandScreen";
+import { MessagesScreen } from "./src/screens/MessagesScreen";
+import { LearnScreen } from "./src/screens/LearnScreen";
 import { CartScreen } from "./src/screens/CartScreen";
 import { OrdersScreen } from "./src/screens/OrdersScreen";
 import { OrderDetailScreen } from "./src/screens/OrderDetailScreen";
@@ -48,10 +52,85 @@ import { StoreProfileScreen } from "./src/screens/StoreProfileScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
+  TabParamList,
 } from "./src/navigation/types";
 
 const PreAuthStack = createNativeStackNavigator<PreAuthStackParamList>();
 const AuthedStack = createNativeStackNavigator<AuthedStackParamList>();
+const Tab = createBottomTabNavigator<TabParamList>();
+
+// ---------------------------------------------------------------------------
+// MainTabs — the 5-tab bottom navigation bar (Home, Search, Sell, Messages,
+// Learn). Detail/flow screens (Cart, Orders, OrderDetail, StoreOrders,
+// StoreProfile) are NOT tabs — they're pushed above this navigator from the
+// root AuthedStack.
+// ---------------------------------------------------------------------------
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        tabBarActiveTintColor: "#2d6a4f",
+        tabBarInactiveTintColor: "#8a8a8a",
+      }}
+    >
+      <Tab.Screen
+        name="Home"
+        component={HomeScreen}
+        options={{
+          headerShown: false,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "home" : "home-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Search"
+        component={SearchScreen}
+        options={{
+          title: "Search",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "search" : "search-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Sell"
+        component={YourStandScreen}
+        options={{
+          title: "Your Stand",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "leaf" : "leaf-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Messages"
+        component={MessagesScreen}
+        options={{
+          title: "Messages",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? "chatbubbles" : "chatbubbles-outline"}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Learn"
+        component={LearnScreen}
+        options={{
+          title: "Learn",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "book" : "book-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Inner component — reads auth status after providers are mounted
@@ -91,19 +170,9 @@ function RootNavigator() {
       ) : (
         <AuthedStack.Navigator>
           <AuthedStack.Screen
-            name="Home"
-            component={HomeScreen}
+            name="MainTabs"
+            component={MainTabs}
             options={{ headerShown: false }}
-          />
-          <AuthedStack.Screen
-            name="Search"
-            component={SearchScreen}
-            options={{ title: "Search" }}
-          />
-          <AuthedStack.Screen
-            name="YourStand"
-            component={YourStandScreen}
-            options={{ title: "Your Stand" }}
           />
           <AuthedStack.Screen
             name="Cart"
