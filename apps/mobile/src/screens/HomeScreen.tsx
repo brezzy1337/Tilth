@@ -13,7 +13,7 @@
  * React Native only — no DOM elements.
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -24,8 +24,9 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import MapView, { Marker, type Region } from "react-native-maps";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import { listingCategory, type ListingCategory } from "@homegrown/shared";
+import { listingCategory, type ListingCategory, type NearbyListing } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useCart } from "../cart/CartContext";
@@ -34,6 +35,42 @@ import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
+
+// ---------------------------------------------------------------------------
+// Map region fallback — used only when the device coords aren't usable for a
+// region (defensive; HomeScreen only mounts the map once location is
+// "granted", but MapSection keeps its own fallback chain in case that ever
+// changes upstream: user coords -> first listing's coords -> pilot-region
+// default, so the map never crashes on missing input).
+// ---------------------------------------------------------------------------
+
+const FALLBACK_REGION = {
+  // San Francisco — matches the server's nearby-query integration test fixtures.
+  latitude: 37.7749,
+  longitude: -122.4194,
+};
+
+const REGION_DELTA = {
+  latitudeDelta: 0.15,
+  longitudeDelta: 0.15,
+};
+
+function computeInitialRegion(
+  userCoords: { lat: number; lng: number } | undefined,
+  listings: NearbyListing[] | undefined,
+): Region {
+  const point: { lat: number; lng: number } =
+    userCoords ??
+    (listings && listings.length > 0
+      ? { lat: listings[0].lat, lng: listings[0].lng }
+      : { lat: FALLBACK_REGION.latitude, lng: FALLBACK_REGION.longitude });
+
+  return {
+    latitude: point.lat,
+    longitude: point.lng,
+    ...REGION_DELTA,
+  };
+}
 
 type Props = Omit<BottomTabScreenProps<TabParamList, "Home">, "navigation"> & {
   navigation: HomeTabNavigationProp;
@@ -80,6 +117,59 @@ function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
           </Pressable>
         )}
       />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MapSection — F-013 native map foundation. Prominent, fixed-height MapView
+// showing one Marker per grower (deduped by storeId, since a store's listings
+// all share the store's lat/lng). Tapping a Marker navigates to that store's
+// profile. This is the pre-rebuild phase: a plain map alongside the existing
+// list, NOT the full-screen-map + bottom-sheet layout (that's next, once
+// these native modules are compiled into a dev-client).
+//
+// Reuses the same { lat, lng, radiusKm: 25, category: undefined } query key
+// BrowseView issues by default (activeCategory "all" -> category undefined),
+// so TanStack Query dedupes the network request between the two sections.
+// ---------------------------------------------------------------------------
+
+type MapSectionProps = {
+  lat: number;
+  lng: number;
+  onNavigateToStore: (storeId: string, storeName: string) => void;
+};
+
+function MapSection({ lat, lng, onNavigateToStore }: MapSectionProps) {
+  const { data } = trpc.listings.nearby.useQuery({ lat, lng, radiusKm: 25 });
+
+  const storeMarkers = useMemo(() => {
+    const byStore = new Map<string, NearbyListing>();
+    for (const listing of data ?? []) {
+      if (!byStore.has(listing.storeId)) {
+        byStore.set(listing.storeId, listing);
+      }
+    }
+    return Array.from(byStore.values());
+  }, [data]);
+
+  const initialRegion = useMemo(
+    () => computeInitialRegion({ lat, lng }, data),
+    [lat, lng, data],
+  );
+
+  return (
+    <View style={styles.mapSection}>
+      <MapView style={styles.map} initialRegion={initialRegion}>
+        {storeMarkers.map((store) => (
+          <Marker
+            key={store.storeId}
+            coordinate={{ latitude: store.lat, longitude: store.lng }}
+            title={store.storeName}
+            onPress={() => onNavigateToStore(store.storeId, store.storeName)}
+          />
+        ))}
+      </MapView>
     </View>
   );
 }
@@ -254,6 +344,13 @@ export function HomeScreen({ navigation }: Props) {
 
       {location.status === "granted" && location.coords ? (
         <>
+          <MapSection
+            lat={location.coords.lat}
+            lng={location.coords.lng}
+            onNavigateToStore={(storeId, storeName) =>
+              navigation.navigate("StoreProfile", { storeId, storeName })
+            }
+          />
           <SeasonalModule
             onSelectProduce={(produceName) =>
               navigation.navigate("Search", { initialQuery: produceName })
@@ -360,6 +457,12 @@ const styles = StyleSheet.create({
     color: "#2d6a4f",
     fontWeight: "600",
   },
+  mapSection: {
+    height: 300,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e8eae8",
+  },
+  map: StyleSheet.absoluteFill,
   browseContainer: {
     flex: 1,
   },
