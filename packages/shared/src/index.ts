@@ -81,6 +81,55 @@ export const authResponse = z.object({
 export type AuthResponse = z.infer<typeof authResponse>;
 
 // ---------------------------------------------------------------------------
+// Trust tier — seller reliability badge (F-016)
+// Computed from TERMINAL order history only (fulfilled + cancelled + refunded);
+// pending_payment and paid orders are excluded (abandoned or still in-flight).
+// Defined ahead of `storeProfile` below, which surfaces it on the public profile.
+// ---------------------------------------------------------------------------
+
+/**
+ * Seller reliability badge earned from historical order fulfillment.
+ * Gold > Silver > Bronze; a store may also have no badge (see `computeTrustTier`).
+ */
+export const trustTier = z.enum(["bronze", "silver", "gold"]);
+
+export type TrustTier = z.infer<typeof trustTier>;
+
+/**
+ * Single source of truth for trust-tier thresholds, ordered highest tier first so
+ * `computeTrustTier` can return the first match. A seller earns a tier only when
+ * BOTH its fulfillment rate and terminal order volume meet or exceed the minimums.
+ */
+export const TRUST_TIER_THRESHOLDS = [
+  { tier: "gold", minRate: 0.97, minOrders: 30 },
+  { tier: "silver", minRate: 0.92, minOrders: 15 },
+  { tier: "bronze", minRate: 0.85, minOrders: 5 },
+] as const satisfies readonly { tier: TrustTier; minRate: number; minOrders: number }[];
+
+/**
+ * Pure function (no I/O) computing a seller's trust tier from terminal order counts.
+ * `terminal = fulfilled + cancelled + refunded` (pending_payment/paid excluded).
+ * Returns null when there is no terminal history, or when no threshold is met
+ * (including terminal < 5, the minimum for the lowest tier, bronze).
+ */
+export function computeTrustTier(counts: {
+  fulfilled: number;
+  cancelled: number;
+  refunded: number;
+}): TrustTier | null {
+  const terminal = counts.fulfilled + counts.cancelled + counts.refunded;
+  if (terminal === 0) return null;
+
+  const rate = counts.fulfilled / terminal;
+  for (const threshold of TRUST_TIER_THRESHOLDS) {
+    if (rate >= threshold.minRate && terminal >= threshold.minOrders) {
+      return threshold.tier;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Stores — create, get, and public store profile
 // Matches the `stores` entity in §2.1: one store per user for the pilot.
 // ---------------------------------------------------------------------------
@@ -118,12 +167,17 @@ export const store = z.object({
 
 export type Store = z.infer<typeof store>;
 
-/** Public store profile — safe subset returned by `stores.get` (no userId / Stripe ids). */
+/**
+ * Public store profile — safe subset returned by `stores.get` (no userId / Stripe ids).
+ * `trustTier` is the seller's computed reliability badge (see `computeTrustTier` below);
+ * null when the store has too little terminal order history to earn a badge.
+ */
 export const storeProfile = z.object({
   id: z.string().uuid(),
   name: z.string(),
   logo: z.string().nullable(),
   about: z.string().nullable(),
+  trustTier: trustTier.nullable(),
 });
 
 export type StoreProfile = z.infer<typeof storeProfile>;
