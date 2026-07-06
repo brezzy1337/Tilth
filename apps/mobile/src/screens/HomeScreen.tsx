@@ -5,7 +5,8 @@
  * Category filter chips: All + Vegetable / Fruit / Herb / Egg / Honey / Other.
  * Each listing card: name, category, price, unit, distance, storeName.
  *
- * Header: username greeting + Search + Sign Out + Your Stand button.
+ * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
+ * icons. Search and Sell live in the bottom tab bar (F-041), not here.
  *
  * States covered: loading (location or query), granted, denied, error, empty.
  *
@@ -22,6 +23,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import { listingCategory, type ListingCategory } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
@@ -189,34 +191,39 @@ export function HomeScreen({ navigation }: Props) {
           {user ? <Text style={styles.greeting}>Hi, {user.username}</Text> : null}
         </View>
         <View style={styles.headerActions}>
-          {/* Search entry point */}
+          {/* Orders — Search & Sell moved to the bottom tab bar (F-041) */}
           <Pressable
-            style={styles.searchButton}
-            onPress={() => navigation.navigate("Search")}
-          >
-            <Text style={styles.searchButtonText}>Search</Text>
-          </Pressable>
-          {/* Cart button with item-count badge */}
-          <Pressable
-            style={styles.cartButton}
-            onPress={() => navigation.navigate("Cart")}
-          >
-            <Text style={styles.cartButtonText}>
-              Cart{itemCount > 0 ? ` (${itemCount})` : ""}
-            </Text>
-          </Pressable>
-          {/* Orders button */}
-          <Pressable
-            style={styles.ordersButton}
+            style={styles.iconButton}
             onPress={() => navigation.navigate("Orders")}
+            accessibilityRole="button"
+            accessibilityLabel="Orders"
           >
-            <Text style={styles.ordersButtonText}>Orders</Text>
+            <Ionicons name="receipt-outline" size={22} color="#2d6a4f" />
           </Pressable>
-          <Pressable style={styles.standButton} onPress={() => navigation.navigate("Sell")}>
-            <Text style={styles.standButtonText}>Your Stand</Text>
+          {/* Cart with item-count badge */}
+          <Pressable
+            style={styles.iconButton}
+            onPress={() => navigation.navigate("Cart")}
+            accessibilityRole="button"
+            accessibilityLabel={`Cart${itemCount > 0 ? `, ${itemCount} items` : ""}`}
+          >
+            <Ionicons name="cart-outline" size={24} color="#2d6a4f" />
+            {itemCount > 0 ? (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>
+                  {itemCount > 9 ? "9+" : itemCount}
+                </Text>
+              </View>
+            ) : null}
           </Pressable>
-          <Pressable style={styles.signOutButton} onPress={() => void signOut()}>
-            <Text style={styles.signOutText}>Sign Out</Text>
+          {/* Sign out — subtle account control */}
+          <Pressable
+            style={styles.iconButton}
+            onPress={() => void signOut()}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+          >
+            <Ionicons name="log-out-outline" size={22} color="#888" />
           </Pressable>
         </View>
       </View>
@@ -300,64 +307,26 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: "center",
   },
-  cartButton: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+  iconButton: {
+    padding: 6,
+    position: "relative",
   },
-  cartButtonText: {
+  cartBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: "#e63946",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartBadgeText: {
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  ordersButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  ordersButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  standButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
-  standButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  signOutButton: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  signOutText: {
-    color: "#888",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  searchButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  searchButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
+    fontSize: 10,
+    fontWeight: "700",
   },
   seasonalSection: {
     backgroundColor: "#fff",
