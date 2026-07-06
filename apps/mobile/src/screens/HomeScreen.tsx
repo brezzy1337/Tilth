@@ -1,19 +1,29 @@
 /**
- * HomeScreen — marketplace browse.
+ * HomeScreen — marketplace browse, Airbnb-style map + draggable sheet (F-013).
  *
- * Shows nearby produce listings using device GPS (expo-location).
- * Category filter chips: All + Vegetable / Fruit / Herb / Egg / Honey / Other.
- * Each listing card: name, category, price, unit, distance, storeName.
+ * Layout: once location is "granted", a full-screen MapView fills the body
+ * (one Marker per grower, deduped by storeId — a store's listings share the
+ * store's lat/lng) with a draggable `BottomSheet` docked over it. The sheet
+ * has three snap points (peek / half / full) and contains the "In season
+ * now" chips, the category filter bar, and the listings list — all rendered
+ * via `BottomSheetFlatList` so drag-to-resize and list-scroll gestures
+ * compose correctly.
+ *
+ * Both the map markers and the sheet list read from a single, shared
+ * `trpc.listings.nearby.useQuery` call (one network request; category filter
+ * lives in HomeScreen and flows down, so pins update live with the filter).
  *
  * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
  * icons. Search and Sell live in the bottom tab bar (F-041), not here.
  *
  * States covered: loading (location or query), granted, denied, error, empty.
+ * The denied/error/loading location states render in place of the map+sheet,
+ * unchanged from before.
  *
  * React Native only — no DOM elements.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -25,6 +35,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, type Region } from "react-native-maps";
+import BottomSheet, { BottomSheetFlatList } from "@gorhom/bottom-sheet";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import { listingCategory, type ListingCategory, type NearbyListing } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
@@ -122,27 +133,22 @@ function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
 }
 
 // ---------------------------------------------------------------------------
-// MapSection — F-013 native map foundation. Prominent, fixed-height MapView
-// showing one Marker per grower (deduped by storeId, since a store's listings
+// MapSection — full-screen MapView (fills the body behind the bottom sheet).
+// Shows one Marker per grower (deduped by storeId, since a store's listings
 // all share the store's lat/lng). Tapping a Marker navigates to that store's
-// profile. This is the pre-rebuild phase: a plain map alongside the existing
-// list, NOT the full-screen-map + bottom-sheet layout (that's next, once
-// these native modules are compiled into a dev-client).
-//
-// Reuses the same { lat, lng, radiusKm: 25, category: undefined } query key
-// BrowseView issues by default (activeCategory "all" -> category undefined),
-// so TanStack Query dedupes the network request between the two sections.
+// profile. Takes the shared query's `data` as a prop — HomeScreen owns the
+// single `trpc.listings.nearby.useQuery` call so the map and the sheet list
+// stay in sync off one network request.
 // ---------------------------------------------------------------------------
 
 type MapSectionProps = {
   lat: number;
   lng: number;
+  data: NearbyListing[] | undefined;
   onNavigateToStore: (storeId: string, storeName: string) => void;
 };
 
-function MapSection({ lat, lng, onNavigateToStore }: MapSectionProps) {
-  const { data } = trpc.listings.nearby.useQuery({ lat, lng, radiusKm: 25 });
-
+function MapSection({ lat, lng, data, onNavigateToStore }: MapSectionProps) {
   const storeMarkers = useMemo(() => {
     const byStore = new Map<string, NearbyListing>();
     for (const listing of data ?? []) {
@@ -159,106 +165,192 @@ function MapSection({ lat, lng, onNavigateToStore }: MapSectionProps) {
   );
 
   return (
-    <View style={styles.mapSection}>
-      <MapView style={styles.map} initialRegion={initialRegion}>
-        {storeMarkers.map((store) => (
-          <Marker
-            key={store.storeId}
-            coordinate={{ latitude: store.lat, longitude: store.lng }}
-            title={store.storeName}
-            onPress={() => onNavigateToStore(store.storeId, store.storeName)}
-          />
-        ))}
-      </MapView>
-    </View>
+    <MapView style={styles.map} initialRegion={initialRegion}>
+      {storeMarkers.map((store) => (
+        <Marker
+          key={store.storeId}
+          coordinate={{ latitude: store.lat, longitude: store.lng }}
+          title={store.storeName}
+          onPress={() => onNavigateToStore(store.storeId, store.storeName)}
+        />
+      ))}
+    </MapView>
   );
 }
 
 // ---------------------------------------------------------------------------
-// BrowseView — rendered once coords are available
+// CategoryFilterBar — extracted so it can be reused as the sheet's list
+// header alongside SeasonalModule.
 // ---------------------------------------------------------------------------
 
-type BrowseViewProps = {
-  lat: number;
-  lng: number;
+type CategoryFilterBarProps = {
+  activeCategory: FilterCategory;
+  onSelectCategory: (category: FilterCategory) => void;
+};
+
+function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterBarProps) {
+  return (
+    <FlatList
+      data={FILTER_OPTIONS}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyExtractor={(item) => item.value}
+      contentContainerStyle={styles.filterBar}
+      renderItem={({ item }) => (
+        <Pressable
+          style={[
+            styles.filterChip,
+            activeCategory === item.value ? styles.filterChipActive : null,
+          ]}
+          onPress={() => onSelectCategory(item.value)}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              activeCategory === item.value ? styles.filterChipTextActive : null,
+            ]}
+          >
+            {item.label}
+          </Text>
+        </Pressable>
+      )}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ListingsSheet — the draggable bottom sheet. Uses BottomSheetFlatList (not a
+// plain FlatList) so drag-to-resize and list-scroll gestures compose: a plain
+// FlatList inside a BottomSheet breaks that gesture handoff. SeasonalModule
+// and the category filter bar are the list's ListHeaderComponent so they
+// scroll away with the list rather than eating fixed sheet height.
+// ---------------------------------------------------------------------------
+
+const SHEET_SNAP_POINTS = ["14%", "48%", "90%"];
+
+type ListingsSheetProps = {
+  data: NearbyListing[] | undefined;
+  isLoading: boolean;
+  error: { message: string } | null | undefined;
+  onRetry: () => void;
+  activeCategory: FilterCategory;
+  onSelectCategory: (category: FilterCategory) => void;
+  onSelectProduce: (produceName: string) => void;
   onNavigateToStore: (storeId: string, storeName: string) => void;
 };
 
-function BrowseView({ lat, lng, onNavigateToStore }: BrowseViewProps) {
+function ListingsSheet({
+  data,
+  isLoading,
+  error,
+  onRetry,
+  activeCategory,
+  onSelectCategory,
+  onSelectProduce,
+  onNavigateToStore,
+}: ListingsSheetProps) {
+  const header = useMemo(
+    () => (
+      <View>
+        <SeasonalModule onSelectProduce={onSelectProduce} />
+        <CategoryFilterBar activeCategory={activeCategory} onSelectCategory={onSelectCategory} />
+
+        {isLoading && (
+          <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
+        )}
+
+        {error ? (
+          <View style={styles.sheetCenteredState}>
+            <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
+            <Pressable style={styles.retryButton} onPress={onRetry}>
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {!isLoading && !error && data && data.length === 0 ? (
+          <View style={styles.sheetCenteredState}>
+            <Text style={styles.stateText}>No produce nearby.</Text>
+            <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
+          </View>
+        ) : null}
+      </View>
+    ),
+    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce],
+  );
+
+  return (
+    <BottomSheet
+      index={1}
+      snapPoints={SHEET_SNAP_POINTS}
+      handleIndicatorStyle={styles.sheetHandleIndicator}
+      backgroundStyle={styles.sheetBackground}
+    >
+      <BottomSheetFlatList
+        data={data ?? []}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={header}
+        renderItem={({ item }) => (
+          <ListingCard
+            item={item}
+            onPressStore={() => onNavigateToStore(item.storeId, item.storeName)}
+          />
+        )}
+      />
+    </BottomSheet>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MapWithSheet — the granted-location body. Owns `activeCategory` and the
+// single shared `trpc.listings.nearby.useQuery` call so the full-screen map
+// markers and the sheet's listing list read from the same network request
+// and stay in sync when the category filter changes.
+// ---------------------------------------------------------------------------
+
+type MapWithSheetProps = {
+  lat: number;
+  lng: number;
+  onNavigateToStore: (storeId: string, storeName: string) => void;
+  onSelectProduce: (produceName: string) => void;
+};
+
+function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce }: MapWithSheetProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
 
   const category: ListingCategory | undefined =
     activeCategory === "all" ? undefined : activeCategory;
 
   const { data, isLoading, error, refetch } = trpc.listings.nearby.useQuery(
-    { lat, lng, radiusKm: 25, category },
-    { enabled: true },
+    {
+      lat,
+      lng,
+      radiusKm: 25,
+      category,
+    },
+    // Keep prior results while a category switch refetches — otherwise the
+    // map pins all vanish until the new response lands.
+    { placeholderData: (prev) => prev },
   );
 
+  const handleRetry = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
   return (
-    <View style={styles.browseContainer}>
-      {/* Category filter chips */}
-      <FlatList
-        data={FILTER_OPTIONS}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyExtractor={(item) => item.value}
-        contentContainerStyle={styles.filterBar}
-        renderItem={({ item }) => (
-          <Pressable
-            style={[
-              styles.filterChip,
-              activeCategory === item.value ? styles.filterChipActive : null,
-            ]}
-            onPress={() => setActiveCategory(item.value)}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                activeCategory === item.value ? styles.filterChipTextActive : null,
-              ]}
-            >
-              {item.label}
-            </Text>
-          </Pressable>
-        )}
+    <View style={styles.mapWithSheetContainer}>
+      <MapSection lat={lat} lng={lng} data={data} onNavigateToStore={onNavigateToStore} />
+      <ListingsSheet
+        data={data}
+        isLoading={isLoading}
+        error={error}
+        onRetry={handleRetry}
+        activeCategory={activeCategory}
+        onSelectCategory={setActiveCategory}
+        onSelectProduce={onSelectProduce}
+        onNavigateToStore={onNavigateToStore}
       />
-
-      {/* Listings */}
-      {isLoading && (
-        <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
-      )}
-
-      {error ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {!isLoading && !error && data && data.length === 0 ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>No produce nearby.</Text>
-          <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
-        </View>
-      ) : null}
-
-      {data && data.length > 0 ? (
-        <FlatList
-          data={data}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          scrollEnabled={false}
-          renderItem={({ item }) => (
-            <ListingCard
-              item={item}
-              onPressStore={() => onNavigateToStore(item.storeId, item.storeName)}
-            />
-          )}
-        />
-      ) : null}
     </View>
   );
 }
@@ -343,27 +435,16 @@ export function HomeScreen({ navigation }: Props) {
       ) : null}
 
       {location.status === "granted" && location.coords ? (
-        <>
-          <MapSection
-            lat={location.coords.lat}
-            lng={location.coords.lng}
-            onNavigateToStore={(storeId, storeName) =>
-              navigation.navigate("StoreProfile", { storeId, storeName })
-            }
-          />
-          <SeasonalModule
-            onSelectProduce={(produceName) =>
-              navigation.navigate("Search", { initialQuery: produceName })
-            }
-          />
-          <BrowseView
-            lat={location.coords.lat}
-            lng={location.coords.lng}
-            onNavigateToStore={(storeId, storeName) =>
-              navigation.navigate("StoreProfile", { storeId, storeName })
-            }
-          />
-        </>
+        <MapWithSheet
+          lat={location.coords.lat}
+          lng={location.coords.lng}
+          onNavigateToStore={(storeId, storeName) =>
+            navigation.navigate("StoreProfile", { storeId, storeName })
+          }
+          onSelectProduce={(produceName) =>
+            navigation.navigate("Search", { initialQuery: produceName })
+          }
+        />
       ) : null}
     </SafeAreaView>
   );
@@ -457,14 +538,20 @@ const styles = StyleSheet.create({
     color: "#2d6a4f",
     fontWeight: "600",
   },
-  mapSection: {
-    height: 300,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e8eae8",
+  mapWithSheetContainer: {
+    flex: 1,
   },
   map: StyleSheet.absoluteFill,
-  browseContainer: {
-    flex: 1,
+  sheetBackground: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e8eae8",
+  },
+  sheetHandleIndicator: {
+    backgroundColor: "#ccc",
+    width: 40,
   },
   filterBar: {
     paddingHorizontal: 16,
@@ -499,6 +586,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
+    gap: 8,
+  },
+  // Same visual treatment as centeredState, but without flex:1 — this one is
+  // embedded inside the sheet's ListHeaderComponent (a content-sized View,
+  // not a flex-filled screen region), so it needs an explicit vertical
+  // padding instead of "grow to fill parent" to stay visible.
+  sheetCenteredState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+    paddingVertical: 48,
     gap: 8,
   },
   stateText: {
