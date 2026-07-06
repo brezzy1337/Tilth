@@ -31,12 +31,43 @@ import {
   View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../api/trpc";
 import type { AuthedStackParamList } from "../navigation/types";
 import { ListingCard } from "../components/ListingCard";
-import type { Listing } from "@homegrown/shared";
+import type { Listing, TrustTier } from "@homegrown/shared";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "StoreProfile">;
+
+// ---------------------------------------------------------------------------
+// Trust badge — tier → icon color / chip tint / label lookup (F-016)
+// ---------------------------------------------------------------------------
+
+const TRUST_TIER_STYLE: Record<TrustTier, { color: string; tint: string; label: string }> = {
+  gold: { color: "#D4AF37", tint: "#D4AF3726", label: "Gold seller" },
+  silver: { color: "#8E8E93", tint: "#8E8E9326", label: "Silver seller" },
+  bronze: { color: "#CD7F32", tint: "#CD7F3226", label: "Bronze seller" },
+};
+
+function TrustBadge({ tier }: { tier: TrustTier }) {
+  const tierStyle = TRUST_TIER_STYLE[tier];
+  if (!tierStyle) return null;
+
+  return (
+    <View
+      style={[styles.trustBadge, { backgroundColor: tierStyle.tint }]}
+      accessibilityRole="image"
+      accessibilityLabel={`${
+        tier.charAt(0).toUpperCase() + tier.slice(1)
+      } tier seller, high order fulfillment rate`}
+    >
+      <Ionicons name="ribbon" size={14} color={tierStyle.color} />
+      <Text style={[styles.trustBadgeText, { color: tierStyle.color }]}>
+        {tierStyle.label}
+      </Text>
+    </View>
+  );
+}
 
 export function StoreProfileScreen({ route }: Props) {
   const { storeId, storeName: fallbackName } = route.params;
@@ -129,6 +160,7 @@ export function StoreProfileScreen({ route }: Props) {
                 />
               ) : null}
               <Text style={styles.storeName}>{displayName}</Text>
+              {profile?.trustTier ? <TrustBadge tier={profile.trustTier} /> : null}
               {profile?.about ? (
                 <Text style={styles.about}>{profile.about}</Text>
               ) : null}
@@ -227,6 +259,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#555",
     lineHeight: 20,
+  },
+  trustBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  trustBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   catalogHeading: {
     fontSize: 16,

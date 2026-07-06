@@ -14,10 +14,11 @@ import {
   getStoreInput,
   store as storeSchema,
   storeProfile,
+  computeTrustTier,
 } from "@homegrown/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
-import { stores } from "../db/schema";
+import { stores, orders } from "../db/schema";
 
 export const storesRouter = router({
   /**
@@ -137,8 +138,12 @@ export const storesRouter = router({
 
   /**
    * Public store profile. Returns NOT_FOUND if the store doesn't exist.
-   * Only exposes the buyer-safe subset: id, name, logo, about.
+   * Only exposes the buyer-safe subset: id, name, logo, about, trustTier.
    * userId and stripeConnectAccountId are intentionally omitted.
+   *
+   * F-016 — trustTier is computed from TERMINAL order counts only
+   * (fulfilled/cancelled/refunded); pending_payment/paid/disputed are excluded
+   * via the FILTER clauses below. computeTrustTier (shared) owns the thresholds.
    */
   get: publicProcedure
     .input(getStoreInput)
@@ -162,11 +167,36 @@ export const storesRouter = router({
         });
       }
 
+      // Single conditional-aggregation query over orders_store_id_idx.
+      // No GROUP BY, so this always returns exactly one row (all zeros when the
+      // store has no terminal orders yet) — never undefined.
+      const [counts] = await ctx.db
+        .select({
+          fulfilled: sql<number>`count(*) filter (where ${orders.status} = 'fulfilled')`.mapWith(
+            Number,
+          ),
+          cancelled: sql<number>`count(*) filter (where ${orders.status} = 'cancelled')`.mapWith(
+            Number,
+          ),
+          refunded: sql<number>`count(*) filter (where ${orders.status} = 'refunded')`.mapWith(
+            Number,
+          ),
+        })
+        .from(orders)
+        .where(eq(orders.storeId, input.storeId));
+
+      const trustTier = computeTrustTier({
+        fulfilled: counts?.fulfilled ?? 0,
+        cancelled: counts?.cancelled ?? 0,
+        refunded: counts?.refunded ?? 0,
+      });
+
       return {
         id: found.id,
         name: found.name,
         logo: found.logo ?? null,
         about: found.about ?? null,
+        trustTier,
       };
     }),
 });
