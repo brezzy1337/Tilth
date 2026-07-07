@@ -46,6 +46,7 @@ import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
+import { colors, radii, spacing, type } from "../theme";
 
 // ---------------------------------------------------------------------------
 // Map region fallback — used only when the device coords aren't usable for a
@@ -256,7 +257,7 @@ function ListingsSheet({
         <CategoryFilterBar activeCategory={activeCategory} onSelectCategory={onSelectCategory} />
 
         {isLoading && (
-          <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
+          <ActivityIndicator size="large" color={colors.primary} style={styles.centeredLoader} />
         )}
 
         {error ? (
@@ -380,7 +381,7 @@ export function HomeScreen({ navigation }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Orders"
           >
-            <Ionicons name="receipt-outline" size={22} color="#2d6a4f" />
+            <Ionicons name="receipt-outline" size={22} color={colors.primary} />
           </Pressable>
           {/* Cart with item-count badge */}
           <Pressable
@@ -389,7 +390,7 @@ export function HomeScreen({ navigation }: Props) {
             accessibilityRole="button"
             accessibilityLabel={`Cart${itemCount > 0 ? `, ${itemCount} items` : ""}`}
           >
-            <Ionicons name="cart-outline" size={24} color="#2d6a4f" />
+            <Ionicons name="cart-outline" size={24} color={colors.primary} />
             {itemCount > 0 ? (
               <View style={styles.cartBadge}>
                 <Text style={styles.cartBadgeText}>
@@ -405,7 +406,7 @@ export function HomeScreen({ navigation }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Sign out"
           >
-            <Ionicons name="log-out-outline" size={22} color="#888" />
+            <Ionicons name="log-out-outline" size={22} color={colors.textMuted} />
           </Pressable>
         </View>
       </View>
@@ -413,7 +414,7 @@ export function HomeScreen({ navigation }: Props) {
       {/* Body — state-driven */}
       {location.status === "loading" ? (
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.stateSubText}>Getting your location…</Text>
         </View>
       ) : null}
@@ -457,36 +458,36 @@ export function HomeScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-    backgroundColor: "#fff",
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#e8eae8",
+    borderBottomColor: colors.border,
   },
   headerTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#2d6a4f",
+    fontSize: type.title.fontSize,
+    fontWeight: type.title.fontWeight,
+    color: colors.primary,
   },
   greeting: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     marginTop: 2,
   },
   headerActions: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
     alignItems: "center",
   },
   iconButton: {
-    padding: 6,
+    padding: spacing.sm - 2,
     position: "relative",
   },
   cartBadge: {
@@ -497,45 +498,45 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     paddingHorizontal: 4,
-    backgroundColor: "#e63946",
+    backgroundColor: colors.pop,
     alignItems: "center",
     justifyContent: "center",
   },
   cartBadgeText: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontSize: 10,
     fontWeight: "700",
   },
   seasonalSection: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#e8eae8",
-    paddingTop: 12,
-    paddingBottom: 4,
+    borderBottomColor: colors.border,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
   seasonalHeading: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "700",
-    color: "#2d6a4f",
-    paddingHorizontal: 16,
-    marginBottom: 8,
+    color: colors.primary,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
   },
   seasonalChipRow: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 8,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+    gap: spacing.sm,
   },
   seasonalChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+    paddingVertical: spacing.sm - 2,
+    paddingHorizontal: spacing.md + 2,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
-    backgroundColor: "#eaf3ee",
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
   },
   seasonalChipText: {
-    fontSize: 13,
-    color: "#2d6a4f",
+    fontSize: type.caption.fontSize,
+    color: colors.primary,
     fontWeight: "600",
   },
   mapWithSheetContainer: {
@@ -543,39 +544,39 @@ const styles = StyleSheet.create({
   },
   map: StyleSheet.absoluteFill,
   sheetBackground: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     borderWidth: 1,
-    borderColor: "#e8eae8",
+    borderColor: colors.border,
   },
   sheetHandleIndicator: {
-    backgroundColor: "#ccc",
+    backgroundColor: colors.border,
     width: 40,
   },
   filterBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
   },
   filterChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+    paddingVertical: spacing.sm - 2,
+    paddingHorizontal: spacing.md + 2,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#ccc",
-    backgroundColor: "#fff",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   filterChipActive: {
-    backgroundColor: "#2d6a4f",
-    borderColor: "#2d6a4f",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   filterChipText: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   filterChipTextActive: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontWeight: "600",
   },
   centeredLoader: {
@@ -585,8 +586,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   // Same visual treatment as centeredState, but without flex:1 — this one is
   // embedded inside the sheet's ListHeaderComponent (a content-sized View,
@@ -595,35 +596,35 @@ const styles = StyleSheet.create({
   sheetCenteredState: {
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
+    paddingHorizontal: spacing.xxxl,
     paddingVertical: 48,
-    gap: 8,
+    gap: spacing.sm,
   },
   stateText: {
     fontSize: 16,
-    color: "#444",
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xxxl,
   },
   retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
+    borderColor: colors.primary,
+    marginTop: spacing.sm,
   },
   retryText: {
-    color: "#2d6a4f",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "600",
   },

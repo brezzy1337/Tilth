@@ -35,6 +35,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StripeProvider } from "@stripe/stripe-react-native";
 
 import { trpc, API_URL, getAuthToken } from "./src/api/trpc";
+import { colors } from "./src/theme";
 import { AuthProvider, useAuth } from "./src/auth/AuthContext";
 import { CartProvider } from "./src/cart/CartContext";
 import { HeroScreen } from "./src/screens/HeroScreen";
@@ -76,8 +77,12 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
-        tabBarActiveTintColor: "#2d6a4f",
-        tabBarInactiveTintColor: "#8a8a8a",
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+        },
       }}
     >
       <Tab.Screen
@@ -149,7 +154,7 @@ function RootNavigator() {
   if (status === "loading") {
     return (
       <View style={styles.splash}>
-        <ActivityIndicator size="large" color="#2d6a4f" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -157,7 +162,14 @@ function RootNavigator() {
   return (
     <NavigationContainer>
       {status === "signedOut" ? (
-        <PreAuthStack.Navigator initialRouteName="Hero">
+        <PreAuthStack.Navigator
+          initialRouteName="Hero"
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.primary,
+            headerTitleStyle: { color: colors.text },
+          }}
+        >
           <PreAuthStack.Screen
             name="Hero"
             component={HeroScreen}
@@ -175,7 +187,13 @@ function RootNavigator() {
           />
         </PreAuthStack.Navigator>
       ) : (
-        <AuthedStack.Navigator>
+        <AuthedStack.Navigator
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.primary,
+            headerTitleStyle: { color: colors.text },
+          }}
+        >
           <AuthedStack.Screen
             name="MainTabs"
             component={MainTabs}
@@ -275,6 +293,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: colors.bg,
   },
 });

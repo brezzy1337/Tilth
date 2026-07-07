@@ -7,12 +7,13 @@
  * the AuthContext gate in App.tsx.
  *
  * No form library — plain useState + shared zod schema.
+ * Restyled to "Garden Fresh" tokens (F-044) — warm bg, Card-wrapped form,
+ * Button primitive, FormField already warm.
  * React Native only — no DOM elements.
  */
 
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,7 +27,10 @@ import { registerInput } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { FormField } from "../components/FormField";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
 import type { PreAuthStackParamList } from "../navigation/types";
+import { colors, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<PreAuthStackParamList, "SignUp">;
 
@@ -87,60 +91,52 @@ export function SignUpScreen({ navigation }: Props) {
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.title}>Create Account</Text>
+          <Text style={styles.title}>{"\u{1F33F}"} Create Account</Text>
 
-          <FormField
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            error={fieldErrors.email}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            textContentType="emailAddress"
-            placeholder="you@example.com"
-          />
+          <Card style={styles.formCard}>
+            <FormField
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              error={fieldErrors.email}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              placeholder="you@example.com"
+            />
 
-          <FormField
-            label="Username"
-            value={username}
-            onChangeText={setUsername}
-            error={fieldErrors.username}
-            autoCapitalize="none"
-            autoCorrect={false}
-            textContentType="username"
-            placeholder="letters, digits, underscores"
-          />
+            <FormField
+              label="Username"
+              value={username}
+              onChangeText={setUsername}
+              error={fieldErrors.username}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              placeholder="letters, digits, underscores"
+            />
 
-          <FormField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            error={fieldErrors.password}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            textContentType="newPassword"
-            placeholder="At least 8 characters"
-          />
+            <FormField
+              label="Password"
+              value={password}
+              onChangeText={setPassword}
+              error={fieldErrors.password}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="newPassword"
+              placeholder="At least 8 characters"
+            />
 
-          {/* Server error */}
-          {serverError ? (
-            <Text style={styles.serverError}>{serverError}</Text>
-          ) : null}
+            {/* Server error */}
+            {serverError ? (
+              <Text style={styles.serverError}>{serverError}</Text>
+            ) : null}
 
-          {/* Submit */}
-          <Pressable
-            style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
-            onPress={handleSubmit}
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Sign Up</Text>
-            )}
-          </Pressable>
+            {/* Submit */}
+            <Button title="Sign Up" onPress={handleSubmit} loading={mutation.isPending} />
+          </Card>
 
           {/* Link to Log In */}
           <Pressable
@@ -164,51 +160,39 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: colors.bg,
   },
   container: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 40,
+    paddingHorizontal: spacing.xxl,
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xxxl,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#2d6a4f",
-    marginBottom: 28,
+    fontSize: type.title.fontSize,
+    fontWeight: type.title.fontWeight,
+    color: colors.primary,
+    marginBottom: spacing.xxl,
+  },
+  formCard: {
+    marginBottom: spacing.md,
   },
   serverError: {
-    marginBottom: 12,
-    fontSize: 13,
-    color: "#c0392b",
+    marginBottom: spacing.md,
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     textAlign: "center",
   },
-  button: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
   linkRow: {
-    marginTop: 20,
+    marginTop: spacing.lg,
     alignItems: "center",
   },
   linkText: {
-    fontSize: 14,
-    color: "#555",
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
   },
   link: {
-    color: "#2d6a4f",
+    color: colors.primary,
     fontWeight: "600",
   },
 });

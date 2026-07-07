@@ -36,17 +36,23 @@ import { trpc } from "../api/trpc";
 import type { AuthedStackParamList } from "../navigation/types";
 import { ListingCard } from "../components/ListingCard";
 import type { Listing, TrustTier } from "@homegrown/shared";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "StoreProfile">;
 
 // ---------------------------------------------------------------------------
 // Trust badge — tier → icon color / chip tint / label lookup (F-016)
+//
+// Gold/Silver/Bronze hues stay recognizable (not theme tokens — no metal
+// tones exist in the palette) but the tints are kept soft (low-opacity via
+// hex alpha suffix) to harmonize with the warm background instead of reading
+// as saturated blocks.
 // ---------------------------------------------------------------------------
 
 const TRUST_TIER_STYLE: Record<TrustTier, { color: string; tint: string; label: string }> = {
-  gold: { color: "#D4AF37", tint: "#D4AF3726", label: "Gold seller" },
-  silver: { color: "#8E8E93", tint: "#8E8E9326", label: "Silver seller" },
-  bronze: { color: "#CD7F32", tint: "#CD7F3226", label: "Bronze seller" },
+  gold: { color: "#D4AF37", tint: "#D4AF3720", label: "Gold seller" },
+  silver: { color: "#8E8E93", tint: "#8E8E9320", label: "Silver seller" },
+  bronze: { color: "#CD7F32", tint: "#CD7F3220", label: "Bronze seller" },
 };
 
 function TrustBadge({ tier }: { tier: TrustTier }) {
@@ -107,7 +113,7 @@ export function StoreProfileScreen({ route }: Props) {
           </View>
         ) : null}
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
     );
@@ -188,7 +194,7 @@ export function StoreProfileScreen({ route }: Props) {
             {listingsLoading ? (
               <ActivityIndicator
                 size="small"
-                color="#2d6a4f"
+                color={colors.primary}
                 style={styles.listingsLoader}
               />
             ) : null}
@@ -223,104 +229,104 @@ export function StoreProfileScreen({ route }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   headerPlaceholder: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
-    backgroundColor: "#fff",
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#e8eae8",
+    borderBottomColor: colors.border,
   },
   storeHeader: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
-    marginBottom: 8,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    marginBottom: spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: "#e8eae8",
+    borderBottomColor: colors.border,
   },
   logo: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    marginBottom: 12,
-    backgroundColor: "#e8eae8",
+    marginBottom: spacing.md,
+    backgroundColor: colors.surfaceAlt,
   },
   storeName: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#1a1a1a",
-    marginBottom: 6,
+    fontSize: type.title.fontSize,
+    fontWeight: type.title.fontWeight,
+    color: colors.text,
+    marginBottom: spacing.sm - 2,
   },
   about: {
-    fontSize: 14,
-    color: "#555",
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
     lineHeight: 20,
   },
   trustBadge: {
     flexDirection: "row",
     alignItems: "center",
     alignSelf: "flex-start",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginBottom: 8,
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.md,
+    marginBottom: spacing.sm,
   },
   trustBadgeText: {
     fontSize: 12,
     fontWeight: "700",
   },
   catalogHeading: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#2d6a4f",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    fontSize: type.section.fontSize,
+    fontWeight: type.section.fontWeight,
+    color: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
   listContent: {
-    paddingBottom: 32,
+    paddingBottom: spacing.xxxl,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 12,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.md,
   },
   inlineError: {
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 12,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    gap: spacing.md,
   },
   emptyState: {
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 24,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xxl,
   },
   stateText: {
     fontSize: 16,
-    color: "#444",
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   listingsLoader: {
-    marginVertical: 16,
+    marginVertical: spacing.lg,
   },
   retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
+    borderColor: colors.primary,
   },
   retryText: {
-    color: "#2d6a4f",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "600",
   },
