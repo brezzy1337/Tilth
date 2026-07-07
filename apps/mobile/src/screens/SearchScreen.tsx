@@ -24,17 +24,18 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { listingCategory, type ListingCategory } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useDeviceLocation } from "../location/useDeviceLocation";
-import type { SearchTabNavigationProp, TabParamList } from "../navigation/types";
+import type { AuthedStackParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 
-type Props = Omit<BottomTabScreenProps<TabParamList, "Search">, "navigation"> & {
-  navigation: SearchTabNavigationProp;
-};
+// Search is a pushed stack screen (not a tab) — Gardens replaced its tab slot
+// (F-047). Home's seasonal chips still deep-link here via
+// navigation.navigate("Search", { initialQuery }).
+type Props = NativeStackScreenProps<AuthedStackParamList, "Search">;
 
 // ---------------------------------------------------------------------------
 // Constants

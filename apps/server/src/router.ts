@@ -16,6 +16,7 @@ import { geoRouter } from "./routers/geo";
 import { listingsRouter } from "./routers/listings";
 import { ordersRouter } from "./routers/orders";
 import { connectRouter } from "./routers/connect";
+import { gardenRouter } from "./routers/garden";
 
 export const appRouter = router({
   health: healthRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   listings: listingsRouter,
   orders: ordersRouter,
   connect: connectRouter,
+  garden: gardenRouter,
 });
 
 /** The type that mobile's tRPC client is parameterised with. */

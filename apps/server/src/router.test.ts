@@ -38,6 +38,8 @@ const stubCtx: Context = {
   auth: {} as Context["auth"],
   geocode: async () => null,
   stripe: stubStripe,
+  media: null,
+  mux: null,
   user: null,
 };
 

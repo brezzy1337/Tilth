@@ -104,6 +104,8 @@ function makeCtx(capturedKeys: string[]): Context {
     auth:      stubAuth,
     geocode:   async () => null,
     stripe,
+    media: null,
+    mux: null,
     user:      { id: UUID_USER },
   };
 }

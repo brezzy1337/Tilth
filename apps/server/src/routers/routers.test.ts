@@ -150,6 +150,8 @@ describe("auth.register", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -180,6 +182,8 @@ describe("auth.register", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -210,6 +214,8 @@ describe("auth.register", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -240,6 +246,8 @@ describe("auth.register", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -280,6 +288,8 @@ describe("auth.login", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -314,6 +324,8 @@ describe("auth.login", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -335,6 +347,8 @@ describe("auth.login", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -364,6 +378,8 @@ describe("auth.me", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID5 },
     };
     const caller = createCaller(ctx);
@@ -382,6 +398,8 @@ describe("auth.me", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -405,6 +423,8 @@ describe("stores.getMine", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -422,6 +442,8 @@ describe("stores.getMine", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -450,6 +472,8 @@ describe("stores.getMine", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -487,6 +511,8 @@ describe("stores.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -508,6 +534,8 @@ describe("stores.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -534,6 +562,8 @@ describe("stores.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -557,6 +587,8 @@ describe("stores.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -572,6 +604,8 @@ describe("stores.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -608,6 +642,8 @@ describe("stores.get", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -642,6 +678,8 @@ describe("stores.get", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -664,6 +702,8 @@ describe("stores.get", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -714,6 +754,8 @@ describe("listings.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -743,6 +785,8 @@ describe("listings.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -766,6 +810,8 @@ describe("listings.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -806,6 +852,8 @@ describe("listings.update", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -838,6 +886,8 @@ describe("listings.update", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -856,6 +906,8 @@ describe("listings.update", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -873,6 +925,8 @@ describe("listings.update", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -902,6 +956,8 @@ describe("listings.listByStore", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -921,6 +977,8 @@ describe("listings.listByStore", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);
@@ -967,6 +1025,8 @@ describe("geo.setStoreLocation", () => {
       auth: stubAuth,
       geocode: async () => ({ lat: 39.78, lng: -89.65 }),
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -991,6 +1051,8 @@ describe("geo.setStoreLocation", () => {
       auth: stubAuth,
       geocode: async () => null, // bad address
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -1009,6 +1071,8 @@ describe("geo.setStoreLocation", () => {
       auth: stubAuth,
       geocode: async () => ({ lat: 39.78, lng: -89.65 }),
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -1026,6 +1090,8 @@ describe("geo.setStoreLocation", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
     const caller = createCaller(ctx);

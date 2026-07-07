@@ -78,6 +78,13 @@
       "when": 1782938498430,
       "tag": "0010_mysterious_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1783391074231,
+      "tag": "0011_military_magdalene",
+      "breakpoints": true
     }
   ]
 }

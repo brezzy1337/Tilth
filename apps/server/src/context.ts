@@ -138,6 +138,47 @@ export interface StripeClient {
   }): Promise<{ id: string; status: string; amountRefunded: number }>;
 }
 
+/**
+ * DI interface for garden-post photo storage (F-047).
+ *
+ * Backed by GCS V4 signed upload URLs in production (see `gcs.ts`), but routers
+ * only depend on this small interface — never the `@google-cloud/storage` SDK
+ * directly — so the router import tree stays SDK-free.
+ *
+ * `null` in `ContextDeps.media` / `Context.media` means `GCS_MEDIA_BUCKET` is
+ * unset: routers must throw a clear PRECONDITION_FAILED rather than crash.
+ */
+export interface MediaClient {
+  /** The configured bucket name — used to validate photo URLs point at it. */
+  readonly bucket: string;
+  /**
+   * Create a V4 signed PUT upload URL (~15 min expiry) for `key`, plus the
+   * eventual public URL the object will be reachable at once uploaded.
+   */
+  createUploadUrl(input: {
+    key: string;
+    contentType: string;
+  }): Promise<{ uploadUrl: string; publicUrl: string }>;
+}
+
+/**
+ * DI interface for the Mux video direct-upload API (F-047).
+ *
+ * `null` in `ContextDeps.mux` / `Context.mux` means Mux credentials
+ * (`MUX_TOKEN_ID` / `MUX_TOKEN_SECRET`) are unset: `garden.createVideo` must
+ * throw a clear PRECONDITION_FAILED rather than crash.
+ */
+export interface MuxClient {
+  /**
+   * Create a Mux direct upload. `passthrough` carries our garden_posts.id so
+   * the `video.asset.ready` / `video.asset.errored` webhooks can correlate the
+   * Mux asset back to the post without a second round-trip.
+   */
+  createUpload(input: {
+    passthrough: string;
+  }): Promise<{ uploadId: string; uploadUrl: string }>;
+}
+
 /** The database type — Drizzle + our schema. */
 export type Db = PostgresJsDatabase<typeof schema>;
 
@@ -148,6 +189,10 @@ export interface ContextDeps {
   auth: AuthHelpers;
   geocode: Geocoder;
   stripe: StripeClient;
+  /** Null when GCS_MEDIA_BUCKET is unset — see MediaClient doc comment. */
+  media: MediaClient | null;
+  /** Null when Mux credentials are unset — see MuxClient doc comment. */
+  mux: MuxClient | null;
 }
 
 export async function createContext({ req }: CreateHTTPContextOptions, deps: ContextDeps) {
@@ -168,6 +213,8 @@ export async function createContext({ req }: CreateHTTPContextOptions, deps: Con
     auth: deps.auth,
     geocode: deps.geocode,
     stripe: deps.stripe,
+    media: deps.media,
+    mux: deps.mux,
     user,
   };
 }

@@ -73,6 +73,8 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
       auth: stubAuth,
       geocode: async () => null, // not used in nearby
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
   }
