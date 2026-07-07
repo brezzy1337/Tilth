@@ -21,7 +21,6 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   SafeAreaView,
@@ -38,6 +37,9 @@ import { trpc } from "../api/trpc";
 import { useCart } from "../cart/CartContext";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "Cart">;
 
@@ -160,6 +162,7 @@ export function CartScreen({ navigation }: Props) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
+          <Text style={styles.emptyEmoji}>{"\u{1F9FA}"}</Text>
           <Text style={styles.stateText}>Your cart is empty.</Text>
           <Text style={styles.stateSubText}>Browse nearby produce to add items.</Text>
         </View>
@@ -181,7 +184,7 @@ export function CartScreen({ navigation }: Props) {
           keyExtractor={(item) => item.listingId}
           scrollEnabled={false}
           renderItem={({ item }) => (
-            <View style={styles.lineCard}>
+            <Card style={styles.lineCard}>
               <View style={styles.lineHeader}>
                 <Text style={styles.lineName}>{item.name}</Text>
                 <Pressable onPress={() => removeItem(item.listingId)} style={styles.removeButton}>
@@ -211,7 +214,7 @@ export function CartScreen({ navigation }: Props) {
                   = ${formatCents(item.priceCents * item.quantity)}
                 </Text>
               </View>
-            </View>
+            </Card>
           )}
         />
 
@@ -229,7 +232,7 @@ export function CartScreen({ navigation }: Props) {
             <TextInput
               style={styles.tipInput}
               placeholder="0.00"
-              placeholderTextColor="#aaa"
+              placeholderTextColor={colors.textMuted}
               keyboardType="decimal-pad"
               value={tipText}
               onChangeText={setTipText}
@@ -285,7 +288,7 @@ export function CartScreen({ navigation }: Props) {
           <TextInput
             style={styles.addressInput}
             placeholder="Delivery address"
-            placeholderTextColor="#aaa"
+            placeholderTextColor={colors.textMuted}
             value={deliveryAddress}
             onChangeText={setDeliveryAddress}
             autoCorrect={false}
@@ -310,19 +313,13 @@ export function CartScreen({ navigation }: Props) {
         {(() => {
           const deliveryBlocked =
             fulfillmentMethod === "delivery" && deliveryAddress.trim().length === 0;
-          const disabled = isCheckingOut || deliveryBlocked;
           return (
-            <Pressable
-              style={[styles.payButton, disabled ? styles.payButtonDisabled : null]}
+            <Button
+              title={`Pay $${formatCents(totalCents)}`}
               onPress={() => void handleCheckout()}
-              disabled={disabled}
-            >
-              {isCheckingOut ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.payButtonText}>Pay ${formatCents(totalCents)}</Text>
-              )}
-            </Pressable>
+              loading={isCheckingOut}
+              disabled={deliveryBlocked}
+            />
           );
         })()}
       </ScrollView>
@@ -337,216 +334,197 @@ export function CartScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   container: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 48,
-    gap: 0,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xxxl * 1.5,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
+  },
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: spacing.xs,
   },
   stateText: {
-    fontSize: 16,
-    color: "#444",
+    fontSize: type.body.fontSize + 1,
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   storeLabel: {
-    fontSize: 14,
-    color: "#2d6a4f",
+    fontSize: type.body.fontSize,
+    color: colors.primary,
     fontWeight: "600",
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   lineCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
+    marginBottom: spacing.md,
   },
   lineHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   lineName: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "600",
-    color: "#1a1a1a",
+    color: colors.text,
     flex: 1,
   },
   removeButton: {
     paddingVertical: 2,
-    paddingHorizontal: 8,
+    paddingHorizontal: spacing.sm,
   },
   removeText: {
     fontSize: 12,
-    color: "#c0392b",
+    color: colors.danger,
     fontWeight: "600",
   },
   linePrice: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 8,
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
   stepperRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: spacing.md,
   },
   stepperButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
+    borderColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
   },
   stepperText: {
     fontSize: 18,
-    color: "#2d6a4f",
+    color: colors.primary,
     fontWeight: "600",
     lineHeight: 22,
   },
   stepperQty: {
-    fontSize: 16,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "600",
-    color: "#1a1a1a",
+    color: colors.text,
     minWidth: 24,
     textAlign: "center",
   },
   lineTotal: {
-    fontSize: 14,
-    color: "#2d6a4f",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.primary,
     fontWeight: "700",
     marginLeft: "auto",
   },
   tipSection: {
-    marginTop: 8,
-    marginBottom: 16,
-    paddingHorizontal: 4,
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.xs,
   },
   summaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   tipLink: {
-    paddingVertical: 4,
+    paddingVertical: spacing.xs,
     alignSelf: "flex-start",
   },
   tipLinkText: {
     fontSize: 12,
-    color: "#888",
+    color: colors.textMuted,
     textDecorationLine: "underline",
   },
   tipInput: {
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    fontSize: 14,
-    color: "#1a1a1a",
-    backgroundColor: "#fff",
-    marginTop: 6,
-    marginBottom: 4,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+    fontSize: type.caption.fontSize + 1,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    marginTop: spacing.xs + 2,
+    marginBottom: spacing.xs,
     alignSelf: "flex-start",
     minWidth: 100,
   },
   summaryLabel: {
-    fontSize: 16,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "600",
-    color: "#1a1a1a",
+    color: colors.text,
   },
   summaryValue: {
-    fontSize: 18,
+    fontSize: type.section.fontSize - 1,
     fontWeight: "700",
-    color: "#2d6a4f",
+    color: colors.primary,
   },
   statusText: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
-    marginBottom: 10,
+    marginBottom: spacing.md,
   },
   errorText: {
-    fontSize: 13,
-    color: "#c0392b",
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     textAlign: "center",
-    marginBottom: 10,
-  },
-  payButton: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 16,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  payButtonDisabled: {
-    opacity: 0.6,
-  },
-  payButtonText: {
-    color: "#fff",
-    fontSize: 17,
-    fontWeight: "700",
+    marginBottom: spacing.md,
   },
   fulfillmentRow: {
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 12,
+    gap: spacing.sm + 2,
+    marginBottom: spacing.md,
   },
   fulfillmentChip: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
+    borderColor: colors.primary,
     alignItems: "center",
   },
   fulfillmentChipActive: {
-    backgroundColor: "#2d6a4f",
+    backgroundColor: colors.primary,
   },
   fulfillmentChipText: {
-    fontSize: 14,
+    fontSize: type.caption.fontSize + 1,
     fontWeight: "600",
-    color: "#2d6a4f",
+    color: colors.primary,
   },
   fulfillmentChipTextActive: {
-    color: "#fff",
+    color: colors.onPrimary,
   },
   addressInput: {
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    fontSize: 14,
-    color: "#1a1a1a",
-    backgroundColor: "#fff",
-    marginBottom: 8,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    fontSize: type.caption.fontSize + 1,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    marginBottom: spacing.sm,
   },
   addressHint: {
     fontSize: 12,
-    color: "#888",
-    marginBottom: 8,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
 });

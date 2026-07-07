@@ -25,8 +25,11 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { OrderStatus } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { StatusPill } from "../components/StatusPill";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "Orders">;
 
@@ -67,7 +70,7 @@ export function OrdersScreen({ navigation }: Props) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
     );
@@ -80,9 +83,7 @@ export function OrdersScreen({ navigation }: Props) {
         <View style={styles.centeredState}>
           <Text style={styles.stateText}>Could not load orders.</Text>
           <Text style={styles.stateSubText}>{error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
+          <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
         </View>
       </SafeAreaView>
     );
@@ -146,24 +147,23 @@ export function OrdersScreen({ navigation }: Props) {
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
-            <Pressable
-              style={styles.orderCard}
-              onPress={() => navigation.navigate("OrderDetail", { orderId: item.id })}
-            >
-              <View style={styles.orderRow}>
-                <Text style={styles.orderId}>#{item.id.slice(0, 8).toUpperCase()}</Text>
-                <StatusPill status={item.status} preparationState={item.preparationState} />
-              </View>
-              <View style={styles.orderRow}>
-                <Text style={styles.orderDate}>
-                  {new Date(item.createdAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-                </Text>
-                <Text style={styles.orderTotal}>${formatCents(item.totalCents)}</Text>
-              </View>
+            <Pressable onPress={() => navigation.navigate("OrderDetail", { orderId: item.id })}>
+              <Card style={styles.orderCard}>
+                <View style={styles.orderRow}>
+                  <Text style={styles.orderId}>#{item.id.slice(0, 8).toUpperCase()}</Text>
+                  <StatusPill status={item.status} preparationState={item.preparationState} />
+                </View>
+                <View style={styles.orderRow}>
+                  <Text style={styles.orderDate}>
+                    {new Date(item.createdAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </Text>
+                  <Text style={styles.orderTotal}>${formatCents(item.totalCents)}</Text>
+                </View>
+              </Card>
             </Pressable>
           )}
         />
@@ -179,72 +179,64 @@ export function OrdersScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   stateText: {
-    fontSize: 16,
-    color: "#444",
+    fontSize: type.body.fontSize + 1,
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   segmentRow: {
     flexDirection: "row",
-    marginHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 4,
-    gap: 8,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
   },
   segment: {
     flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#ccc",
-    backgroundColor: "#fff",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     alignItems: "center",
   },
   segmentActive: {
-    backgroundColor: "#2d6a4f",
-    borderColor: "#2d6a4f",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   segmentText: {
-    fontSize: 14,
-    color: "#555",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.textMuted,
     fontWeight: "500",
   },
   segmentTextActive: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontWeight: "700",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 32,
-    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxxl,
+    gap: spacing.sm + 2,
   },
   orderCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
-    gap: 8,
+    gap: spacing.sm,
   },
   orderRow: {
     flexDirection: "row",
@@ -252,31 +244,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   orderId: {
-    fontSize: 14,
+    fontSize: type.caption.fontSize + 1,
     fontWeight: "700",
-    color: "#1a1a1a",
+    color: colors.text,
     fontVariant: ["tabular-nums"],
   },
   orderDate: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   orderTotal: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "700",
-    color: "#2d6a4f",
-  },
-  retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
-  },
-  retryText: {
-    color: "#2d6a4f",
-    fontSize: 14,
-    fontWeight: "600",
+    color: colors.primary,
   },
 });

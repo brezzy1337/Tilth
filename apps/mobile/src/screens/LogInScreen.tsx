@@ -7,12 +7,13 @@
  * AuthContext gate in App.tsx.
  *
  * No form library — plain useState + shared zod schema.
+ * Restyled to "Garden Fresh" tokens (F-044) — warm bg, Card-wrapped form,
+ * Button primitive, FormField already warm.
  * React Native only — no DOM elements.
  */
 
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,7 +27,10 @@ import { loginInput } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { FormField } from "../components/FormField";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
 import type { PreAuthStackParamList } from "../navigation/types";
+import { colors, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<PreAuthStackParamList, "LogIn">;
 
@@ -83,49 +87,41 @@ export function LogInScreen({ navigation }: Props) {
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.title}>Log In</Text>
+          <Text style={styles.title}>{"\u{1F44B}"} Log In</Text>
 
-          <FormField
-            label="Username or Email"
-            value={usernameOrEmail}
-            onChangeText={setUsernameOrEmail}
-            error={fieldErrors.usernameOrEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            textContentType="username"
-            placeholder="Username or email"
-          />
+          <Card style={styles.formCard}>
+            <FormField
+              label="Username or Email"
+              value={usernameOrEmail}
+              onChangeText={setUsernameOrEmail}
+              error={fieldErrors.usernameOrEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              textContentType="username"
+              placeholder="Username or email"
+            />
 
-          <FormField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            error={fieldErrors.password}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            textContentType="password"
-            placeholder="Password"
-          />
+            <FormField
+              label="Password"
+              value={password}
+              onChangeText={setPassword}
+              error={fieldErrors.password}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              placeholder="Password"
+            />
 
-          {/* Server error */}
-          {serverError ? (
-            <Text style={styles.serverError}>{serverError}</Text>
-          ) : null}
+            {/* Server error */}
+            {serverError ? (
+              <Text style={styles.serverError}>{serverError}</Text>
+            ) : null}
 
-          {/* Submit */}
-          <Pressable
-            style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
-            onPress={handleSubmit}
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Log In</Text>
-            )}
-          </Pressable>
+            {/* Submit */}
+            <Button title="Log In" onPress={handleSubmit} loading={mutation.isPending} />
+          </Card>
 
           {/* Link to Sign Up */}
           <Pressable
@@ -149,51 +145,39 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: colors.bg,
   },
   container: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 40,
+    paddingHorizontal: spacing.xxl,
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xxxl,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#2d6a4f",
-    marginBottom: 28,
+    fontSize: type.title.fontSize,
+    fontWeight: type.title.fontWeight,
+    color: colors.primary,
+    marginBottom: spacing.xxl,
+  },
+  formCard: {
+    marginBottom: spacing.md,
   },
   serverError: {
-    marginBottom: 12,
-    fontSize: 13,
-    color: "#c0392b",
+    marginBottom: spacing.md,
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     textAlign: "center",
   },
-  button: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
   linkRow: {
-    marginTop: 20,
+    marginTop: spacing.lg,
     alignItems: "center",
   },
   linkText: {
-    fontSize: 14,
-    color: "#555",
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
   },
   link: {
-    color: "#2d6a4f",
+    color: colors.primary,
     fontWeight: "600",
   },
 });

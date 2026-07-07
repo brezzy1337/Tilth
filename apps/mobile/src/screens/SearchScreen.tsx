@@ -31,6 +31,7 @@ import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { AuthedStackParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
+import { colors, radii, spacing, type } from "../theme";
 
 // Search is a pushed stack screen (not a tab) — Gardens replaced its tab slot
 // (F-047). Home's seasonal chips still deep-link here via
@@ -108,7 +109,7 @@ function SearchView({ lat, lng, initialQuery, onNavigateToStore }: SearchViewPro
           value={inputText}
           onChangeText={setInputText}
           placeholder="Search produce…"
-          placeholderTextColor="#aaa"
+          placeholderTextColor={colors.textMuted}
           autoCorrect={false}
           clearButtonMode="while-editing"
           returnKeyType="search"
@@ -144,7 +145,7 @@ function SearchView({ lat, lng, initialQuery, onNavigateToStore }: SearchViewPro
 
       {/* Loading */}
       {isLoading ? (
-        <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
+        <ActivityIndicator size="large" color={colors.primary} style={styles.centeredLoader} />
       ) : null}
 
       {/* Error */}
@@ -210,7 +211,7 @@ export function SearchScreen({ navigation, route }: Props) {
       {/* Location: loading */}
       {location.status === "loading" ? (
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.stateSubText}>Getting your location…</Text>
         </View>
       ) : null}
@@ -257,49 +258,49 @@ export function SearchScreen({ navigation, route }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   container: {
     flex: 1,
   },
   searchBoxWrapper: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
   searchBox: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: "#1a1a1a",
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.md - 2,
+    fontSize: type.body.fontSize,
+    color: colors.text,
   },
   filterBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 8,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md - 2,
+    gap: spacing.sm,
   },
   filterChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+    paddingVertical: spacing.sm - 2,
+    paddingHorizontal: spacing.md + 2,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#ccc",
-    backgroundColor: "#fff",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   filterChipActive: {
-    backgroundColor: "#2d6a4f",
-    borderColor: "#2d6a4f",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   filterChipText: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   filterChipTextActive: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontWeight: "600",
   },
   centeredLoader: {
@@ -309,47 +310,47 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   stateText: {
     fontSize: 16,
-    color: "#444",
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   clearFiltersButton: {
-    marginTop: 16,
+    marginTop: spacing.lg,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 20,
+    borderColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.pill,
   },
   clearFiltersText: {
     fontSize: 14,
-    color: "#2d6a4f",
+    color: colors.primary,
     fontWeight: "600",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xxxl,
   },
   retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
+    borderColor: colors.primary,
+    marginTop: spacing.sm,
   },
   retryText: {
-    color: "#2d6a4f",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "600",
   },

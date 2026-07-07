@@ -48,6 +48,7 @@ import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { GardensTabNavigationProp, TabParamList } from "../navigation/types";
 import { GardenPhotoCarousel } from "../components/GardenPhotoCarousel";
 import { GardenVideoCell } from "../components/GardenVideoCell";
+import { colors, radii, spacing, type } from "../theme";
 
 const RADIUS_KM = 25;
 const PAGE_LIMIT = 10;
@@ -109,7 +110,7 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
   if (isLoading) {
     return (
       <View style={styles.centeredState}>
-        <ActivityIndicator size="large" color="#fff" />
+        <ActivityIndicator size="large" color={colors.onPrimary} />
       </View>
     );
   }
@@ -128,7 +129,7 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
   if (items.length === 0) {
     return (
       <View style={styles.centeredState}>
-        <Text style={styles.stateText}>No garden posts nearby yet.</Text>
+        <Text style={styles.stateText}>{"\u{1F331}"} No garden posts nearby yet.</Text>
         <Text style={styles.stateSubText}>
           Check back soon, or be the first to share what's growing.
         </Text>
@@ -153,13 +154,13 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
         <RefreshControl
           refreshing={isRefetching}
           onRefresh={() => void refetch()}
-          tintColor="#fff"
+          tintColor={colors.onPrimary}
         />
       }
       ListFooterComponent={
         isFetchingNextPage ? (
           <View style={[styles.footerLoader, { width: SCREEN_WIDTH }]}>
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color={colors.onPrimary} />
           </View>
         ) : null
       }
@@ -206,7 +207,7 @@ export function GardenFeedScreen({ navigation }: Props) {
     >
       {location.status === "loading" ? (
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#fff" />
+          <ActivityIndicator size="large" color={colors.onPrimary} />
           <Text style={styles.stateSubText}>Getting your location…</Text>
         </View>
       ) : null}
@@ -245,7 +246,7 @@ export function GardenFeedScreen({ navigation }: Props) {
           accessibilityRole="button"
           accessibilityLabel="New garden post"
         >
-          <Ionicons name="add" size={28} color="#fff" />
+          <Ionicons name="add" size={28} color={colors.onPrimary} />
         </Pressable>
       ) : null}
     </View>
@@ -257,6 +258,9 @@ export function GardenFeedScreen({ navigation }: Props) {
 // ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
+  // Full-bleed media stage — intentionally black regardless of the warm
+  // palette (photos/video need a neutral backdrop for contrast); only the
+  // chrome (text, buttons, FAB) is retoned below.
   container: {
     flex: 1,
     backgroundColor: "#000",
@@ -265,46 +269,47 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   stateText: {
-    fontSize: 16,
-    color: "#fff",
+    fontSize: type.body.fontSize + 1,
+    color: colors.onPrimary,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#e8eae8",
+    fontSize: type.caption.fontSize,
+    color: colors.onPrimary,
+    opacity: 0.8,
     textAlign: "center",
   },
   retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#fff",
-    marginTop: 8,
+    borderColor: colors.onPrimary,
+    marginTop: spacing.sm,
   },
   retryText: {
-    color: "#fff",
-    fontSize: 14,
+    color: colors.onPrimary,
+    fontSize: type.caption.fontSize + 1,
     fontWeight: "600",
   },
   footerLoader: {
-    paddingVertical: 24,
+    paddingVertical: spacing.xxl,
     alignItems: "center",
     justifyContent: "center",
   },
   fab: {
     position: "absolute",
-    right: 20,
+    right: spacing.xl,
     bottom: 28,
     width: 56,
     height: 56,
-    borderRadius: 28,
-    backgroundColor: "#2d6a4f",
+    borderRadius: radii.pill,
+    backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",

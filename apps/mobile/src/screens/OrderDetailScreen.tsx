@@ -33,31 +33,39 @@ import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { ColorBadge } from "../components/ColorBadge";
 import { PREPARATION_STATE_CONFIG } from "../components/StatusPill";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
 import { capitalise } from "../utils/text";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "OrderDetail">;
 
 // ---------------------------------------------------------------------------
-// Status banner
+// Status banner — local mapping (distinct from StatusPill's STATUS_CONFIG),
+// retoned to the warm palette.
 // ---------------------------------------------------------------------------
 
 const STATUS_BANNER: Record<OrderStatus, { label: string; bg: string; text: string }> = {
-  pending_payment: { label: "Finalizing payment…",  bg: "#fff8e1", text: "#92400e" },
-  paid:            { label: "Payment confirmed",     bg: "#e8f5e9", text: "#2d6a4f" },
-  fulfilled:       { label: "Order fulfilled",       bg: "#e0f2f1", text: "#00695c" },
-  cancelled:       { label: "Order cancelled",       bg: "#fce4ec", text: "#b71c1c" },
-  refunded:        { label: "Order refunded",        bg: "#f3e5f5", text: "#6a1b9a" },
-  disputed:        { label: "Payment disputed",      bg: "#fff3e0", text: "#e65100" },
+  // Color pairs mirror StatusPill's STATUS_CONFIG so the list pill and the
+  // detail banner always agree: paid = green-on-neutral (only fulfilled gets
+  // the green tint), refunded = neutral "settled", disputed = tomato pop
+  // (distinct from cancelled's danger red — they need different handling).
+  pending_payment: { label: "Finalizing payment…", bg: colors.accentSoft,  text: colors.text },
+  paid:            { label: "Payment confirmed",    bg: colors.surfaceAlt,  text: colors.secondary },
+  fulfilled:       { label: "Order fulfilled",      bg: colors.primarySoft,  text: colors.primary },
+  cancelled:       { label: "Order cancelled",      bg: colors.dangerSoft,   text: colors.danger },
+  refunded:        { label: "Order refunded",       bg: colors.surfaceAlt,   text: colors.textMuted },
+  disputed:        { label: "Payment disputed",     bg: colors.popSoft,      text: colors.pop },
 };
 
 function StatusBanner({ status }: { status: OrderStatus }) {
   const config =
     STATUS_BANNER[status] ?? {
       label: capitalise(status),
-      bg: "#e5e7eb",
-      text: "#374151",
+      bg: colors.surfaceAlt,
+      text: colors.textMuted,
     };
   return (
     <View style={[styles.banner, { backgroundColor: config.bg }]}>
@@ -116,7 +124,7 @@ export function OrderDetailScreen({ route }: Props) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
     );
@@ -128,9 +136,7 @@ export function OrderDetailScreen({ route }: Props) {
         <View style={styles.centeredState}>
           <Text style={styles.stateText}>Could not load order.</Text>
           {error ? <Text style={styles.stateSubText}>{error.message}</Text> : null}
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
+          <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
         </View>
       </SafeAreaView>
     );
@@ -189,7 +195,7 @@ export function OrderDetailScreen({ route }: Props) {
             keyExtractor={(i) => i.id}
             scrollEnabled={false}
             renderItem={({ item }) => (
-              <View style={styles.lineCard}>
+              <Card style={styles.lineCard}>
                 <Text style={styles.lineName}>{item.nameSnapshot}</Text>
                 <View style={styles.lineRow}>
                   <Text style={styles.lineDetail}>
@@ -197,13 +203,13 @@ export function OrderDetailScreen({ route }: Props) {
                   </Text>
                   <Text style={styles.lineTotal}>${formatCents(item.lineTotalCents)}</Text>
                 </View>
-              </View>
+              </Card>
             )}
           />
         </View>
 
         {/* Summary */}
-        <View style={styles.summaryCard}>
+        <Card style={styles.summaryCard}>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Subtotal</Text>
             <Text style={styles.summaryValue}>${formatCents(order.subtotalCents)}</Text>
@@ -222,24 +228,24 @@ export function OrderDetailScreen({ route }: Props) {
             <Text style={styles.summaryTotalLabel}>Total</Text>
             <Text style={styles.summaryTotalValue}>${formatCents(order.totalCents)}</Text>
           </View>
-        </View>
+        </Card>
 
         {/* Refund section — buyer only */}
         {user && order.buyerId === user.id && (
           <>
             {order.refundApprovedAt ? (
               <View style={styles.refundBadgeWrapper}>
-                <ColorBadge label="Refund approved" bg="#fff3e0" text="#2d6a4f" />
+                <ColorBadge label="Refund approved" bg={colors.secondarySoft} text={colors.secondary} />
               </View>
             ) : order.refundRequestedAt ? (
               <View style={styles.refundBadgeWrapper}>
-                <ColorBadge label="Refund requested" bg="#fff3e0" text="#e65100" />
+                <ColorBadge label="Refund requested" bg={colors.accentSoft} text={colors.text} />
               </View>
             ) : (
               <>
                 {order.refundDeclinedAt ? (
                   <View style={styles.refundBadgeWrapper}>
-                    <ColorBadge label="Refund declined" bg="#fff8e1" text="#92400e" />
+                    <ColorBadge label="Refund declined" bg={colors.dangerSoft} text={colors.danger} />
                   </View>
                 ) : null}
                 {(order.status === "paid" || order.status === "fulfilled") ? (
@@ -273,80 +279,71 @@ export function OrderDetailScreen({ route }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   container: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 48,
-    gap: 0,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xxxl * 1.5,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   stateText: {
-    fontSize: 16,
-    color: "#444",
+    fontSize: type.body.fontSize + 1,
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   banner: {
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: radii.md,
+    padding: spacing.md + 2,
+    marginBottom: spacing.xxl,
     alignItems: "center",
   },
   bannerText: {
-    fontSize: 16,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "700",
   },
   orderId: {
-    fontSize: 18,
+    fontSize: type.section.fontSize,
     fontWeight: "700",
-    color: "#1a1a1a",
-    marginBottom: 4,
+    color: colors.text,
+    marginBottom: spacing.xs,
   },
   orderDate: {
-    fontSize: 13,
-    color: "#888",
-    marginBottom: 24,
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.xxl,
   },
   section: {
-    marginBottom: 20,
+    marginBottom: spacing.xl,
   },
   sectionTitle: {
-    fontSize: 15,
+    fontSize: type.caption.fontSize + 2,
     fontWeight: "700",
-    color: "#2d6a4f",
-    marginBottom: 10,
+    color: colors.primary,
+    marginBottom: spacing.sm + 2,
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   lineCard: {
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 3,
-    elevation: 1,
+    marginBottom: spacing.sm,
   },
   lineName: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "600",
-    color: "#1a1a1a",
-    marginBottom: 6,
+    color: colors.text,
+    marginBottom: spacing.sm - 2,
   },
   lineRow: {
     flexDirection: "row",
@@ -354,24 +351,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   lineDetail: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   lineTotal: {
-    fontSize: 14,
+    fontSize: type.caption.fontSize + 1,
     fontWeight: "700",
-    color: "#2d6a4f",
+    color: colors.primary,
   },
   summaryCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 3,
-    elevation: 1,
-    gap: 10,
+    gap: spacing.sm + 2,
   },
   summaryRow: {
     flexDirection: "row",
@@ -379,77 +368,64 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   summaryLabel: {
-    fontSize: 14,
-    color: "#666",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.textMuted,
   },
   summaryValue: {
-    fontSize: 14,
-    color: "#1a1a1a",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.text,
     fontWeight: "500",
   },
   summaryTotalRow: {
     borderTopWidth: 1,
-    borderTopColor: "#e8eae8",
-    paddingTop: 10,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm + 2,
   },
   summaryTotalLabel: {
-    fontSize: 16,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "700",
-    color: "#1a1a1a",
+    color: colors.text,
   },
   summaryTotalValue: {
-    fontSize: 18,
+    fontSize: type.section.fontSize - 1,
     fontWeight: "700",
-    color: "#2d6a4f",
-  },
-  retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
-  },
-  retryText: {
-    color: "#2d6a4f",
-    fontSize: 14,
-    fontWeight: "600",
+    color: colors.primary,
   },
   // Refund affordance
   refundButton: {
-    marginTop: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
+    marginTop: spacing.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: "#e65100",
+    borderColor: colors.pop,
     alignItems: "center",
   },
   refundButtonPressed: {
-    backgroundColor: "#fff3e0",
+    backgroundColor: colors.popSoft,
   },
   refundButtonDisabled: {
     opacity: 0.5,
   },
   refundButtonText: {
-    color: "#e65100",
-    fontSize: 15,
+    color: colors.pop,
+    fontSize: type.body.fontSize,
     fontWeight: "600",
   },
   refundBadgeWrapper: {
-    marginTop: 16,
+    marginTop: spacing.lg,
     alignItems: "flex-start",
   },
   fulfillmentRow: {
-    gap: 4,
+    gap: spacing.xs,
   },
   fulfillmentLabel: {
-    fontSize: 14,
-    color: "#1a1a1a",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.text,
     fontWeight: "500",
   },
   fulfillmentAddress: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
 });
