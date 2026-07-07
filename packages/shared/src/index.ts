@@ -558,3 +558,149 @@ export type ConnectStatus = z.infer<typeof connectStatus>;
 /** Response from `connect.dashboardLink` — a one-time Stripe Express Dashboard URL. */
 export const connectDashboardLinkResponse = z.object({ url: z.string().url() });
 export type ConnectDashboardLinkResponse = z.infer<typeof connectDashboardLinkResponse>;
+
+// ---------------------------------------------------------------------------
+// Garden posts / stories feed (F-047)
+// Growers post photo sets or short (<=60s) videos of their gardens/produce;
+// buyers scroll a vertical, geo-scoped feed (mirrors `listings.nearby`).
+// Video is hosted on Mux: the server creates a direct upload, the mobile app
+// PUTs the file to `uploadUrl`, and a `video.asset.ready` webhook flips the
+// post's status from "processing" to "ready". Photo sets are born "ready" —
+// there is no async encoding step. Photos are hosted on GCS + CDN.
+// ---------------------------------------------------------------------------
+
+/** The kind of garden post — a static photo set or a short video. */
+export const gardenPostType = z.enum(["photo_set", "video"]);
+
+export type GardenPostType = z.infer<typeof gardenPostType>;
+
+/**
+ * Lifecycle status of a garden post.
+ * Photo sets are created directly as "ready" (no encoding step). Videos start
+ * "processing" and flip to "ready" only when the server's Mux webhook handler
+ * receives `video.asset.ready`.
+ */
+export const gardenPostStatus = z.enum(["processing", "ready"]);
+
+export type GardenPostStatus = z.infer<typeof gardenPostStatus>;
+
+/** A single photo within a garden post's photo set. */
+export const gardenPostPhoto = z.object({
+  url: z.string().url(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+});
+
+export type GardenPostPhoto = z.infer<typeof gardenPostPhoto>;
+
+/**
+ * Input to `gardenPosts.createPhotoSet` (protected).
+ * `storeId` is intentionally absent — the server infers it from the authed
+ * seller's session, matching `createListingInput` / `createStoreInput`.
+ */
+export const createGardenPostPhotoSetInput = z.object({
+  /** Empty string allowed — captions are optional but the field itself is required. */
+  caption: z.string().trim().max(500),
+  photos: z.array(gardenPostPhoto).min(1).max(10),
+});
+
+export type CreateGardenPostPhotoSetInput = z.infer<typeof createGardenPostPhotoSetInput>;
+
+/**
+ * Input to `gardenPosts.createVideo` (protected).
+ * `storeId` is inferred server-side, same as the photo-set input above.
+ * `durationS` is client-reported (from the device's video picker) and is
+ * advisory only — the server does not trust it for billing/limits.
+ */
+export const createGardenPostVideoInput = z.object({
+  caption: z.string().trim().max(500),
+  /** Seconds; capped at 60 to match the feature's short-video constraint. */
+  durationS: z.number().positive().max(60).optional(),
+});
+
+export type CreateGardenPostVideoInput = z.infer<typeof createGardenPostVideoInput>;
+
+/**
+ * Response from `gardenPosts.createVideo`.
+ * `uploadUrl` is the Mux direct-upload URL; the mobile app PUTs the raw video
+ * file to it directly (the file itself never transits the HomeGrown server).
+ * The post is created immediately in "processing" status at `postId`, and
+ * flips to "ready" once the server's `video.asset.ready` webhook fires.
+ */
+export const createGardenPostVideoOutput = z.object({
+  postId: z.string().uuid(),
+  uploadUrl: z.string().url(),
+});
+
+export type CreateGardenPostVideoOutput = z.infer<typeof createGardenPostVideoOutput>;
+
+/**
+ * Input to `gardenPosts.feed` (public).
+ * Mirrors `nearbyInput`'s geo bounds; `radiusKm` defaults to 25 (tighter than
+ * `listings.nearby`'s no-default since the feed is meant to feel local) and
+ * is capped at 100 km. Cursor-paginated like `orders.listForMyStore`.
+ */
+export const gardenFeedInput = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  /** Search radius in kilometres. Defaults to 25; capped at 100. */
+  radiusKm: z.number().positive().max(100).default(25),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(50).default(10),
+});
+
+export type GardenFeedInput = z.infer<typeof gardenFeedInput>;
+
+/** Fields common to every `gardenFeedItem` variant, regardless of post type. */
+const gardenFeedItemBase = z.object({
+  id: z.string().uuid(),
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+  /** Computed by ST_Distance on the server; kilometres. */
+  distanceKm: z.number(),
+  caption: z.string(),
+  status: gardenPostStatus,
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+});
+
+/** A photo-set garden post as rendered in the feed. */
+export const gardenFeedPhotoSetItem = gardenFeedItemBase.extend({
+  type: z.literal("photo_set"),
+  photos: z.array(gardenPostPhoto),
+});
+
+export type GardenFeedPhotoSetItem = z.infer<typeof gardenFeedPhotoSetItem>;
+
+/** A video garden post as rendered in the feed; `posterUrl` comes from image.mux.com. */
+export const gardenFeedVideoItem = gardenFeedItemBase.extend({
+  type: z.literal("video"),
+  muxPlaybackId: z.string(),
+  posterUrl: z.string().url(),
+  durationS: z.number().positive().optional(),
+});
+
+export type GardenFeedVideoItem = z.infer<typeof gardenFeedVideoItem>;
+
+/**
+ * A single row returned by `gardenPosts.feed`, discriminated on `type` so
+ * mobile can render photo-set cards vs. video players without runtime checks.
+ */
+export const gardenFeedItem = z.discriminatedUnion("type", [
+  gardenFeedPhotoSetItem,
+  gardenFeedVideoItem,
+]);
+
+export type GardenFeedItem = z.infer<typeof gardenFeedItem>;
+
+/**
+ * Paginated response from `gardenPosts.feed`.
+ * `nextCursor` is null when the caller has reached the last page, matching
+ * `listForMyStoreOutput`'s pagination convention.
+ */
+export const gardenFeedOutput = z.object({
+  items: z.array(gardenFeedItem),
+  nextCursor: z.string().nullable(),
+});
+
+export type GardenFeedOutput = z.infer<typeof gardenFeedOutput>;
