@@ -1,18 +1,29 @@
 /**
- * HomeScreen — marketplace browse.
+ * HomeScreen — marketplace browse, Airbnb-style map + draggable sheet (F-013).
  *
- * Shows nearby produce listings using device GPS (expo-location).
- * Category filter chips: All + Vegetable / Fruit / Herb / Egg / Honey / Other.
- * Each listing card: name, category, price, unit, distance, storeName.
+ * Layout: once location is "granted", a full-screen MapView fills the body
+ * (one Marker per grower, deduped by storeId — a store's listings share the
+ * store's lat/lng) with a draggable `BottomSheet` docked over it. The sheet
+ * has three snap points (peek / half / full) and contains the "In season
+ * now" chips, the category filter bar, and the listings list — all rendered
+ * via `BottomSheetFlatList` so drag-to-resize and list-scroll gestures
+ * compose correctly.
  *
- * Header: username greeting + Search + Sign Out + Your Stand button.
+ * Both the map markers and the sheet list read from a single, shared
+ * `trpc.listings.nearby.useQuery` call (one network request; category filter
+ * lives in HomeScreen and flows down, so pins update live with the filter).
+ *
+ * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
+ * icons. Search and Sell live in the bottom tab bar (F-041), not here.
  *
  * States covered: loading (location or query), granted, denied, error, empty.
+ * The denied/error/loading location states render in place of the map+sheet,
+ * unchanged from before.
  *
  * React Native only — no DOM elements.
  */
 
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -22,8 +33,11 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import MapView, { Marker, type Region } from "react-native-maps";
+import BottomSheet, { BottomSheetFlatList } from "@gorhom/bottom-sheet";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import { listingCategory, type ListingCategory } from "@homegrown/shared";
+import { listingCategory, type ListingCategory, type NearbyListing } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useCart } from "../cart/CartContext";
@@ -32,6 +46,42 @@ import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
+
+// ---------------------------------------------------------------------------
+// Map region fallback — used only when the device coords aren't usable for a
+// region (defensive; HomeScreen only mounts the map once location is
+// "granted", but MapSection keeps its own fallback chain in case that ever
+// changes upstream: user coords -> first listing's coords -> pilot-region
+// default, so the map never crashes on missing input).
+// ---------------------------------------------------------------------------
+
+const FALLBACK_REGION = {
+  // San Francisco — matches the server's nearby-query integration test fixtures.
+  latitude: 37.7749,
+  longitude: -122.4194,
+};
+
+const REGION_DELTA = {
+  latitudeDelta: 0.15,
+  longitudeDelta: 0.15,
+};
+
+function computeInitialRegion(
+  userCoords: { lat: number; lng: number } | undefined,
+  listings: NearbyListing[] | undefined,
+): Region {
+  const point: { lat: number; lng: number } =
+    userCoords ??
+    (listings && listings.length > 0
+      ? { lat: listings[0].lat, lng: listings[0].lng }
+      : { lat: FALLBACK_REGION.latitude, lng: FALLBACK_REGION.longitude });
+
+  return {
+    latitude: point.lat,
+    longitude: point.lng,
+    ...REGION_DELTA,
+  };
+}
 
 type Props = Omit<BottomTabScreenProps<TabParamList, "Home">, "navigation"> & {
   navigation: HomeTabNavigationProp;
@@ -83,90 +133,224 @@ function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
 }
 
 // ---------------------------------------------------------------------------
-// BrowseView — rendered once coords are available
+// MapSection — full-screen MapView (fills the body behind the bottom sheet).
+// Shows one Marker per grower (deduped by storeId, since a store's listings
+// all share the store's lat/lng). Tapping a Marker navigates to that store's
+// profile. Takes the shared query's `data` as a prop — HomeScreen owns the
+// single `trpc.listings.nearby.useQuery` call so the map and the sheet list
+// stay in sync off one network request.
 // ---------------------------------------------------------------------------
 
-type BrowseViewProps = {
+type MapSectionProps = {
   lat: number;
   lng: number;
+  data: NearbyListing[] | undefined;
   onNavigateToStore: (storeId: string, storeName: string) => void;
 };
 
-function BrowseView({ lat, lng, onNavigateToStore }: BrowseViewProps) {
+function MapSection({ lat, lng, data, onNavigateToStore }: MapSectionProps) {
+  const storeMarkers = useMemo(() => {
+    const byStore = new Map<string, NearbyListing>();
+    for (const listing of data ?? []) {
+      if (!byStore.has(listing.storeId)) {
+        byStore.set(listing.storeId, listing);
+      }
+    }
+    return Array.from(byStore.values());
+  }, [data]);
+
+  const initialRegion = useMemo(
+    () => computeInitialRegion({ lat, lng }, data),
+    [lat, lng, data],
+  );
+
+  return (
+    <MapView style={styles.map} initialRegion={initialRegion}>
+      {storeMarkers.map((store) => (
+        <Marker
+          key={store.storeId}
+          coordinate={{ latitude: store.lat, longitude: store.lng }}
+          title={store.storeName}
+          onPress={() => onNavigateToStore(store.storeId, store.storeName)}
+        />
+      ))}
+    </MapView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CategoryFilterBar — extracted so it can be reused as the sheet's list
+// header alongside SeasonalModule.
+// ---------------------------------------------------------------------------
+
+type CategoryFilterBarProps = {
+  activeCategory: FilterCategory;
+  onSelectCategory: (category: FilterCategory) => void;
+};
+
+function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterBarProps) {
+  return (
+    <FlatList
+      data={FILTER_OPTIONS}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyExtractor={(item) => item.value}
+      contentContainerStyle={styles.filterBar}
+      renderItem={({ item }) => (
+        <Pressable
+          style={[
+            styles.filterChip,
+            activeCategory === item.value ? styles.filterChipActive : null,
+          ]}
+          onPress={() => onSelectCategory(item.value)}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              activeCategory === item.value ? styles.filterChipTextActive : null,
+            ]}
+          >
+            {item.label}
+          </Text>
+        </Pressable>
+      )}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ListingsSheet — the draggable bottom sheet. Uses BottomSheetFlatList (not a
+// plain FlatList) so drag-to-resize and list-scroll gestures compose: a plain
+// FlatList inside a BottomSheet breaks that gesture handoff. SeasonalModule
+// and the category filter bar are the list's ListHeaderComponent so they
+// scroll away with the list rather than eating fixed sheet height.
+// ---------------------------------------------------------------------------
+
+const SHEET_SNAP_POINTS = ["14%", "48%", "90%"];
+
+type ListingsSheetProps = {
+  data: NearbyListing[] | undefined;
+  isLoading: boolean;
+  error: { message: string } | null | undefined;
+  onRetry: () => void;
+  activeCategory: FilterCategory;
+  onSelectCategory: (category: FilterCategory) => void;
+  onSelectProduce: (produceName: string) => void;
+  onNavigateToStore: (storeId: string, storeName: string) => void;
+};
+
+function ListingsSheet({
+  data,
+  isLoading,
+  error,
+  onRetry,
+  activeCategory,
+  onSelectCategory,
+  onSelectProduce,
+  onNavigateToStore,
+}: ListingsSheetProps) {
+  const header = useMemo(
+    () => (
+      <View>
+        <SeasonalModule onSelectProduce={onSelectProduce} />
+        <CategoryFilterBar activeCategory={activeCategory} onSelectCategory={onSelectCategory} />
+
+        {isLoading && (
+          <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
+        )}
+
+        {error ? (
+          <View style={styles.sheetCenteredState}>
+            <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
+            <Pressable style={styles.retryButton} onPress={onRetry}>
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {!isLoading && !error && data && data.length === 0 ? (
+          <View style={styles.sheetCenteredState}>
+            <Text style={styles.stateText}>No produce nearby.</Text>
+            <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
+          </View>
+        ) : null}
+      </View>
+    ),
+    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce],
+  );
+
+  return (
+    <BottomSheet
+      index={1}
+      snapPoints={SHEET_SNAP_POINTS}
+      handleIndicatorStyle={styles.sheetHandleIndicator}
+      backgroundStyle={styles.sheetBackground}
+    >
+      <BottomSheetFlatList
+        data={data ?? []}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={header}
+        renderItem={({ item }) => (
+          <ListingCard
+            item={item}
+            onPressStore={() => onNavigateToStore(item.storeId, item.storeName)}
+          />
+        )}
+      />
+    </BottomSheet>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MapWithSheet — the granted-location body. Owns `activeCategory` and the
+// single shared `trpc.listings.nearby.useQuery` call so the full-screen map
+// markers and the sheet's listing list read from the same network request
+// and stay in sync when the category filter changes.
+// ---------------------------------------------------------------------------
+
+type MapWithSheetProps = {
+  lat: number;
+  lng: number;
+  onNavigateToStore: (storeId: string, storeName: string) => void;
+  onSelectProduce: (produceName: string) => void;
+};
+
+function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce }: MapWithSheetProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
 
   const category: ListingCategory | undefined =
     activeCategory === "all" ? undefined : activeCategory;
 
   const { data, isLoading, error, refetch } = trpc.listings.nearby.useQuery(
-    { lat, lng, radiusKm: 25, category },
-    { enabled: true },
+    {
+      lat,
+      lng,
+      radiusKm: 25,
+      category,
+    },
+    // Keep prior results while a category switch refetches — otherwise the
+    // map pins all vanish until the new response lands.
+    { placeholderData: (prev) => prev },
   );
 
+  const handleRetry = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
   return (
-    <View style={styles.browseContainer}>
-      {/* Category filter chips */}
-      <FlatList
-        data={FILTER_OPTIONS}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyExtractor={(item) => item.value}
-        contentContainerStyle={styles.filterBar}
-        renderItem={({ item }) => (
-          <Pressable
-            style={[
-              styles.filterChip,
-              activeCategory === item.value ? styles.filterChipActive : null,
-            ]}
-            onPress={() => setActiveCategory(item.value)}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                activeCategory === item.value ? styles.filterChipTextActive : null,
-              ]}
-            >
-              {item.label}
-            </Text>
-          </Pressable>
-        )}
+    <View style={styles.mapWithSheetContainer}>
+      <MapSection lat={lat} lng={lng} data={data} onNavigateToStore={onNavigateToStore} />
+      <ListingsSheet
+        data={data}
+        isLoading={isLoading}
+        error={error}
+        onRetry={handleRetry}
+        activeCategory={activeCategory}
+        onSelectCategory={setActiveCategory}
+        onSelectProduce={onSelectProduce}
+        onNavigateToStore={onNavigateToStore}
       />
-
-      {/* Listings */}
-      {isLoading && (
-        <ActivityIndicator size="large" color="#2d6a4f" style={styles.centeredLoader} />
-      )}
-
-      {error ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {!isLoading && !error && data && data.length === 0 ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>No produce nearby.</Text>
-          <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
-        </View>
-      ) : null}
-
-      {data && data.length > 0 ? (
-        <FlatList
-          data={data}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          scrollEnabled={false}
-          renderItem={({ item }) => (
-            <ListingCard
-              item={item}
-              onPressStore={() => onNavigateToStore(item.storeId, item.storeName)}
-            />
-          )}
-        />
-      ) : null}
     </View>
   );
 }
@@ -189,34 +373,39 @@ export function HomeScreen({ navigation }: Props) {
           {user ? <Text style={styles.greeting}>Hi, {user.username}</Text> : null}
         </View>
         <View style={styles.headerActions}>
-          {/* Search entry point */}
+          {/* Orders — Search & Sell moved to the bottom tab bar (F-041) */}
           <Pressable
-            style={styles.searchButton}
-            onPress={() => navigation.navigate("Search")}
-          >
-            <Text style={styles.searchButtonText}>Search</Text>
-          </Pressable>
-          {/* Cart button with item-count badge */}
-          <Pressable
-            style={styles.cartButton}
-            onPress={() => navigation.navigate("Cart")}
-          >
-            <Text style={styles.cartButtonText}>
-              Cart{itemCount > 0 ? ` (${itemCount})` : ""}
-            </Text>
-          </Pressable>
-          {/* Orders button */}
-          <Pressable
-            style={styles.ordersButton}
+            style={styles.iconButton}
             onPress={() => navigation.navigate("Orders")}
+            accessibilityRole="button"
+            accessibilityLabel="Orders"
           >
-            <Text style={styles.ordersButtonText}>Orders</Text>
+            <Ionicons name="receipt-outline" size={22} color="#2d6a4f" />
           </Pressable>
-          <Pressable style={styles.standButton} onPress={() => navigation.navigate("Sell")}>
-            <Text style={styles.standButtonText}>Your Stand</Text>
+          {/* Cart with item-count badge */}
+          <Pressable
+            style={styles.iconButton}
+            onPress={() => navigation.navigate("Cart")}
+            accessibilityRole="button"
+            accessibilityLabel={`Cart${itemCount > 0 ? `, ${itemCount} items` : ""}`}
+          >
+            <Ionicons name="cart-outline" size={24} color="#2d6a4f" />
+            {itemCount > 0 ? (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>
+                  {itemCount > 9 ? "9+" : itemCount}
+                </Text>
+              </View>
+            ) : null}
           </Pressable>
-          <Pressable style={styles.signOutButton} onPress={() => void signOut()}>
-            <Text style={styles.signOutText}>Sign Out</Text>
+          {/* Sign out — subtle account control */}
+          <Pressable
+            style={styles.iconButton}
+            onPress={() => void signOut()}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+          >
+            <Ionicons name="log-out-outline" size={22} color="#888" />
           </Pressable>
         </View>
       </View>
@@ -246,20 +435,16 @@ export function HomeScreen({ navigation }: Props) {
       ) : null}
 
       {location.status === "granted" && location.coords ? (
-        <>
-          <SeasonalModule
-            onSelectProduce={(produceName) =>
-              navigation.navigate("Search", { initialQuery: produceName })
-            }
-          />
-          <BrowseView
-            lat={location.coords.lat}
-            lng={location.coords.lng}
-            onNavigateToStore={(storeId, storeName) =>
-              navigation.navigate("StoreProfile", { storeId, storeName })
-            }
-          />
-        </>
+        <MapWithSheet
+          lat={location.coords.lat}
+          lng={location.coords.lng}
+          onNavigateToStore={(storeId, storeName) =>
+            navigation.navigate("StoreProfile", { storeId, storeName })
+          }
+          onSelectProduce={(produceName) =>
+            navigation.navigate("Search", { initialQuery: produceName })
+          }
+        />
       ) : null}
     </SafeAreaView>
   );
@@ -300,64 +485,26 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: "center",
   },
-  cartButton: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+  iconButton: {
+    padding: 6,
+    position: "relative",
   },
-  cartButtonText: {
+  cartBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: "#e63946",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartBadgeText: {
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  ordersButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  ordersButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  standButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
-  standButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  signOutButton: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  signOutText: {
-    color: "#888",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  searchButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  searchButtonText: {
-    color: "#2d6a4f",
-    fontSize: 13,
-    fontWeight: "600",
+    fontSize: 10,
+    fontWeight: "700",
   },
   seasonalSection: {
     backgroundColor: "#fff",
@@ -391,8 +538,20 @@ const styles = StyleSheet.create({
     color: "#2d6a4f",
     fontWeight: "600",
   },
-  browseContainer: {
+  mapWithSheetContainer: {
     flex: 1,
+  },
+  map: StyleSheet.absoluteFill,
+  sheetBackground: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e8eae8",
+  },
+  sheetHandleIndicator: {
+    backgroundColor: "#ccc",
+    width: 40,
   },
   filterBar: {
     paddingHorizontal: 16,
@@ -427,6 +586,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
+    gap: 8,
+  },
+  // Same visual treatment as centeredState, but without flex:1 — this one is
+  // embedded inside the sheet's ListHeaderComponent (a content-sized View,
+  // not a flex-filled screen region), so it needs an explicit vertical
+  // padding instead of "grow to fill parent" to stay visible.
+  sheetCenteredState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+    paddingVertical: 48,
     gap: 8,
   },
   stateText: {

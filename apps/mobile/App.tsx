@@ -25,6 +25,7 @@ import {
   StyleSheet,
   View,
 } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { NavigationContainer } from "@react-navigation/native";
@@ -226,29 +227,34 @@ export default function App() {
   );
 
   return (
-    <trpc.Provider client={trpcClient} queryClient={queryClient}>
-      <QueryClientProvider client={queryClient}>
-        {/* StripeProvider: publishable key is client-safe — it's a pk_test_…/pk_live_… key
-            behind EXPO_PUBLIC_ by design. Secret/webhook keys remain server-only. */}
-        <StripeProvider
-          publishableKey={process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ""}
-          urlScheme="homegrown"
-        >
-          <AuthProvider>
-            {/* CartProvider is unconditional and lives inside AuthProvider so it
-                can call useAuth() to clear items on sign-out, without being
-                re-mounted on auth-state transitions. */}
-            <CartProvider>
-              <RootNavigator />
-            </CartProvider>
-          </AuthProvider>
-        </StripeProvider>
-      </QueryClientProvider>
-    </trpc.Provider>
+    <GestureHandlerRootView style={styles.gestureRoot}>
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          {/* StripeProvider: publishable key is client-safe — it's a pk_test_…/pk_live_… key
+              behind EXPO_PUBLIC_ by design. Secret/webhook keys remain server-only. */}
+          <StripeProvider
+            publishableKey={process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ""}
+            urlScheme="homegrown"
+          >
+            <AuthProvider>
+              {/* CartProvider is unconditional and lives inside AuthProvider so it
+                  can call useAuth() to clear items on sign-out, without being
+                  re-mounted on auth-state transitions. */}
+              <CartProvider>
+                <RootNavigator />
+              </CartProvider>
+            </AuthProvider>
+          </StripeProvider>
+        </QueryClientProvider>
+      </trpc.Provider>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  gestureRoot: {
+    flex: 1,
+  },
   splash: {
     flex: 1,
     alignItems: "center",
