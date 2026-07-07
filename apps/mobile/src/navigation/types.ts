@@ -3,8 +3,11 @@
  *
  * PreAuthStackParamList: screens reachable before sign-in.
  * AuthedStackParamList:  root authenticated stack — the tab navigator
- *   (MainTabs) plus detail/flow screens pushed above the tab bar.
- * TabParamList:          the 5 bottom-tab screens (Home, Search, Sell,
+ *   (MainTabs) plus detail/flow screens pushed above the tab bar. Search is
+ *   reachable here as a pushed screen (not a tab) — the Gardens tab replaced
+ *   Search's tab slot (F-047), but Home's seasonal chips still deep-link via
+ *   navigation.navigate("Search", { initialQuery }).
+ * TabParamList:          the 5 bottom-tab screens (Home, Gardens, Sell,
  *   Messages, Learn) nested under AuthedStackParamList["MainTabs"].
  *
  * Import the relevant type in every screen that calls useNavigation() or
@@ -26,7 +29,7 @@ export type PreAuthStackParamList = {
 
 export type TabParamList = {
   Home: undefined;
-  Search: { initialQuery?: string } | undefined;
+  Gardens: undefined;
   Sell: undefined;
   Messages: undefined;
   Learn: undefined;
@@ -39,6 +42,10 @@ export type AuthedStackParamList = {
   OrderDetail: { orderId: string };
   StoreOrders: undefined;
   StoreProfile: { storeId: string; storeName?: string };
+  // Search kept as a pushed stack screen (not a tab) — Gardens replaced its
+  // tab slot (F-047) — so Home's seasonal chips can still deep-link into it.
+  Search: { initialQuery?: string } | undefined;
+  GardenComposer: undefined;
 };
 
 // Convenience aliases
@@ -60,8 +67,8 @@ export type HomeTabNavigationProp = CompositeNavigationProp<
   NativeStackNavigationProp<AuthedStackParamList>
 >;
 
-export type SearchTabNavigationProp = CompositeNavigationProp<
-  BottomTabNavigationProp<TabParamList, "Search">,
+export type GardensTabNavigationProp = CompositeNavigationProp<
+  BottomTabNavigationProp<TabParamList, "Gardens">,
   NativeStackNavigationProp<AuthedStackParamList>
 >;
 

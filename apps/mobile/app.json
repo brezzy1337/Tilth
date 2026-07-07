@@ -42,6 +42,14 @@
           "merchantIdentifier": "merchant.com.homegrown",
           "enableGooglePay": false
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Tilth uses your photo library to let you post garden photos and videos.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
       ]
     ],
     "owner": "digitalspace-development",

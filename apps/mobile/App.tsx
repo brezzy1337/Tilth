@@ -42,6 +42,8 @@ import { LogInScreen } from "./src/screens/LogInScreen";
 import { SignUpScreen } from "./src/screens/SignUpScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { SearchScreen } from "./src/screens/SearchScreen";
+import { GardenFeedScreen } from "./src/screens/GardenFeedScreen";
+import { GardenComposerScreen } from "./src/screens/GardenComposerScreen";
 import { YourStandScreen } from "./src/screens/YourStandScreen";
 import { MessagesScreen } from "./src/screens/MessagesScreen";
 import { LearnScreen } from "./src/screens/LearnScreen";
@@ -61,10 +63,13 @@ const AuthedStack = createNativeStackNavigator<AuthedStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 
 // ---------------------------------------------------------------------------
-// MainTabs — the 5-tab bottom navigation bar (Home, Search, Sell, Messages,
-// Learn). Detail/flow screens (Cart, Orders, OrderDetail, StoreOrders,
-// StoreProfile) are NOT tabs — they're pushed above this navigator from the
-// root AuthedStack.
+// MainTabs — the 5-tab bottom navigation bar (Home, Gardens, Sell, Messages,
+// Learn). Gardens (F-047) took Search's former tab slot; SearchScreen is
+// still reachable, pushed above the tabs from the root AuthedStack (Home's
+// seasonal chips deep-link into it via navigate("Search", { initialQuery })).
+// Detail/flow screens (Cart, Orders, OrderDetail, StoreOrders, StoreProfile,
+// Search, GardenComposer) are NOT tabs — they're pushed above this navigator
+// from the root AuthedStack.
 // ---------------------------------------------------------------------------
 
 function MainTabs() {
@@ -86,12 +91,13 @@ function MainTabs() {
         }}
       />
       <Tab.Screen
-        name="Search"
-        component={SearchScreen}
+        name="Gardens"
+        component={GardenFeedScreen}
         options={{
-          title: "Search",
+          headerShown: false,
+          title: "Gardens",
           tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons name={focused ? "search" : "search-outline"} size={size} color={color} />
+            <Ionicons name={focused ? "flower" : "flower-outline"} size={size} color={color} />
           ),
         }}
       />
@@ -199,6 +205,16 @@ function RootNavigator() {
             name="StoreProfile"
             component={StoreProfileScreen}
             options={{ title: "Stand" }}
+          />
+          <AuthedStack.Screen
+            name="Search"
+            component={SearchScreen}
+            options={{ title: "Search" }}
+          />
+          <AuthedStack.Screen
+            name="GardenComposer"
+            component={GardenComposerScreen}
+            options={{ title: "New Garden Post", presentation: "modal" }}
           />
         </AuthedStack.Navigator>
       )}
