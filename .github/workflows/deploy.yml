@@ -166,7 +166,7 @@ jobs:
             --allow-unauthenticated \
             --port=8080 \
             --service-account="${{ vars.GCP_RUNTIME_SA }}" \
-            --set-env-vars="NODE_ENV=production" \
+            --set-env-vars="NODE_ENV=production,GCS_MEDIA_BUCKET=homegrown-media" \
             --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,GOOGLE_GEOCODING_API_KEY=GOOGLE_GEOCODING_API_KEY:latest,STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest,STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest,STRIPE_WEBHOOK_SECRET_CONNECT=STRIPE_WEBHOOK_SECRET_CONNECT:latest" \
             --add-cloudsql-instances="${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:${{ vars.GCP_CLOUDSQL_INSTANCE }}"
 
