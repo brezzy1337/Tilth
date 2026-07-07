@@ -279,6 +279,7 @@ curl "${URL}/health.ping"
 | `STRIPE_SECRET_KEY` | Secret Manager (`--set-secrets`) | Platform Stripe secret key (`sk_test_…` / `sk_live_…`) |
 | `STRIPE_WEBHOOK_SECRET` | Secret Manager (`--set-secrets`) | Stripe webhook signing secret (`whsec_…`) — platform scope; see §3 |
 | `STRIPE_WEBHOOK_SECRET_CONNECT` | Secret Manager (`--set-secrets`) | Stripe webhook signing secret (`whsec_…`) — Connected-accounts scope; see §3 |
+| `GCS_MEDIA_BUCKET` | `--set-env-vars` | GCS bucket name for garden-post photos (F-047). Optional at boot; not a secret — see §9 |
 
 All secrets follow the same `--set-secrets` / `secretKeyRef` pattern — no secret value ever appears in code, config, or the container image.
 
@@ -553,6 +554,7 @@ non-sensitive configuration values, not secrets):
 | `GCP_WIF_PROVIDER` | `projects/123.../providers/github` | Full WIF provider resource name from step A |
 | `GCP_DEPLOY_SA` | `homegrown-deploy@....iam.gserviceaccount.com` | Deploy SA email from step B |
 | `GCP_RUNTIME_SA` | `homegrown-server@....iam.gserviceaccount.com` | Runtime SA email (the one from § 3 / § 5) |
+| `GCS_MEDIA_BUCKET` | `homegrown-media` | GCS bucket for garden-post photos (F-047). Not a secret — bucket name only. See §9. |
 
 #### E. MIGRATE_DATABASE_URL secret
 
@@ -769,6 +771,57 @@ gcloud run jobs execute homegrown-reconcile \
 
 Logs stream to Cloud Logging under the `homegrown-reconcile` job name. The job
 prints a JSON summary on success and exits 1 on hard failure (e.g. DB unreachable).
+
+---
+
+## 9. GCS media bucket (F-047 — garden post photos)
+
+`GCS_MEDIA_BUCKET` is a plain (non-secret) env var: the server reads it to sign
+V4 upload URLs (`apps/server/src/gcs.ts`) and to build public object URLs
+(`https://storage.googleapis.com/<bucket>/<key>`). It is optional at boot —
+`garden.createPhotoUploadUrls` returns `PRECONDITION_FAILED` when unset, so the
+rest of the API is unaffected until this is wired up.
+
+The bucket and its IAM bindings are provisioned **out-of-band** (imperative
+`gcloud`, not Terraform) — mirroring the "no secret enters TF state" philosophy,
+even though the bucket name itself is not a secret. This keeps a one-off
+storage decision from becoming a permanent TF resource before the feature is
+finalized.
+
+```bash
+# Bucket (uniform bucket-level access ON):
+gcloud storage buckets create gs://homegrown-media \
+  --project=<PROJECT_ID> \
+  --location=<REGION> \
+  --uniform-bucket-level-access
+
+# Public read — photos are served directly from GCS, no signed read URLs:
+gcloud storage buckets add-iam-policy-binding gs://homegrown-media \
+  --member="allUsers" \
+  --role="roles/storage.objectViewer"
+
+# Runtime SA — read/write objects (uploads land via server-signed PUT URLs):
+gcloud storage buckets add-iam-policy-binding gs://homegrown-media \
+  --member="serviceAccount:<RUNTIME_SA_EMAIL>" \
+  --role="roles/storage.objectAdmin"
+
+# Runtime SA — token creator ON ITSELF ONLY. Required for V4 signing via ADC:
+# without it, `bucket.file(key).getSignedUrl()` fails because the runtime
+# credential has no private key to sign with locally and must call the IAM
+# signBlob API instead, which requires this self-grant.
+gcloud iam service-accounts add-iam-policy-binding <RUNTIME_SA_EMAIL> \
+  --project=<PROJECT_ID> \
+  --member="serviceAccount:<RUNTIME_SA_EMAIL>" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+Then wire the bucket name into the deploy config as a plain env var (never a
+secret): set the `GCS_MEDIA_BUCKET` Actions variable (see §7-D table) for the
+GitHub Actions pipeline, and/or fill in the `GCS_MEDIA_BUCKET` value in
+`infra/cloudrun.service.yaml` if deploying via the declarative template.
+
+Scope is deliberately minimal: all three bindings above are on the bucket or
+the service account itself — nothing project-wide.
 
 ---
 

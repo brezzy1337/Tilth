@@ -43,6 +43,14 @@ spec:
             - name: NODE_ENV
               value: production
 
+            # GCS_MEDIA_BUCKET — bucket name is not a secret (public objectViewer
+            # access via allUsers; writes go through server-signed V4 upload URLs).
+            # Optional at boot (see apps/server/src/env.schema.ts) — garden-post
+            # photo uploads are disabled until this is set. Bucket + IAM are
+            # provisioned out-of-band (not via Terraform); see infra/README.md.
+            - name: GCS_MEDIA_BUCKET
+              value: homegrown-media
+
             # DATABASE_URL — injected from Secret Manager; never hardcoded.
             - name: DATABASE_URL
               valueFrom:
