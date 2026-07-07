@@ -478,6 +478,8 @@ describe("orders.create", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
   }
@@ -783,6 +785,8 @@ describe("connect.createOnboardingLink", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
   }
@@ -855,6 +859,8 @@ describe("connect.createOnboardingLink", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -894,6 +900,8 @@ describe("connect.status", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -926,6 +934,8 @@ describe("connect.status", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -973,6 +983,8 @@ describe("connect.dashboardLink", () => {
       auth: stubAuth,
       geocode: async () => null,
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+      media: null,
+      mux: null,
       user: { id: UUID_BUYER },
     };
   }
@@ -1126,6 +1138,8 @@ function makeRefundCtx(opts: {
     auth: stubAuth,
     geocode: async () => null,
     stripe: makeStripeStub(opts.stripeOverrides ?? {}),
+    media: null,
+    mux: null,
     user: { id: opts.userId },
   };
 }

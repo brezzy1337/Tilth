@@ -99,6 +99,28 @@ export const envSchema = z.object({
    * No default — never hardcode.
    */
   STRIPE_WEBHOOK_SECRET_CONNECT: z.string().min(1),
+  /**
+   * Mux video credentials (F-047 garden posts video pipeline).
+   *
+   * OPTIONAL at boot — Mux credentials do not exist yet for this pilot. When
+   * unset, `garden.createVideo` throws a clear PRECONDITION_FAILED TRPCError
+   * instead of the server failing to start; everything else keeps working.
+   * Locally: set in .env (gitignored). Production: GCP Secret Manager.
+   */
+  MUX_TOKEN_ID: z.string().min(1).optional(),
+  MUX_TOKEN_SECRET: z.string().min(1).optional(),
+  /** HMAC secret for verifying `Mux-Signature` webhook headers. Optional — see above. */
+  MUX_WEBHOOK_SECRET: z.string().min(1).optional(),
+  /**
+   * GCS bucket name that hosts garden-post photos (F-047).
+   *
+   * OPTIONAL at boot — same graceful-degradation pattern as Mux: when unset,
+   * `garden.createPhotoUploadUrls` throws PRECONDITION_FAILED rather than
+   * failing server startup. Infra owns bucket creation; the server never
+   * creates buckets. Locally: set in .env. Production: GCP Secret Manager /
+   * Cloud Run env var.
+   */
+  GCS_MEDIA_BUCKET: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

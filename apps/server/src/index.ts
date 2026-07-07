@@ -23,12 +23,25 @@ import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
 import { geocodeAddress } from "./geocode";
 import { createStripeClient } from "./stripe";
 import { handleStripeWebhookRequest } from "./webhook";
+import { handleMuxWebhookRequest } from "./webhook-mux";
 import { createRequestListener } from "./request-listener";
+import { createGcsMediaClient } from "./gcs";
+import { createMuxClient } from "./mux";
 
 const stripe = createStripeClient(env.STRIPE_SECRET_KEY, {
   refreshUrl: env.STRIPE_CONNECT_REFRESH_URL,
   returnUrl: env.STRIPE_CONNECT_RETURN_URL,
 });
+
+// F-047 — Mux and GCS credentials do not exist yet for this pilot. Both are
+// OPTIONAL at boot: when unset, the corresponding client is null and the
+// `garden` router throws a clear PRECONDITION_FAILED instead of the server
+// failing to start.
+const media = env.GCS_MEDIA_BUCKET ? createGcsMediaClient(env.GCS_MEDIA_BUCKET) : null;
+const mux =
+  env.MUX_TOKEN_ID && env.MUX_TOKEN_SECRET
+    ? createMuxClient(env.MUX_TOKEN_ID, env.MUX_TOKEN_SECRET)
+    : null;
 
 const trpcHandler = createHTTPHandler({
   router: appRouter,
@@ -39,6 +52,8 @@ const trpcHandler = createHTTPHandler({
       auth: { hashPassword, verifyPassword, signToken, verifyToken },
       geocode: (input) => geocodeAddress(input, env.GOOGLE_GEOCODING_API_KEY),
       stripe,
+      media,
+      mux,
     }),
 });
 
@@ -56,6 +71,13 @@ const server = createServer(
         webhookSecrets: [env.STRIPE_WEBHOOK_SECRET, env.STRIPE_WEBHOOK_SECRET_CONNECT],
         constructWebhookEvent: (rawBody, sig, secret) =>
           stripe.constructWebhookEvent(rawBody, sig, secret),
+      },
+    },
+    webhookMux: {
+      handle: handleMuxWebhookRequest,
+      opts: {
+        db,
+        webhookSecret: env.MUX_WEBHOOK_SECRET,
       },
     },
   }),

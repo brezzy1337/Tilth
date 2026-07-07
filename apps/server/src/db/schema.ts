@@ -23,6 +23,7 @@ import {
   text,
   timestamp,
   integer,
+  real,
   jsonb,
   pgEnum,
   customType,
@@ -257,6 +258,64 @@ export const orderItems = pgTable(
   },
   (t) => [index("order_items_order_id_idx").on(t.orderId)],
 );
+
+// ---------------------------------------------------------------------------
+// Garden posts — F-047 stories/reels feed (photo sets + short Mux-hosted video)
+// ---------------------------------------------------------------------------
+
+export const gardenPostTypeEnum = pgEnum("garden_post_type", ["photo_set", "video"]);
+
+/**
+ * DB-level status includes 'errored' (a video whose Mux upload/asset failed),
+ * but the shared `gardenPostStatus` contract only knows 'processing' | 'ready' —
+ * 'errored' posts are filtered out of `garden.feed` and never reach the client.
+ */
+export const gardenPostStatusEnum = pgEnum("garden_post_status", [
+  "processing",
+  "ready",
+  "errored",
+]);
+
+export const gardenPosts = pgTable(
+  "garden_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    type: gardenPostTypeEnum("type").notNull(),
+    status: gardenPostStatusEnum("status").notNull().default("processing"),
+    caption: text("caption").notNull().default(""),
+    /** Photo-set posts only: array of { url, width?, height? }. Null for video posts. */
+    photos: jsonb("photos"),
+    /** Video posts only — Mux direct-upload id, set at createVideo time. */
+    muxUploadId: text("mux_upload_id"),
+    /** Video posts only — Mux asset id, set once the webhook confirms encoding. */
+    muxAssetId: text("mux_asset_id"),
+    /** Video posts only — first public playback id, set by the video.asset.ready webhook. */
+    muxPlaybackId: text("mux_playback_id"),
+    /** Video posts only — duration in seconds, from the video.asset.ready webhook payload. */
+    durationS: real("duration_s"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("garden_posts_store_id_idx").on(t.storeId),
+    // Keyset pagination for the recency feed: ORDER BY created_at DESC, id DESC.
+    index("garden_posts_created_at_id_idx").on(t.createdAt.desc(), t.id.desc()),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Processed Mux events — exactly-once webhook dedup table (mirrors Stripe's)
+// ---------------------------------------------------------------------------
+
+export const processedMuxEvents = pgTable("processed_mux_events", {
+  /** Mux event.id. Primary key = natural dedup key. */
+  id: text("id").primaryKey(),
+  /** Mux event type (e.g. "video.asset.ready") — for observability. */
+  type: text("type").notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // Processed Stripe events — exactly-once webhook dedup table

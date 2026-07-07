@@ -24,6 +24,7 @@
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@google-cloud/storage": "7.21.0",
     "@homegrown/shared": "workspace:*",
     "@trpc/server": "catalog:",
     "drizzle-orm": "catalog:",

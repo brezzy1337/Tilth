@@ -74,6 +74,8 @@ describeWithDb("stores.get — trust tier (F-016) PostGIS/Postgres integration",
       auth: stubAuth,
       geocode: async () => null, // not used here
       stripe: stubStripe,
+      media: null,
+      mux: null,
       user: null,
     };
   }
