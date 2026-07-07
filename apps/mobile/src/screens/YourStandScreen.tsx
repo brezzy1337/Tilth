@@ -1,20 +1,32 @@
 /**
- * YourStandScreen — seller dashboard.
+ * YourStandScreen — seller dashboard, "Harvest Warm" journey/dashboard rebuild (F-044).
  *
- * Flow:
- *   1. If the user has no store → show create-store form
- *      (createStoreInput: name, logo?, about?)
- *   2. Once a store exists:
- *      a. Payments section: Stripe Connect onboarding (FIRST priority)
- *         connect.status.useQuery() + connect.createOnboardingLink.useMutation()
- *         → opens Stripe hosted onboarding via expo-web-browser
- *         → REFETCHES connect.status after browser closes (webhooks are truth)
- *      b. Location section: setStoreLocationInput (address, city, state, zip)
- *         → geo.setStoreLocation.useMutation()
- *      c. Listings section: list existing + add-listing form
- *         (createListingInput: name, category, priceCents, quantity, unit)
- *         Price entered in dollars → converted to integer cents before submit.
- *         AddListingForm is GATED behind chargesEnabled; existing listings always show.
+ * Three top-level views, chosen by store/setup state (see StoreView below):
+ *   1. No store yet (`store === null`)                  → WelcomeCreateStore
+ *   2. Store exists, setup incomplete                    → SetupJourneyView
+ *   3. Store fully set up (chargesEnabled && listings>0) → DashboardView
+ *
+ * All underlying behaviour from the pre-rebuild screen is preserved:
+ *   - Create-store flow: createStoreInput (name, logo?, about?)
+ *   - Payments: Stripe Connect onboarding — connect.status.useQuery() +
+ *     connect.createOnboardingLink.useMutation() → opens Stripe hosted
+ *     onboarding via expo-web-browser → REFETCHES connect.status after the
+ *     browser closes. The browser closing is NOT treated as success; the
+ *     status booleans (driven by the account.updated webhook) are the only
+ *     source of truth.
+ *   - Location: setStoreLocationInput (address, city, state, zip) →
+ *     geo.setStoreLocation.useMutation()
+ *   - Listings: list existing + add-listing form (createListingInput: name,
+ *     category, priceCents, quantity, unit). Price entered in dollars →
+ *     converted to integer cents before submit. AddListingForm stays GATED
+ *     behind chargesEnabled; existing listings always show.
+ *
+ * Step-2 (location) completion heuristic: the server has no "location saved"
+ * query, so step 2 is tracked with local state after a successful save
+ * *this session* (see `locationSavedThisSession` in StoreView). If the seller
+ * already has a listing, they necessarily got through location setup in an
+ * earlier session — so step 2 is also treated as complete whenever step 3
+ * (listings) is complete, even without local state for the current session.
  *
  * Contracts from @homegrown/shared — never redeclared here.
  * No form library — useState + shared zod safeParse.
@@ -22,7 +34,7 @@
  * React Native only — no DOM elements.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -36,6 +48,7 @@ import {
   View,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
 import * as WebBrowser from "expo-web-browser";
 import {
   createStoreInput,
@@ -47,9 +60,14 @@ import {
 } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { FormField } from "../components/FormField";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { SectionHeader } from "../components/SectionHeader";
 import type { AuthedNavigationProp } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { formatCents } from "../utils/money";
+import { colors, radii, spacing, type } from "../theme";
+import { categoryEmoji, unitLabel } from "../theme/categoryEmoji";
 
 // ---------------------------------------------------------------------------
 // Category and unit option arrays derived from the shared enums
@@ -60,10 +78,10 @@ const CATEGORY_OPTIONS: readonly ListingCategory[] = listingCategory.options;
 const UNIT_OPTIONS: ListingUnit[] = ["each", "lb", "oz", "bunch", "dozen", "jar", "pint", "quart"];
 
 // ---------------------------------------------------------------------------
-// CreateStoreSection
+// WelcomeCreateStore — state 1: no store yet
 // ---------------------------------------------------------------------------
 
-function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
+function WelcomeCreateStore({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [logo, setLogo] = useState("");
   const [about, setAbout] = useState("");
@@ -107,59 +125,57 @@ function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Create Your Stand</Text>
-      <Text style={styles.sectionSubtitle}>Set up your store to start selling local produce.</Text>
-
-      <FormField
-        label="Stand Name"
-        value={name}
-        onChangeText={setName}
-        error={errors.name}
-        placeholder="e.g. Sunny Acres Farm"
-        autoCapitalize="words"
-      />
-      <FormField
-        label="Logo URL (optional)"
-        value={logo}
-        onChangeText={setLogo}
-        error={errors.logo}
-        placeholder="https://example.com/logo.png"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-      />
-      <FormField
-        label="About (optional)"
-        value={about}
-        onChangeText={setAbout}
-        error={errors.about}
-        placeholder="Tell buyers about your farm..."
-        multiline
-        numberOfLines={3}
-        style={styles.multilineInput}
+    <View>
+      <SectionHeader
+        emoji="\u{1F331}"
+        title="Let's open your stand"
+        subtitle="Tell your neighbors what you grow — you can add payments and produce next."
+        tint={colors.secondarySoft}
+        iconColor={colors.secondary}
+        size="title"
       />
 
-      {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
+      <Card style={styles.formCard}>
+        <FormField
+          label="Stand name"
+          value={name}
+          onChangeText={setName}
+          error={errors.name}
+          placeholder="e.g. Sunny Acres Farm"
+          autoCapitalize="words"
+        />
+        <FormField
+          label="Logo URL (optional)"
+          value={logo}
+          onChangeText={setLogo}
+          error={errors.logo}
+          placeholder="https://example.com/logo.png"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        <FormField
+          label="About (optional)"
+          value={about}
+          onChangeText={setAbout}
+          error={errors.about}
+          placeholder="Tell buyers about your farm..."
+          multiline
+          numberOfLines={3}
+          style={styles.multilineInput}
+        />
 
-      <Pressable
-        style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
-        onPress={handleSubmit}
-        disabled={mutation.isPending}
-      >
-        {mutation.isPending ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Create Stand</Text>
-        )}
-      </Pressable>
+        {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
+
+        <Button title="Create my stand" onPress={handleSubmit} loading={mutation.isPending} />
+      </Card>
     </View>
   );
 }
 
 // ---------------------------------------------------------------------------
-// PaymentsSection — Stripe Connect onboarding for sellers
-// Placed ABOVE LocationSection (payment setup is the seller's first priority).
+// PaymentsSectionBody — Stripe Connect onboarding content for step 1.
+// Rendered inside a StepRow (journey) — no section title of its own.
 //
 // States:
 //   Not started (!detailsSubmitted): prompt + "Set up payments" button
@@ -171,7 +187,7 @@ function CreateStoreSection({ onCreated }: { onCreated: () => void }) {
 // authoritative source of truth (driven by the account.updated webhook).
 // ---------------------------------------------------------------------------
 
-function PaymentsSection() {
+function PaymentsSectionBody() {
   const utils = trpc.useUtils();
   const [browserError, setBrowserError] = useState<string | null>(null);
   const [isBrowserOpen, setIsBrowserOpen] = useState(false);
@@ -221,19 +237,15 @@ function PaymentsSection() {
   const isPending = onboardingMutation.isPending || isBrowserOpen;
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Payments</Text>
-
+    <View>
       {/* Loading state */}
-      {isLoading && <ActivityIndicator size="small" color="#2d6a4f" style={styles.loader} />}
+      {isLoading && <ActivityIndicator size="small" color={colors.secondary} style={styles.loader} />}
 
       {/* Error loading status */}
       {error && !isLoading ? (
         <View>
           <Text style={styles.serverError}>Could not load payment status: {error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
+          <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
         </View>
       ) : null}
 
@@ -254,20 +266,12 @@ function PaymentsSection() {
             </Text>
           </View>
           {status.detailsSubmitted ? (
-            <Pressable
-              style={[
-                styles.button,
-                dashboardLinkMutation.isPending ? styles.buttonDisabled : null,
-              ]}
+            <Button
+              title="View earnings & payouts"
+              variant="secondary"
               onPress={() => dashboardLinkMutation.mutate()}
-              disabled={dashboardLinkMutation.isPending}
-            >
-              {dashboardLinkMutation.isPending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>{"View earnings & payouts"}</Text>
-              )}
-            </Pressable>
+              loading={dashboardLinkMutation.isPending}
+            />
           ) : null}
         </View>
       ) : null}
@@ -282,24 +286,13 @@ function PaymentsSection() {
               your setup or check back soon.
             </Text>
           </View>
-          <Pressable
-            style={[styles.button, isPending ? styles.buttonDisabled : null]}
-            onPress={handleSetupPress}
-            disabled={isPending}
-          >
-            {isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Continue setup</Text>
-            )}
-          </Pressable>
-          <Pressable
-            style={styles.retryButton}
+          <Button title="Continue setup" onPress={handleSetupPress} loading={isPending} />
+          <Button
+            title="Refresh status"
+            variant="ghost"
             onPress={() => void refetch()}
             disabled={isLoading}
-          >
-            <Text style={styles.retryText}>Refresh status</Text>
-          </Pressable>
+          />
         </View>
       ) : null}
 
@@ -309,17 +302,7 @@ function PaymentsSection() {
           <Text style={styles.sectionSubtitle}>
             Connect a payout account with Stripe to start selling.
           </Text>
-          <Pressable
-            style={[styles.button, isPending ? styles.buttonDisabled : null]}
-            onPress={handleSetupPress}
-            disabled={isPending}
-          >
-            {isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Set up payments</Text>
-            )}
-          </Pressable>
+          <Button title="Set up payments" onPress={handleSetupPress} loading={isPending} />
         </View>
       ) : null}
     </View>
@@ -327,10 +310,12 @@ function PaymentsSection() {
 }
 
 // ---------------------------------------------------------------------------
-// LocationSection
+// LocationSectionBody — address form content for step 2 (and the Dashboard's
+// "Stand settings" disclosure). Calls `onSaved` with a one-line address
+// summary on success so callers can track this-session completion.
 // ---------------------------------------------------------------------------
 
-function LocationSection() {
+function LocationSectionBody({ onSaved }: { onSaved: (summary: string) => void }) {
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
@@ -346,8 +331,10 @@ function LocationSection() {
 
   const mutation = trpc.geo.setStoreLocation.useMutation({
     onSuccess: (data) => {
-      setSavedAddress(`${data.address}, ${data.city}, ${data.state} ${data.zip}`);
+      const summary = `${data.address}, ${data.city}, ${data.state} ${data.zip}`;
+      setSavedAddress(summary);
       setServerError(null);
+      onSaved(summary);
     },
     onError: (err) => {
       setServerError(err.message ?? "Could not save location. Try again.");
@@ -375,9 +362,7 @@ function LocationSection() {
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Stand Location</Text>
-
+    <View>
       {savedAddress ? (
         <View style={styles.successCard}>
           <Text style={styles.successText}>Location saved: {savedAddress}</Text>
@@ -385,7 +370,7 @@ function LocationSection() {
       ) : null}
 
       <FormField
-        label="Street Address"
+        label="Street address"
         value={address}
         onChangeText={setAddress}
         error={errors.address}
@@ -410,7 +395,7 @@ function LocationSection() {
         maxLength={50}
       />
       <FormField
-        label="ZIP Code"
+        label="ZIP code"
         value={zip}
         onChangeText={setZip}
         error={errors.zip}
@@ -421,17 +406,7 @@ function LocationSection() {
 
       {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
 
-      <Pressable
-        style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
-        onPress={handleSubmit}
-        disabled={mutation.isPending}
-      >
-        {mutation.isPending ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Save Location</Text>
-        )}
-      </Pressable>
+      <Button title="Save location" onPress={handleSubmit} loading={mutation.isPending} />
     </View>
   );
 }
@@ -504,8 +479,8 @@ function AddListingForm({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <View style={styles.addListingCard}>
-      <Text style={styles.cardLabel}>Add a Listing</Text>
+    <View style={styles.addListingForm}>
+      <Text style={styles.cardLabel}>Add a listing</Text>
 
       <FormField
         label="Name"
@@ -527,7 +502,7 @@ function AddListingForm({ onAdded }: { onAdded: () => void }) {
               onPress={() => setCategory(opt)}
             >
               <Text style={[styles.chipText, category === opt ? styles.chipTextActive : null]}>
-                {capitalise(opt)}
+                {categoryEmoji(opt)} {capitalise(opt)}
               </Text>
             </Pressable>
           ))}
@@ -574,28 +549,17 @@ function AddListingForm({ onAdded }: { onAdded: () => void }) {
 
       {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}
 
-      <Pressable
-        style={[styles.button, mutation.isPending ? styles.buttonDisabled : null]}
-        onPress={handleSubmit}
-        disabled={mutation.isPending}
-      >
-        {mutation.isPending ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Add Listing</Text>
-        )}
-      </Pressable>
+      <Button title="Add listing" onPress={handleSubmit} loading={mutation.isPending} />
     </View>
   );
 }
 
 // ---------------------------------------------------------------------------
-// ListingsSection
-// chargesEnabled: when false, existing listings are shown read-only and
-// AddListingForm is replaced with a notice prompting payment setup.
+// ListingsStepBody — step 3 content: existing listings (usually none yet) +
+// AddListingForm, gated behind chargesEnabled exactly as before.
 // ---------------------------------------------------------------------------
 
-function ListingsSection({
+function ListingsStepBody({
   storeId,
   chargesEnabled,
 }: {
@@ -615,31 +579,29 @@ function ListingsSection({
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Your Listings</Text>
-
-      {isLoading && <ActivityIndicator size="small" color="#2d6a4f" style={styles.loader} />}
+    <View>
+      {isLoading && <ActivityIndicator size="small" color={colors.secondary} style={styles.loader} />}
 
       {error ? (
         <View>
           <Text style={styles.serverError}>Could not load listings: {error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
+          <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
         </View>
       ) : null}
 
       {listings && listings.length === 0 ? (
-        <Text style={styles.emptyText}>No listings yet. Add your first one below.</Text>
+        <Text style={styles.emptyText}>No listings yet — add your first below.</Text>
       ) : null}
 
       {listings && listings.length > 0
         ? listings.map((item) => (
             <View key={item.id} style={styles.listingCard}>
-              <Text style={styles.listingName}>{item.name}</Text>
+              <Text style={styles.listingName}>
+                {categoryEmoji(item.category)} {item.name}
+              </Text>
               <Text style={styles.listingMeta}>
-                {capitalise(item.category)} · ${formatCents(item.priceCents)}/{item.unit} ·
-                qty {item.quantity}
+                ${formatCents(item.priceCents)}/{item.unit} · {item.quantity}{" "}
+                {unitLabel(item.quantity, item.unit)}
               </Text>
             </View>
           ))
@@ -650,7 +612,7 @@ function ListingsSection({
         <AddListingForm onAdded={handleListingAdded} />
       ) : (
         <View style={styles.gateCard}>
-          <Text style={styles.gateCardText}>Set up payments to start listing produce.</Text>
+          <Text style={styles.gateCardText}>Set up payments first, then add your first listing here.</Text>
         </View>
       )}
     </View>
@@ -658,36 +620,332 @@ function ListingsSection({
 }
 
 // ---------------------------------------------------------------------------
-// StoreView — shown once a store exists
-// Queries connect.status once here and passes chargesEnabled down to avoid
-// double-fetching (tRPC/react-query dedupes shared query keys, so a separate
-// useQuery call in PaymentsSection is also fine — we keep it separate there
-// for self-contained loading/error handling).
+// StepRow — one row of the setup journey checklist. Completed steps collapse
+// to a one-line summary with a green check; the expanded step is
+// terracotta-highlighted and shows its full content.
+// ---------------------------------------------------------------------------
+
+function StepRow({
+  number,
+  emoji,
+  title,
+  complete,
+  expanded,
+  onPress,
+  summary,
+  children,
+}: {
+  number: 1 | 2 | 3;
+  emoji: string;
+  title: string;
+  complete: boolean;
+  expanded: boolean;
+  onPress: () => void;
+  summary?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card
+      variant={expanded ? "surface" : "tint"}
+      style={[styles.stepCard, expanded ? styles.stepCardActive : null]}
+    >
+      <Pressable style={styles.stepHeader} onPress={onPress}>
+        <View
+          style={[
+            styles.stepBadge,
+            complete ? styles.stepBadgeComplete : expanded ? styles.stepBadgeActive : null,
+          ]}
+        >
+          {complete ? (
+            <Ionicons name="checkmark" size={16} color={colors.onPrimary} />
+          ) : (
+            <Text style={styles.stepEmoji}>{emoji}</Text>
+          )}
+        </View>
+        <View style={styles.stepTextCol}>
+          <Text style={[styles.stepTitle, expanded ? styles.stepTitleActive : null]}>
+            {number}. {title}
+          </Text>
+          {!expanded && summary ? <Text style={styles.stepSummary}>{summary}</Text> : null}
+        </View>
+        <Ionicons
+          name={expanded ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={colors.textMuted}
+        />
+      </Pressable>
+      {expanded ? <View style={styles.stepBody}>{children}</View> : null}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SetupJourneyView — state 2: store exists but setup isn't finished.
+// See the file-level doc comment for the step-2 (location) heuristic.
+// ---------------------------------------------------------------------------
+
+function SetupJourneyView({
+  storeId,
+  storeName,
+  chargesEnabled,
+  hasListings,
+  locationComplete,
+  locationSummary,
+  onLocationSaved,
+}: {
+  storeId: string;
+  storeName: string;
+  chargesEnabled: boolean;
+  hasListings: boolean;
+  locationComplete: boolean;
+  locationSummary: string | null;
+  onLocationSaved: (summary: string) => void;
+}) {
+  const steps: { number: 1 | 2 | 3; complete: boolean }[] = [
+    { number: 1, complete: chargesEnabled },
+    { number: 2, complete: locationComplete },
+    { number: 3, complete: hasListings },
+  ];
+  const firstIncompleteStep = steps.find((s) => !s.complete)?.number ?? 3;
+
+  // The expanded/highlighted step auto-advances whenever real progress is made
+  // (a step's completion flag changes), but otherwise stays put — so tapping
+  // around to review a different (e.g. already-complete) step isn't fought by
+  // this effect on every render.
+  const [expandedStep, setExpandedStep] = useState<1 | 2 | 3>(firstIncompleteStep);
+  useEffect(() => {
+    setExpandedStep(firstIncompleteStep);
+  }, [firstIncompleteStep]);
+
+  return (
+    <View>
+      <SectionHeader emoji="\u{1F33B}" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
+      <Text style={styles.headlineSubtitle}>Let's get your stand ready to sell.</Text>
+
+      <View style={styles.progressRow}>
+        {steps.map((s) => (
+          <View
+            key={s.number}
+            style={[
+              styles.progressDot,
+              s.complete ? styles.progressDotComplete : null,
+              !s.complete && s.number === expandedStep ? styles.progressDotActive : null,
+            ]}
+          />
+        ))}
+      </View>
+
+      <StepRow
+        number={1}
+        emoji="\u{1F4B0}"
+        title="Payments"
+        complete={chargesEnabled}
+        expanded={expandedStep === 1}
+        onPress={() => setExpandedStep(1)}
+        summary={chargesEnabled ? "Ready to accept orders" : undefined}
+      >
+        <PaymentsSectionBody />
+      </StepRow>
+
+      <StepRow
+        number={2}
+        emoji="\u{1F4CD}"
+        title="Location"
+        complete={locationComplete}
+        expanded={expandedStep === 2}
+        onPress={() => setExpandedStep(2)}
+        summary={locationSummary ?? (locationComplete ? "Saved" : undefined)}
+      >
+        <LocationSectionBody onSaved={onLocationSaved} />
+      </StepRow>
+
+      <StepRow
+        number={3}
+        emoji="\u{1F9FA}"
+        title="First listing"
+        complete={hasListings}
+        expanded={expandedStep === 3}
+        onPress={() => setExpandedStep(3)}
+        summary={hasListings ? "Listed" : undefined}
+      >
+        <ListingsStepBody storeId={storeId} chargesEnabled={chargesEnabled} />
+      </StepRow>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DashboardView — state 3: store fully set up (chargesEnabled && listings>0).
+// Listings are front-and-center; payments status and location settle into a
+// compact status row and a tucked-away disclosure, respectively.
+// ---------------------------------------------------------------------------
+
+function DashboardView({ storeId, storeName }: { storeId: string; storeName: string }) {
+  const navigation = useNavigation<AuthedNavigationProp>();
+  const utils = trpc.useUtils();
+
+  const { data: connectStatusData } = trpc.connect.status.useQuery();
+
+  const {
+    data: listings,
+    isLoading: listingsLoading,
+    error: listingsError,
+    refetch: refetchListings,
+  } = trpc.listings.listByStore.useQuery({ storeId });
+
+  const dashboardLinkMutation = trpc.connect.dashboardLink.useMutation({
+    onSuccess: async (data) => {
+      await WebBrowser.openBrowserAsync(data.url);
+    },
+    onError: (err) => {
+      Alert.alert("Could not open dashboard", err.message ?? "Please try again.");
+    },
+  });
+
+  const [addFormOpen, setAddFormOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  function handleListingAdded() {
+    setAddFormOpen(false);
+    void utils.listings.listByStore.invalidate({ storeId });
+  }
+
+  return (
+    <View>
+      <View style={styles.storeHeader}>
+        <SectionHeader emoji="\u{1F33B}" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
+      </View>
+
+      {/* Compact payments status row — tap to open the Stripe Express dashboard */}
+      <Pressable
+        style={styles.statusRow}
+        onPress={() => dashboardLinkMutation.mutate()}
+        disabled={dashboardLinkMutation.isPending}
+      >
+        <Text style={styles.statusRowText}>
+          {"\u{1F4B0}"} Payments <Text style={styles.statusCheck}>{"✓"}</Text>
+          {connectStatusData?.payoutsEnabled ? " · Payouts enabled" : ""}
+        </Text>
+        {dashboardLinkMutation.isPending ? (
+          <ActivityIndicator size="small" color={colors.secondary} />
+        ) : (
+          <Text style={styles.statusRowLink}>View earnings ›</Text>
+        )}
+      </Pressable>
+
+      {/* Listings — front and center */}
+      <View style={styles.dashboardSection}>
+        <SectionHeader
+          emoji="\u{1F9FA}"
+          title="Your listings"
+          subtitle={`${listings?.length ?? 0} live`}
+        />
+
+        {listingsLoading && (
+          <ActivityIndicator size="small" color={colors.secondary} style={styles.loader} />
+        )}
+
+        {listingsError ? (
+          <View>
+            <Text style={styles.serverError}>Could not load listings: {listingsError.message}</Text>
+            <Button
+              title="Retry"
+              variant="ghost"
+              fullWidth={false}
+              onPress={() => void refetchListings()}
+            />
+          </View>
+        ) : null}
+
+        {listings?.map((item) => (
+          <Card key={item.id} variant="tint" flat style={styles.listingRow}>
+            <View style={styles.listingRowInner}>
+              <Text style={styles.listingRowEmoji}>{categoryEmoji(item.category)}</Text>
+              <View style={styles.listingRowInfo}>
+                <Text style={styles.listingName}>{item.name}</Text>
+                <Text style={styles.listingMeta}>
+                  ${formatCents(item.priceCents)}/{item.unit} · {item.quantity}{" "}
+                  {unitLabel(item.quantity, item.unit)}
+                </Text>
+              </View>
+            </View>
+          </Card>
+        ))}
+
+        <Button
+          title={addFormOpen ? "Close" : "+ Add produce"}
+          variant={addFormOpen ? "secondary" : "primary"}
+          onPress={() => setAddFormOpen((open) => !open)}
+          style={styles.addProduceButton}
+        />
+        {addFormOpen ? <AddListingForm onAdded={handleListingAdded} /> : null}
+      </View>
+
+      <Button
+        title="\u{1F4E6} Orders / refund requests"
+        variant="secondary"
+        onPress={() => navigation.navigate("StoreOrders")}
+        style={styles.ordersButton}
+      />
+
+      {/* Stand settings — location editor tucked away */}
+      <Pressable style={styles.disclosureRow} onPress={() => setSettingsOpen((open) => !open)}>
+        <Text style={styles.disclosureText}>{"⚙️"} Stand settings</Text>
+        <Ionicons
+          name={settingsOpen ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={colors.textMuted}
+        />
+      </Pressable>
+      {settingsOpen ? (
+        <Card variant="tint" style={styles.settingsCard}>
+          <LocationSectionBody onSaved={() => {}} />
+        </Card>
+      ) : null}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StoreView — shown once a store exists. Decides journey vs dashboard.
 // ---------------------------------------------------------------------------
 
 function StoreView({ storeId, storeName }: { storeId: string; storeName: string }) {
-  // connect.status is also queried inside PaymentsSection; react-query dedupes
-  // the request. We query it here too so ListingsSection can receive chargesEnabled
-  // without prop-drilling through PaymentsSection.
-  const { data: connectStatusData } = trpc.connect.status.useQuery();
+  const { data: connectStatusData, isLoading: connectLoading } = trpc.connect.status.useQuery();
+  const { data: listings, isLoading: listingsLoading } = trpc.listings.listByStore.useQuery({
+    storeId,
+  });
+
   const chargesEnabled = connectStatusData?.chargesEnabled ?? false;
-  const navigation = useNavigation<AuthedNavigationProp>();
+  const hasListings = (listings?.length ?? 0) > 0;
+
+  // See file-level doc comment: step 2 (location) has no server-side "is it
+  // saved" query, so it's tracked locally after a successful save this
+  // session, OR treated as complete once step 3 (listings) is complete.
+  const [locationSavedThisSession, setLocationSavedThisSession] = useState<string | null>(null);
+  const locationComplete = locationSavedThisSession !== null || hasListings;
+
+  const isInitialLoading = connectLoading || listingsLoading;
+  const setupComplete = chargesEnabled && hasListings;
+
+  if (isInitialLoading) {
+    return <ActivityIndicator size="large" color={colors.secondary} style={styles.loader} />;
+  }
+
+  if (setupComplete) {
+    return <DashboardView storeId={storeId} storeName={storeName} />;
+  }
 
   return (
-    <>
-      <View style={styles.storeHeader}>
-        <Text style={styles.storeName}>{storeName}</Text>
-        <Pressable
-          style={styles.ordersButton}
-          onPress={() => navigation.navigate("StoreOrders")}
-        >
-          <Text style={styles.ordersButtonText}>Orders / Refund requests</Text>
-        </Pressable>
-      </View>
-      <PaymentsSection />
-      <LocationSection />
-      <ListingsSection storeId={storeId} chargesEnabled={chargesEnabled} />
-    </>
+    <SetupJourneyView
+      storeId={storeId}
+      storeName={storeName}
+      chargesEnabled={chargesEnabled}
+      hasListings={hasListings}
+      locationComplete={locationComplete}
+      locationSummary={locationSavedThisSession}
+      onLocationSaved={setLocationSavedThisSession}
+    />
   );
 }
 
@@ -710,21 +968,17 @@ export function YourStandScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.pageTitle}>Your Stand</Text>
-
-          {isLoading && <ActivityIndicator size="large" color="#2d6a4f" style={styles.loader} />}
+          {isLoading && <ActivityIndicator size="large" color={colors.secondary} style={styles.loader} />}
 
           {error ? (
             <View>
               <Text style={styles.serverError}>Could not load store: {error.message}</Text>
-              <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-                <Text style={styles.retryText}>Retry</Text>
-              </Pressable>
+              <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
             </View>
           ) : null}
 
           {!isLoading && !error && store === null ? (
-            <CreateStoreSection onCreated={handleStoreCreated} />
+            <WelcomeCreateStore onCreated={handleStoreCreated} />
           ) : null}
 
           {store ? <StoreView storeId={store.id} storeName={store.name} /> : null}
@@ -742,214 +996,290 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   container: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 48,
-    gap: 0,
-  },
-  pageTitle: {
-    fontSize: 26,
-    fontWeight: "bold",
-    color: "#2d6a4f",
-    marginBottom: 20,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxxl * 1.5,
   },
   loader: {
-    marginTop: 40,
+    marginTop: spacing.xxxl,
   },
-  section: {
-    marginBottom: 28,
+  formCard: {
+    marginTop: spacing.xl,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#2d6a4f",
-    marginBottom: 6,
+  headlineSubtitle: {
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
   },
   sectionSubtitle: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 16,
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
+
+  // Progress dots
+  progressRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  progressDot: {
+    flex: 1,
+    height: 6,
+    borderRadius: radii.pill,
+    backgroundColor: colors.border,
+  },
+  progressDotComplete: {
+    backgroundColor: colors.secondary,
+  },
+  progressDotActive: {
+    backgroundColor: colors.primary,
+  },
+
+  // Step rows
+  stepCard: {
+    marginBottom: spacing.md,
+    padding: 0,
+    overflow: "hidden",
+  },
+  stepCardActive: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  stepHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  stepBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepBadgeActive: {
+    backgroundColor: colors.primarySoft,
+  },
+  stepBadgeComplete: {
+    backgroundColor: colors.secondary,
+  },
+  stepEmoji: {
+    fontSize: 16,
+  },
+  stepTextCol: {
+    flex: 1,
+  },
+  stepTitle: {
+    fontSize: type.body.fontSize,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  stepTitleActive: {
+    color: colors.primary,
+  },
+  stepSummary: {
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  stepBody: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+  },
+
+  // Store header (journey + dashboard)
   storeHeader: {
-    marginBottom: 20,
-    gap: 10,
+    marginBottom: spacing.lg,
   },
-  storeName: {
-    fontSize: 22,
+
+  // Dashboard
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.secondarySoft,
+    borderRadius: radii.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.xl,
+  },
+  statusRowText: {
+    fontSize: type.body.fontSize,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  statusCheck: {
+    color: colors.secondary,
     fontWeight: "700",
-    color: "#1a1a1a",
+  },
+  statusRowLink: {
+    fontSize: type.caption.fontSize,
+    fontWeight: "700",
+    color: colors.secondary,
+  },
+  dashboardSection: {
+    marginBottom: spacing.xxl,
+    gap: spacing.md,
+  },
+  listingRow: {
+    marginTop: spacing.sm,
+  },
+  listingRowInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  listingRowEmoji: {
+    fontSize: 22,
+  },
+  listingRowInfo: {
+    flex: 1,
+  },
+  addProduceButton: {
+    marginTop: spacing.md,
   },
   ordersButton: {
-    alignSelf: "flex-start",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
+    marginBottom: spacing.xl,
   },
-  ordersButtonText: {
-    color: "#2d6a4f",
-    fontSize: 14,
+  disclosureRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  disclosureText: {
+    fontSize: type.body.fontSize,
     fontWeight: "600",
+    color: colors.textMuted,
   },
+  settingsCard: {
+    marginTop: spacing.md,
+  },
+
+  // Shared cards/notices
   successCard: {
-    backgroundColor: "#e8f5e9",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
+    backgroundColor: colors.secondarySoft,
+    borderRadius: radii.sm,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
   },
   successText: {
-    fontSize: 13,
-    color: "#2d6a4f",
+    fontSize: type.caption.fontSize,
+    color: colors.secondary,
     fontWeight: "500",
   },
   infoCard: {
-    backgroundColor: "#fff8e1",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radii.sm,
+    padding: spacing.md,
+    marginBottom: spacing.md,
     borderLeftWidth: 3,
-    borderLeftColor: "#f59e0b",
+    borderLeftColor: colors.accent,
   },
   infoCardTitle: {
-    fontSize: 14,
+    fontSize: type.body.fontSize,
     fontWeight: "700",
-    color: "#92400e",
-    marginBottom: 4,
+    color: colors.text,
+    marginBottom: spacing.xs,
   },
   gateCard: {
-    backgroundColor: "#f3f4f6",
-    borderRadius: 8,
-    padding: 14,
-    marginTop: 12,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radii.sm,
+    padding: spacing.lg,
+    marginTop: spacing.md,
     alignItems: "center",
   },
   gateCardText: {
-    fontSize: 14,
-    color: "#6b7280",
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   emptyText: {
-    fontSize: 14,
-    color: "#888",
-    marginBottom: 16,
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.lg,
   },
   listingCard: {
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 3,
-    elevation: 1,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
   },
   listingName: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "600",
-    color: "#1a1a1a",
+    color: colors.text,
     marginBottom: 2,
   },
   listingMeta: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
-  addListingCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 3,
-    elevation: 1,
+  addListingForm: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   cardLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#999",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 16,
+    fontSize: type.label.fontSize,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.lg,
   },
   fieldGroup: {
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   pickerLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#444",
-    marginBottom: 8,
+    fontSize: type.label.fontSize,
+    fontWeight: type.label.fontWeight,
+    color: colors.text,
+    marginBottom: spacing.sm,
   },
   chipRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    gap: spacing.sm,
   },
   chip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: "#ccc",
-    backgroundColor: "#fafafa",
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   chipActive: {
-    backgroundColor: "#2d6a4f",
-    borderColor: "#2d6a4f",
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   chipText: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: type.caption.fontSize,
+    color: colors.text,
   },
   chipTextActive: {
-    color: "#fff",
-    fontWeight: "600",
+    color: colors.onPrimary,
+    fontWeight: "700",
   },
   fieldError: {
-    marginTop: 4,
+    marginTop: spacing.xs,
     fontSize: 12,
-    color: "#c0392b",
+    color: colors.danger,
   },
   serverError: {
-    marginBottom: 12,
-    fontSize: 13,
-    color: "#c0392b",
+    marginBottom: spacing.md,
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     textAlign: "center",
-  },
-  button: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  retryButton: {
-    alignSelf: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
-  },
-  retryText: {
-    color: "#2d6a4f",
-    fontSize: 14,
-    fontWeight: "600",
   },
   multilineInput: {
     minHeight: 80,
