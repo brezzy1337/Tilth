@@ -23,6 +23,7 @@ import {
   osmElementToCandidate,
   mapUsdaRecord,
   buildOverpassQuery,
+  parseTypesArg,
   namesSimilar,
   normalizeName,
   haversineMeters,
@@ -345,6 +346,34 @@ describe("buildOverpassQuery", () => {
     const query = buildOverpassQuery(1e-7, -1e-7, 20000.7);
     expect(query).toContain("around:20001,0.000000,-0.000000");
     expect(query).not.toMatch(/e-/i);
+  });
+
+  it("subsets clauses by types — coop+farmers_market excludes health_food", () => {
+    const query = buildOverpassQuery(44.9635, -93.1775, 30000, ["coop", "farmers_market"]);
+    expect(query).not.toContain("health_food");
+    expect(query).toContain('amenity"="marketplace"');
+    expect(query).toContain('"shop"="supermarket"');
+  });
+
+  it("subsets clauses by types — farmers_market only has no shop clauses", () => {
+    const query = buildOverpassQuery(44.9635, -93.1775, 30000, ["farmers_market"]);
+    expect(query).not.toContain('"shop"=');
+    expect(query).toContain('amenity"="marketplace"');
+  });
+});
+
+describe("parseTypesArg", () => {
+  it("defaults to all types when absent or empty", () => {
+    expect(parseTypesArg(undefined).sort()).toEqual(["coop", "farmers_market", "health_food"]);
+    expect(parseTypesArg("  ").sort()).toEqual(["coop", "farmers_market", "health_food"]);
+  });
+
+  it("parses and dedupes a comma list", () => {
+    expect(parseTypesArg("coop, farmers_market,coop").sort()).toEqual(["coop", "farmers_market"]);
+  });
+
+  it("throws on unknown types with the valid list in the message", () => {
+    expect(() => parseTypesArg("coop,grocery")).toThrow(/unknown type "grocery".*farmers_market/);
   });
 });
 

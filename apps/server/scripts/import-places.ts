@@ -67,7 +67,7 @@ import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { sql, eq, asc } from "drizzle-orm";
-import { communityPlace, type CommunityPlaceType } from "@homegrown/shared";
+import { communityPlace, communityPlaceType, type CommunityPlaceType } from "@homegrown/shared";
 import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
 
@@ -139,7 +139,35 @@ interface OverpassResponse {
  * centroid so every result has a single point. Live-verified against
  * overpass-api.de (one smoke call, tiny radius, during development).
  */
-export function buildOverpassQuery(lat: number, lng: number, radiusM: number): string {
+/**
+ * Parses a `--types=coop,farmers_market` argument into a validated type list.
+ * Defaults to all types when the flag is absent. Throws (rather than exiting)
+ * on unknown values so the dispatcher can render a proper usage failure and
+ * tests can assert the message.
+ */
+export function parseTypesArg(raw?: string): CommunityPlaceType[] {
+  if (raw === undefined || raw.trim() === "") return [...communityPlaceType.options];
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 0) return [...communityPlaceType.options];
+  const seen = new Set<CommunityPlaceType>();
+  for (const part of parts) {
+    const parsed = communityPlaceType.safeParse(part);
+    if (!parsed.success) {
+      throw new Error(
+        `--types: unknown type "${part}" (valid: ${communityPlaceType.options.join(", ")})`,
+      );
+    }
+    seen.add(parsed.data);
+  }
+  return [...seen];
+}
+
+export function buildOverpassQuery(
+  lat: number,
+  lng: number,
+  radiusM: number,
+  types: CommunityPlaceType[] = [...communityPlaceType.options],
+): string {
   // Overpass QL rejects exponent notation (e.g. "1e-7"), which is how JS
   // stringifies very-small-magnitude numbers (coords near the equator/prime
   // meridian). Fix to 6 decimal places (~11cm precision, plenty for this
@@ -158,20 +186,21 @@ export function buildOverpassQuery(lat: number, lng: number, radiusM: number): s
   // client-side classifier (isCoopSignal — which already implements the
   // co-op name/tag heuristics) pick the co-ops; non-matches are skipped by
   // classifyOsmElement exactly as before.
-  const coopShops = ["supermarket", "greengrocer", "convenience"];
-  const coopClauses = coopShops
-    .flatMap((shop) => [
-      `  node["shop"="${shop}"](${around});`,
-      `  way["shop"="${shop}"](${around});`,
-    ])
-    .join("\n");
+  const clauses: string[] = [];
+  if (types.includes("health_food")) {
+    clauses.push(`  node["shop"="health_food"](${around});`, `  way["shop"="health_food"](${around});`);
+  }
+  if (types.includes("farmers_market")) {
+    clauses.push(`  node["amenity"="marketplace"](${around});`, `  way["amenity"="marketplace"](${around});`);
+  }
+  if (types.includes("coop")) {
+    for (const shop of ["supermarket", "greengrocer", "convenience"]) {
+      clauses.push(`  node["shop"="${shop}"](${around});`, `  way["shop"="${shop}"](${around});`);
+    }
+  }
   return `[out:json][timeout:60];
 (
-  node["shop"="health_food"](${around});
-  way["shop"="health_food"](${around});
-  node["amenity"="marketplace"](${around});
-  way["amenity"="marketplace"](${around});
-${coopClauses}
+${clauses.join("\n")}
 );
 out center tags;`;
 }
@@ -262,8 +291,13 @@ export function osmElementToCandidate(el: OverpassElement): PlaceCandidate | nul
   };
 }
 
-async function fetchOverpass(lat: number, lng: number, radiusKm: number): Promise<OverpassElement[]> {
-  const query = buildOverpassQuery(lat, lng, radiusKm * 1000);
+async function fetchOverpass(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  types: CommunityPlaceType[],
+): Promise<OverpassElement[]> {
+  const query = buildOverpassQuery(lat, lng, radiusKm * 1000, types);
   const response = await fetch(OVERPASS_URL, {
     method: "POST",
     headers: { "user-agent": OVERPASS_USER_AGENT },
@@ -536,21 +570,32 @@ async function getPendingOrdered(db: ReturnType<typeof getDb>) {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function cmdFetch(lat: number, lng: number, radiusKm: number): Promise<void> {
-  console.log(`Fetching community places within ${radiusKm} km of (${lat}, ${lng})…\n`);
+async function cmdFetch(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  types: CommunityPlaceType[],
+): Promise<void> {
+  console.log(
+    `Fetching community places within ${radiusKm} km of (${lat}, ${lng}) — types: ${types.join(", ")}…\n`,
+  );
 
   console.log("  querying Overpass (OSM) …");
-  const elements = await fetchOverpass(lat, lng, radiusKm);
+  const elements = await fetchOverpass(lat, lng, radiusKm, types);
   const osmCandidates = elements
     .map(osmElementToCandidate)
-    .filter((c): c is PlaceCandidate => c !== null);
+    // Query subsetting already narrows the download; this post-filter is the
+    // guarantee (e.g. a health_food-tagged shop that classifies as coop).
+    .filter((c): c is PlaceCandidate => c !== null && types.includes(c.type));
   console.log(
     `  Overpass: ${elements.length} element(s) → ${osmCandidates.length} candidate(s) after classification`,
   );
 
   const usdaKey = process.env["USDA_API_KEY"];
   let usdaCandidates: PlaceCandidate[] = [];
-  if (!usdaKey) {
+  if (!types.includes("farmers_market")) {
+    console.log("  USDA: skipped — farmers_market not in --types.");
+  } else if (!usdaKey) {
     console.log(
       "  USDA: skipped — USDA_API_KEY is not set. OSM's amenity=marketplace tag already " +
         "covers most farmers markets; set USDA_API_KEY to also pull the USDA directory.",
@@ -761,11 +806,17 @@ const USAGE = `Community-places import CLI (F-048) — talks directly to Postgre
 
 Commands:
   fetch --lat=<n> --lng=<n> --radius-km=<n≤80>
+        [--types=coop,farmers_market]
                              Query Overpass (OSM) + USDA (if USDA_API_KEY set)
-                             for co-ops, health-food stores, and farmers
-                             markets; dedupe; print a numbered preview; write
-                             candidates to scripts/.places-import.json.
-                             NO database writes.
+                             for community places; dedupe; print a numbered
+                             preview; write candidates to
+                             scripts/.places-import.json. NO database writes.
+                             --types restricts which kinds are fetched
+                             (default: all of coop, farmers_market,
+                             health_food). Pilot policy (Devin, 2026-07-09):
+                             only markets + co-ops — future buy-side accounts
+                             for stall order fulfilment — so pass
+                             --types=coop,farmers_market.
   commit                     Upsert scripts/.places-import.json into
                              community_places as 'pending'. Idempotent on
                              (source, source_ref) — re-imports refresh data
@@ -798,6 +849,7 @@ async function main(): Promise<void> {
       lat: { type: "string" },
       lng: { type: "string" },
       "radius-km": { type: "string" },
+      types: { type: "string" },
       ids: { type: "string" },
       all: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -833,7 +885,13 @@ async function main(): Promise<void> {
       if (radiusKm <= 0 || radiusKm > 80) {
         fail("--radius-km must be > 0 and <= 80.");
       }
-      await cmdFetch(lat, lng, radiusKm);
+      let types: CommunityPlaceType[];
+      try {
+        types = parseTypesArg(values.types);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+      await cmdFetch(lat, lng, radiusKm, types);
       break;
     }
     case "commit":
