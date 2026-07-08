@@ -13,6 +13,17 @@
  * `trpc.listings.nearby.useQuery` call (one network request; category filter
  * lives in HomeScreen and flows down, so pins update live with the filter).
  *
+ * Community places (F-048) — farmers markets, co-ops, health-food stores —
+ * are a second, independent layer on the same map: a separate
+ * `trpc.places.nearby.useQuery` call (own network request; no category
+ * filter, so it doesn't need to refetch when the listings filter changes)
+ * rendered as `PlaceMarker` badges. Place pins are deliberately NOT the
+ * default teardrop grower pins — tapping one opens a `PlaceInfoCard`
+ * overlaid above the sheet's peek snap, not a storefront. Tapping the map
+ * background (MapView `onPress`) dismisses the card. Attribution
+ * ("© OpenStreetMap contributors") is required by ODbL since place data
+ * derives from OSM, and floats bottom-left over the map alongside the card.
+ *
  * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
  * icons. Search and Sell live in the bottom tab bar (F-041), not here.
  *
@@ -36,7 +47,12 @@ import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, type Region } from "react-native-maps";
 import BottomSheet, { BottomSheetFlatList } from "@gorhom/bottom-sheet";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import { listingCategory, type ListingCategory, type NearbyListing } from "@homegrown/shared";
+import {
+  listingCategory,
+  type CommunityPlace,
+  type ListingCategory,
+  type NearbyListing,
+} from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useCart } from "../cart/CartContext";
@@ -44,6 +60,8 @@ import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
+import { PlaceMarker } from "../components/PlaceMarker";
+import { PlaceInfoCard } from "../components/PlaceInfoCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 import { colors, radii, spacing, type } from "../theme";
 import { CATEGORY_EMOJI, categoryEmoji, produceEmoji } from "../theme/categoryEmoji";
@@ -156,20 +174,35 @@ function SeasonalModule({ onSelectProduce, onPressSearch }: SeasonalModuleProps)
 // ---------------------------------------------------------------------------
 // MapSection — full-screen MapView (fills the body behind the bottom sheet).
 // Shows one Marker per grower (deduped by storeId, since a store's listings
-// all share the store's lat/lng). Tapping a Marker navigates to that store's
-// profile. Takes the shared query's `data` as a prop — HomeScreen owns the
-// single `trpc.listings.nearby.useQuery` call so the map and the sheet list
-// stay in sync off one network request.
+// all share the store's lat/lng) plus one `PlaceMarker` per community place
+// (F-048) — a second, visually distinct pin layer (rounded-square badges,
+// not teardrops). Tapping a grower Marker navigates to that store's profile,
+// unchanged; tapping a place pin selects it (info card renders in
+// MapWithSheet, above this component). Tapping the map background clears
+// the selection. Takes both queries' `data` as props — HomeScreen owns the
+// `trpc.listings.nearby` and `trpc.places.nearby` calls so the map and the
+// sheet list stay in sync off the same network requests.
 // ---------------------------------------------------------------------------
 
 type MapSectionProps = {
   lat: number;
   lng: number;
   data: NearbyListing[] | undefined;
+  places: CommunityPlace[] | undefined;
   onNavigateToStore: (storeId: string, storeName: string) => void;
+  onSelectPlace: (place: CommunityPlace) => void;
+  onDismissPlace: () => void;
 };
 
-function MapSection({ lat, lng, data, onNavigateToStore }: MapSectionProps) {
+function MapSection({
+  lat,
+  lng,
+  data,
+  places,
+  onNavigateToStore,
+  onSelectPlace,
+  onDismissPlace,
+}: MapSectionProps) {
   const storeMarkers = useMemo(() => {
     const byStore = new Map<string, NearbyListing>();
     for (const listing of data ?? []) {
@@ -186,7 +219,7 @@ function MapSection({ lat, lng, data, onNavigateToStore }: MapSectionProps) {
   );
 
   return (
-    <MapView style={styles.map} initialRegion={initialRegion}>
+    <MapView style={styles.map} initialRegion={initialRegion} onPress={onDismissPlace}>
       {storeMarkers.map((store) => (
         <Marker
           key={store.storeId}
@@ -194,6 +227,11 @@ function MapSection({ lat, lng, data, onNavigateToStore }: MapSectionProps) {
           title={store.storeName}
           onPress={() => onNavigateToStore(store.storeId, store.storeName)}
         />
+      ))}
+      {/* Keyed on id+type: PlaceMarker sets tracksViewChanges={false}, so a
+          type reclassification must force a remount to re-rasterize the badge. */}
+      {(places ?? []).map((place) => (
+        <PlaceMarker key={`${place.id}-${place.type}`} place={place} onPress={() => onSelectPlace(place)} />
       ))}
     </MapView>
   );
@@ -247,7 +285,10 @@ function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterB
 // scroll away with the list rather than eating fixed sheet height.
 // ---------------------------------------------------------------------------
 
-const SHEET_SNAP_POINTS = ["14%", "48%", "90%"];
+// Peek height is shared with mapOverlayStack.bottom so the place info card /
+// attribution always sit exactly above the docked sheet — change it here only.
+const SHEET_PEEK_SNAP = "14%" as const;
+const SHEET_SNAP_POINTS = [SHEET_PEEK_SNAP, "48%", "90%"];
 
 type ListingsSheetProps = {
   data: NearbyListing[] | undefined;
@@ -342,6 +383,7 @@ type MapWithSheetProps = {
 
 function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce, onPressSearch }: MapWithSheetProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
+  const [selectedPlace, setSelectedPlace] = useState<CommunityPlace | undefined>(undefined);
 
   const category: ListingCategory | undefined =
     activeCategory === "all" ? undefined : activeCategory;
@@ -358,13 +400,45 @@ function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce, onPressSea
     { placeholderData: (prev) => prev },
   );
 
+  // Independent query — places have no category filter, so this never
+  // refetches when the listings category changes. Same placeholderData
+  // trick as listings so place pins don't blink on remount/refocus.
+  const { data: placesData } = trpc.places.nearby.useQuery(
+    { lat, lng, radiusKm: 25 },
+    { placeholderData: (prev) => prev },
+  );
+
   const handleRetry = useCallback(() => {
     void refetch();
   }, [refetch]);
 
+  const handleDismissPlace = useCallback(() => setSelectedPlace(undefined), []);
+
   return (
     <View style={styles.mapWithSheetContainer}>
-      <MapSection lat={lat} lng={lng} data={data} onNavigateToStore={onNavigateToStore} />
+      <MapSection
+        lat={lat}
+        lng={lng}
+        data={data}
+        places={placesData}
+        onNavigateToStore={onNavigateToStore}
+        onSelectPlace={setSelectedPlace}
+        onDismissPlace={handleDismissPlace}
+      />
+
+      {/* Place-pin chrome (info card + OSM attribution) — floats above the
+          sheet's "14%" peek snap so it's visible at the default granted-
+          location state. At the "48%"/"90%" snaps the sheet (rendered after
+          this in the tree, and internally elevated by @gorhom) simply covers
+          it, which is acceptable — dismissing the card on sheet-drag is not
+          required. */}
+      <View style={styles.mapOverlayStack} pointerEvents="box-none">
+        {selectedPlace ? (
+          <PlaceInfoCard place={selectedPlace} onClose={handleDismissPlace} />
+        ) : null}
+        <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
+      </View>
+
       <ListingsSheet
         data={data}
         isLoading={isLoading}
@@ -581,6 +655,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   map: StyleSheet.absoluteFill,
+  // Anchored at the sheet's "14%" peek height (SHEET_SNAP_POINTS[0]) so the
+  // info card and attribution sit just above it rather than overlapping —
+  // see the comment above this View's usage in MapWithSheet for the
+  // 48%/90%-snap tradeoff.
+  mapOverlayStack: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: SHEET_PEEK_SNAP,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+  },
+  attribution: {
+    alignSelf: "flex-start",
+    fontSize: 10,
+    color: colors.textMuted,
+  },
   sheetBackground: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: radii.lg,

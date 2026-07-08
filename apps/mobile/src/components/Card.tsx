@@ -1,5 +1,6 @@
 /**
- * Card — warm surface container. Rounded (radius lg), soft shadow.
+ * Card — warm surface container. Rounded (radius lg), soft shadow by default
+ * (`shadow="raised"` for floating overlays).
  *
  * `variant="tint"` uses the subtle surfaceAlt background instead of plain
  * surface white — useful for nested/secondary cards (e.g. a collapsed step
@@ -16,17 +17,28 @@ type Props = {
   children: React.ReactNode;
   variant?: "surface" | "tint";
   style?: StyleProp<ViewStyle>;
-  /** Disable the soft shadow — useful when a card is nested inside another card. */
+  /**
+   * Shadow depth — "raised" for cards that float over other content (e.g. a
+   * map overlay); defaults to the standard soft in-flow card shadow.
+   */
+  shadow?: "soft" | "raised";
+  /** Disable the shadow entirely — useful when a card is nested inside another card. */
   flat?: boolean;
 };
 
-export function Card({ children, variant = "surface", style, flat = false }: Props) {
+export function Card({
+  children,
+  variant = "surface",
+  style,
+  shadow = "soft",
+  flat = false,
+}: Props) {
   return (
     <View
       style={[
         styles.base,
         variant === "tint" ? styles.tint : styles.surface,
-        flat ? null : shadows.soft,
+        flat ? null : shadows[shadow],
         style,
       ]}
     >

@@ -865,3 +865,67 @@ export const registerPushTokenInput = z.object({
 });
 
 export type RegisterPushTokenInput = z.infer<typeof registerPushTokenInput>;
+
+// ---------------------------------------------------------------------------
+// Community places — Home map pins (F-048)
+// Co-ops, health-food stores, and farmers markets imported from OpenStreetMap
+// + the USDA farmers-market directory into PostGIS. V1 tap behavior is an
+// info card (name, type, address, directions); no in-app booking/orders.
+// `placesNearby` mirrors `listings.nearby`'s geo-input shape and
+// `gardenFeedInput`'s radius default/cap.
+// ---------------------------------------------------------------------------
+
+/** The kind of community place shown as a Home map pin. */
+export const communityPlaceType = z.enum(["farmers_market", "coop", "health_food"]);
+
+export type CommunityPlaceType = z.infer<typeof communityPlaceType>;
+
+/**
+ * A single community place returned by `places.nearby`.
+ * `hoursText` is intentionally freeform display text (e.g. "Sat 8am–1pm,
+ * May–Oct") rather than structured hours — source data (OSM + the USDA
+ * farmers-market directory) is too inconsistent to normalize into a
+ * structured schedule for V1.
+ */
+export const communityPlace = z.object({
+  id: z.string().uuid(),
+  type: communityPlaceType,
+  name: z.string().min(1).max(200),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  address: z.string().max(300).nullable(),
+  // `.url()` alone admits any scheme (`javascript:`, `data:`, …) — the mobile
+  // app may render this as a tappable link, so pin it to http(s).
+  website: z
+    .string()
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), { message: "website must be an http(s) URL" })
+    .nullable(),
+  /** Freeform display text, e.g. "Sat 8am–1pm, May–Oct". Not structured hours. */
+  hoursText: z.string().max(500).nullable(),
+  /** Computed by ST_Distance on the server; kilometres. */
+  distanceKm: z.number().nonnegative(),
+});
+
+export type CommunityPlace = z.infer<typeof communityPlace>;
+
+/**
+ * Input to `places.nearby` (public).
+ * Mirrors `nearbyInput`'s lat/lng bounds and `gardenFeedInput`'s radius
+ * default (25 km) and cap (100 km). `type` optionally filters to a single
+ * `communityPlaceType` before the PostGIS distance query.
+ */
+export const placesNearbyInput = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  /** Search radius in kilometres. Defaults to 25; capped at 100. */
+  radiusKm: z.number().positive().max(100).default(25),
+  type: communityPlaceType.optional(),
+});
+
+export type PlacesNearbyInput = z.infer<typeof placesNearbyInput>;
+
+/** Response from `places.nearby` — capped at 200 pins per request. */
+export const placesNearbyOutput = z.array(communityPlace).max(200);
+
+export type PlacesNearbyOutput = z.infer<typeof placesNearbyOutput>;

@@ -38,7 +38,7 @@ import {
 } from "@homegrown/shared";
 import { protectedProcedure, publicProcedure, router } from "../trpc";
 import { gardenPosts } from "../db/schema";
-import { resolveCallerStore, encodeKeysetCursor, decodeKeysetCursor } from "./helpers";
+import { resolveCallerStore, encodeKeysetCursor, decodeKeysetCursor, geoRadius } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Local output schemas — composed from shared primitives.
@@ -81,11 +81,12 @@ const createPhotoUploadUrlsOutput = z.array(
 );
 
 /** Maps an allowed upload content-type to its object-key file extension. */
-const CONTENT_TYPE_EXT: Record<z.infer<typeof createPhotoUploadUrlsInput>["contentType"], string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
+const CONTENT_TYPE_EXT: Record<z.infer<typeof createPhotoUploadUrlsInput>["contentType"], string> =
+  {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+  };
 
 // ---------------------------------------------------------------------------
 // feed — raw-SQL row shape
@@ -165,7 +166,8 @@ export const gardenRouter = router({
     .output(gardenFeedOutput)
     .query(async ({ input, ctx }) => {
       const { lat, lng, radiusKm, cursor, limit } = input;
-      const radiusMeters = radiusKm * 1000;
+      const geo = geoRadius(lat, lng, radiusKm);
+      const geogColumn = sql`loc.geog`;
 
       let cursorCreatedAt: Date | null = null;
       let cursorId: string | null = null;
@@ -197,12 +199,12 @@ export const gardenRouter = router({
           p.mux_playback_id,
           p.duration_s,
           p.created_at,
-          ST_Distance(loc.geog, ST_MakePoint(${lng}, ${lat})::geography) AS distance_m
+          ${geo.distanceExpr(geogColumn)} AS distance_m
         FROM garden_posts p
         JOIN stores s ON s.id = p.store_id
         JOIN locations loc ON loc.store_id = s.id
         WHERE p.status = 'ready'
-        AND ST_DWithin(loc.geog, ST_MakePoint(${lng}, ${lat})::geography, ${radiusMeters})
+        AND ${geo.withinClause(geogColumn)}
         ${keysetFilter}
         ORDER BY p.created_at DESC, p.id DESC
         LIMIT ${limit + 1}
@@ -217,7 +219,9 @@ export const gardenRouter = router({
       }
 
       const pageRows = feedRows.slice(0, limit);
-      const items = pageRows.map(toFeedItem).filter((item): item is GardenFeedItem => item !== null);
+      const items = pageRows
+        .map(toFeedItem)
+        .filter((item): item is GardenFeedItem => item !== null);
 
       return { items, nextCursor };
     }),

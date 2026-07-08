@@ -24,7 +24,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
 import { stores, listings } from "../db/schema";
-import { resolveCallerStore } from "./helpers";
+import { geoRadius, resolveCallerStore } from "./helpers";
 
 /** Columns returned by all listing queries. */
 const listingCols = {
@@ -206,7 +206,8 @@ export const listingsRouter = router({
     .output(nearbyListingSchema.array())
     .query(async ({ input, ctx }) => {
       const { lat, lng, radiusKm, category, query } = input;
-      const radiusMeters = radiusKm * 1000;
+      const geo = geoRadius(lat, lng, radiusKm);
+      const geogColumn = sql`loc.geog`;
 
       // Build category filter clause — omit entirely when not supplied
       const categoryFilter = category
@@ -248,16 +249,16 @@ export const listingsRouter = router({
           l.unit,
           l.store_id,
           s.name AS store_name,
-          ST_Distance(loc.geog, ST_MakePoint(${lng}, ${lat})::geography) AS distance_m,
+          ${geo.distanceExpr(geogColumn)} AS distance_m,
           ST_Y(loc.geog::geometry) AS lat,
           ST_X(loc.geog::geometry) AS lng
         FROM listings l
         JOIN stores s ON s.id = l.store_id
         JOIN locations loc ON loc.store_id = s.id
-        WHERE ST_DWithin(loc.geog, ST_MakePoint(${lng}, ${lat})::geography, ${radiusMeters})
+        WHERE ${geo.withinClause(geogColumn)}
         ${categoryFilter}
         ${nameFilter}
-        ORDER BY ST_Distance(loc.geog, ST_MakePoint(${lng}, ${lat})::geography) ASC
+        ORDER BY ${geo.distanceExpr(geogColumn)} ASC
         LIMIT 50
       `);
 

@@ -56,3 +56,4 @@ google-cloud-cli-*.tar.gz
 .vscode/*
 !.vscode/extensions.json
 apps/server/scripts/.test-accounts.json
+apps/server/scripts/.places-import.json

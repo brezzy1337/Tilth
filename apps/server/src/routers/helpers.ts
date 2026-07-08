@@ -8,10 +8,49 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "../context";
 import { stores } from "../db/schema";
+
+// ---------------------------------------------------------------------------
+// PostGIS radius idiom — the ONE ST_MakePoint/ST_DWithin/ST_Distance shape
+// shared by listings.nearby, garden.feed, and places.nearby. All geo queries
+// go through PostGIS (geography types), never app-side haversine math.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the shared "within radius of (lat, lng)" SQL fragments around a
+ * single ST_MakePoint anchor.
+ *
+ * - `point` — the `ST_MakePoint(lng, lat)::geography` anchor itself.
+ * - `withinClause(geogColumn)` — `ST_DWithin(geogColumn, point, radiusM)`,
+ *   for the WHERE clause (index-assisted radius filter).
+ * - `distanceExpr(geogColumn)` — `ST_Distance(geogColumn, point)`, in metres,
+ *   for SELECT (`AS distance_m`) and ORDER BY.
+ *
+ * `geogColumn` is a caller-supplied fragment naming the geography column in
+ * that query's FROM aliases (e.g. sql`loc.geog`, sql`cp.location`). lat, lng,
+ * and the radius are bound parameters — never interpolate user input into the
+ * column fragment.
+ */
+export function geoRadius(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+): {
+  point: SQL;
+  withinClause: (geogColumn: SQL) => SQL;
+  distanceExpr: (geogColumn: SQL) => SQL;
+} {
+  const radiusMeters = radiusKm * 1000;
+  const point = sql`ST_MakePoint(${lng}, ${lat})::geography`;
+  return {
+    point,
+    withinClause: (geogColumn: SQL) => sql`ST_DWithin(${geogColumn}, ${point}, ${radiusMeters})`,
+    distanceExpr: (geogColumn: SQL) => sql`ST_Distance(${geogColumn}, ${point})`,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Keyset cursor codec — the ONE base64 "<dateISO>|<uuid>" cursor convention

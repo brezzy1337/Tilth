@@ -99,6 +99,13 @@
       "when": 1783487004372,
       "tag": "0013_wealthy_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783541439436,
+      "tag": "0014_bent_prowler",
+      "breakpoints": true
     }
   ]
 }
