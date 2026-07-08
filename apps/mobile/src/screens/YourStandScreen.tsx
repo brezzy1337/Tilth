@@ -127,7 +127,7 @@ function WelcomeCreateStore({ onCreated }: { onCreated: () => void }) {
   return (
     <View>
       <SectionHeader
-        emoji="\u{1F331}"
+        emoji="🌱"
         title="Let's open your stand"
         subtitle="Tell your neighbors what you grow — you can add payments and produce next."
         tint={colors.secondarySoft}
@@ -719,7 +719,7 @@ function SetupJourneyView({
 
   return (
     <View>
-      <SectionHeader emoji="\u{1F33B}" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
+      <SectionHeader emoji="🌻" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
       <Text style={styles.headlineSubtitle}>Let's get your stand ready to sell.</Text>
 
       <View style={styles.progressRow}>
@@ -737,7 +737,7 @@ function SetupJourneyView({
 
       <StepRow
         number={1}
-        emoji="\u{1F4B0}"
+        emoji="💰"
         title="Payments"
         complete={chargesEnabled}
         expanded={expandedStep === 1}
@@ -749,7 +749,7 @@ function SetupJourneyView({
 
       <StepRow
         number={2}
-        emoji="\u{1F4CD}"
+        emoji="📍"
         title="Location"
         complete={locationComplete}
         expanded={expandedStep === 2}
@@ -761,7 +761,7 @@ function SetupJourneyView({
 
       <StepRow
         number={3}
-        emoji="\u{1F9FA}"
+        emoji="🧺"
         title="First listing"
         complete={hasListings}
         expanded={expandedStep === 3}
@@ -813,7 +813,7 @@ function DashboardView({ storeId, storeName }: { storeId: string; storeName: str
   return (
     <View>
       <View style={styles.storeHeader}>
-        <SectionHeader emoji="\u{1F33B}" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
+        <SectionHeader emoji="🌻" title={storeName} tint={colors.accentSoft} iconColor={colors.accent} size="title" />
       </View>
 
       {/* Compact payments status row — tap to open the Stripe Express dashboard */}
@@ -823,7 +823,7 @@ function DashboardView({ storeId, storeName }: { storeId: string; storeName: str
         disabled={dashboardLinkMutation.isPending}
       >
         <Text style={styles.statusRowText}>
-          {"\u{1F4B0}"} Payments <Text style={styles.statusCheck}>{"✓"}</Text>
+          {"💰"} Payments <Text style={styles.statusCheck}>{"✓"}</Text>
           {connectStatusData?.payoutsEnabled ? " · Payouts enabled" : ""}
         </Text>
         {dashboardLinkMutation.isPending ? (
@@ -836,7 +836,7 @@ function DashboardView({ storeId, storeName }: { storeId: string; storeName: str
       {/* Listings — front and center */}
       <View style={styles.dashboardSection}>
         <SectionHeader
-          emoji="\u{1F9FA}"
+          emoji="🧺"
           title="Your listings"
           subtitle={`${listings?.length ?? 0} live`}
         />
@@ -882,7 +882,7 @@ function DashboardView({ storeId, storeName }: { storeId: string; storeName: str
       </View>
 
       <Button
-        title="\u{1F4E6} Orders / refund requests"
+        title="📦 Orders / refund requests"
         variant="secondary"
         onPress={() => navigation.navigate("StoreOrders")}
         style={styles.ordersButton}
