@@ -36,10 +36,10 @@ import {
   type Order,
   type OrderItemOutput,
 } from "@homegrown/shared";
-import { z } from "zod";
 import { eq, inArray, desc, and, isNull, isNotNull, lt, or } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
 import { orders, orderItems, listings, stores } from "../db/schema";
+import { encodeKeysetCursor, decodeKeysetCursor } from "./helpers";
 import type { Db } from "../context";
 
 /**
@@ -77,40 +77,6 @@ const orderColumns = {
   createdAt: orders.createdAt,
   updatedAt: orders.updatedAt,
 } as const;
-
-// ---------------------------------------------------------------------------
-// Cursor codec — base64 keyset cursor for listForMyStore pagination
-// ---------------------------------------------------------------------------
-
-/**
- * Encode a (createdAt, id) pair as an opaque base64 cursor string.
- * The payload is always ASCII (ISO date + UUID) so btoa is safe.
- */
-function encodeCursor(createdAt: Date, id: string): string {
-  return btoa(`${createdAt.toISOString()}|${id}`);
-}
-
-/**
- * Decode an opaque cursor back to (createdAt, id).
- * Validates the id with z.string().uuid() and the date with !isNaN(getTime()).
- * Throws TRPCError BAD_REQUEST "Invalid cursor" on any malformed part.
- */
-function decodeCursor(raw: string): { createdAt: Date; id: string } {
-  try {
-    const decoded = atob(raw);
-    const sepIdx = decoded.indexOf("|");
-    if (sepIdx === -1) throw new Error("missing separator");
-    const dateStr = decoded.slice(0, sepIdx);
-    const id = decoded.slice(sepIdx + 1);
-    const parsedDate = new Date(dateStr);
-    if (isNaN(parsedDate.getTime())) throw new Error("bad date");
-    // Validate id is a valid UUID
-    z.string().uuid().parse(id);
-    return { createdAt: parsedDate, id };
-  } catch {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
-  }
-}
 
 /**
  * Extends orderColumns with `storeUserId` for procedures that join stores.
@@ -1144,13 +1110,13 @@ export const ordersRouter = router({
 
       const { limit, cursor } = input;
 
-      // Decode and validate cursor using the module-level decodeCursor helper.
+      // Decode and validate cursor using the shared decodeKeysetCursor helper.
       // Uses atob/btoa (globally available in Node 16+ and React Native) rather than
       // Buffer so the server file type-checks under mobile's tsconfig (no node types).
       let cursorCreatedAt: Date | null = null;
       let cursorId: string | null = null;
       if (cursor) {
-        const decoded = decodeCursor(cursor);
+        const decoded = decodeKeysetCursor(cursor);
         cursorCreatedAt = decoded.createdAt;
         cursorId = decoded.id;
       }
@@ -1181,7 +1147,7 @@ export const ordersRouter = router({
       if (storeOrders.length > limit) {
         // storeOrders[limit - 1] = last row of this page (1-indexed: row `limit`); storeOrders[limit] is the probe row signalling there's more
         const lastRow = storeOrders[limit - 1]!;
-        nextCursor = encodeCursor(lastRow.createdAt, lastRow.id);
+        nextCursor = encodeKeysetCursor(lastRow.createdAt, lastRow.id);
       }
 
       // Trim to limit

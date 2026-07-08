@@ -386,6 +386,10 @@ export const messages = pgTable(
       t.createdAt.desc(),
       t.id.desc(),
     ),
+    // chat.send rate limiting: COUNT(*) of a sender's recent messages across
+    // ALL conversations (the pagination index above leads with conversation_id,
+    // so it can't serve a sender-only lookup).
+    index("messages_sender_user_id_created_at_idx").on(t.senderUserId, t.createdAt.desc()),
   ],
 );
 

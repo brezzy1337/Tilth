@@ -2,28 +2,35 @@
  * ConversationScreen — a single 1:1 buyer<->store chat thread (F-037).
  *
  * Route params: { conversationId } is guaranteed; the counterpart fields
- * (storeId/storeName/buyerId/buyerName) are passed by the inbox and the
- * StoreProfile "Message" button. When absent (push-notification deep link)
- * they're resolved from the chat.list cache/query.
+ * (storeId/storeName/storeUserId/buyerId/buyerName) are passed by the inbox.
+ * When any are absent (push-notification deep link, or the StoreProfile
+ * "Message" button — chat.start returns only the conversationId) they're
+ * resolved from the chat.list cache/query, whose summary carries the same
+ * fields.
  *
  * Data:
  *   trpc.chat.messages.useInfiniteQuery — newest-first keyset pages rendered
  *     in an inverted FlatList (index 0 = newest at the bottom; scrolling up
- *     pages older messages in via nextCursor).
+ *     pages older messages in via nextCursor). While the screen is focused
+ *     the query polls every 10 s (OrderDetailScreen's refetchInterval
+ *     pattern) so incoming messages appear without renavigation.
  *   trpc.chat.send — optimistic UX: the draft is cleared and a dimmed pending
  *     bubble shows immediately; on success the server message is prepended
- *     into the first cached page (no refetch); on error the pending bubble is
- *     removed and the draft restored. A FORBIDDEN response (either side
- *     blocked the other — the server deliberately doesn't say which) surfaces
- *     as a neutral "You can't message this person."
+ *     into the first cached page (no refetch; a later poll replacing the
+ *     pages with server truth is harmless — the ack is already in both). On
+ *     error the pending bubble is removed and the draft restored. A FORBIDDEN
+ *     response (either side blocked the other — the server deliberately
+ *     doesn't say which) surfaces as a neutral "You can't message this
+ *     person."; TOO_MANY_REQUESTS (server rate limit, >30 sends/min) as a
+ *     friendly slow-down note.
  *   trpc.chat.markRead — fired on focus and after each successful send, then
  *     chat.list is invalidated so inbox unread badges stay honest.
  *
  * Moderation (App Store Guideline 1.2):
  *   Header overflow (…) → Block user (confirm → chat.blockUser → goBack).
- *     Blocking needs the counterpart's userId: the buyer's id is on the
- *     conversation summary; a store owner's id is only learnable from a
- *     message they sent, so blocking is unavailable until they've written.
+ *     The counterpart's userId comes straight from the conversation summary
+ *     (viewer is buyer → storeUserId, viewer is seller → buyerId), so
+ *     blocking works even before the counterpart has sent anything.
  *   Long-press a counterpart message → Report (reason modal →
  *     chat.reportMessage → transient confirmation banner).
  *
@@ -48,12 +55,13 @@ import {
   View,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatMessage } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
+import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatMessageTimestamp } from "../utils/time";
 import { colors, radii, shadows, spacing, type } from "../theme";
@@ -63,6 +71,9 @@ const MAX_BODY_CHARS = 2000;
 /** Gap between consecutive messages that triggers a timestamp divider. */
 const TIMESTAMP_GAP_MS = 15 * 60 * 1000;
 const BLOCKED_SEND_MESSAGE = "You can't message this person.";
+const RATE_LIMITED_SEND_MESSAGE = "You're sending messages too quickly — give it a moment.";
+/** Poll cadence for new incoming messages while the thread is focused. */
+const THREAD_REFRESH_MS = 10_000;
 /**
  * Native-stack header bar height on iOS (pt), excluding the status-bar inset.
  * Combined with useSafeAreaInsets().top for KeyboardAvoidingView's offset.
@@ -106,25 +117,26 @@ export function ConversationScreen({ route, navigation }: Props) {
   // Counterpart resolution — params first, chat.list fallback for deep links
   // -------------------------------------------------------------------------
 
+  // Field-by-field: params win, the chat.list summary fills the gaps. The
+  // inbox passes everything; StoreProfile's "Message" button passes the names
+  // but not storeUserId (chat.start returns only the conversationId); push
+  // deep links pass nothing beyond the conversationId.
   const paramsComplete =
     route.params.storeId !== undefined &&
     route.params.storeName !== undefined &&
+    route.params.storeUserId !== undefined &&
     route.params.buyerId !== undefined &&
     route.params.buyerName !== undefined;
 
-  const { data: inbox } = trpc.chat.list.useQuery(
-    { limit: 100 },
-    { enabled: !paramsComplete },
-  );
+  const { data: inbox } = trpc.chat.list.useQuery({ limit: 100 }, { enabled: !paramsComplete });
 
-  const resolved = paramsComplete
-    ? route.params
-    : inbox?.items.find((c) => c.id === conversationId);
+  const summary = paramsComplete ? undefined : inbox?.items.find((c) => c.id === conversationId);
 
-  const storeId = resolved?.storeId;
-  const storeName = resolved?.storeName;
-  const buyerId = resolved?.buyerId;
-  const buyerName = resolved?.buyerName;
+  const storeId = route.params.storeId ?? summary?.storeId;
+  const storeName = route.params.storeName ?? summary?.storeName;
+  const storeUserId = route.params.storeUserId ?? summary?.storeUserId;
+  const buyerId = route.params.buyerId ?? summary?.buyerId;
+  const buyerName = route.params.buyerName ?? summary?.buyerName;
 
   const isViewerBuyer = buyerId !== undefined ? buyerId === myId : undefined;
   const counterpartName =
@@ -134,18 +146,17 @@ export function ConversationScreen({ route, navigation }: Props) {
   // Messages — newest-first infinite query, inverted list
   // -------------------------------------------------------------------------
 
+  const isFocused = useIsFocused();
   const messagesInput = { conversationId, limit: PAGE_LIMIT };
-  const {
-    data,
-    isLoading,
-    error,
-    refetch,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = trpc.chat.messages.useInfiniteQuery(messagesInput, {
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-  });
+  const { data, isLoading, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    trpc.chat.messages.useInfiniteQuery(messagesInput, {
+      getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+      // Poll for incoming messages while the thread is on screen (same
+      // focused-polling idea as OrderDetailScreen's webhook wait). The refetch
+      // replaces cached pages with server truth, which composes fine with the
+      // optimistic send prepend — by then the ack is in both.
+      refetchInterval: isFocused ? THREAD_REFRESH_MS : false,
+    });
 
   const serverMessages: ChatMessage[] = data?.pages.flatMap((page) => page.items) ?? [];
 
@@ -159,14 +170,13 @@ export function ConversationScreen({ route, navigation }: Props) {
   ];
 
   /**
-   * The counterpart's userId — needed for blockUser. The buyer's id is on the
-   * summary; when the viewer is the buyer, the store owner's id is only
-   * learnable from a message they sent.
+   * The counterpart's userId — needed for blockUser. Both sides are on the
+   * conversation summary (storeUserId is symmetric with buyerId), so this is
+   * known before any message exists; it's only null while a deep link is
+   * still resolving the summary from chat.list.
    */
   const counterpartUserId =
-    isViewerBuyer === false
-      ? buyerId ?? null
-      : serverMessages.find((m) => m.senderUserId !== myId)?.senderUserId ?? null;
+    isViewerBuyer === undefined ? null : isViewerBuyer ? (storeUserId ?? null) : (buyerId ?? null);
 
   // -------------------------------------------------------------------------
   // markRead — on focus and after sends; keep the inbox badges in sync
@@ -222,6 +232,8 @@ export function ConversationScreen({ route, navigation }: Props) {
           setDraft(body); // Give the text back so nothing is lost.
           if (err.data?.code === "FORBIDDEN") {
             Alert.alert(BLOCKED_SEND_MESSAGE);
+          } else if (err.data?.code === "TOO_MANY_REQUESTS") {
+            Alert.alert(RATE_LIMITED_SEND_MESSAGE);
           } else {
             Alert.alert("Message not sent", err.message);
           }
@@ -243,13 +255,8 @@ export function ConversationScreen({ route, navigation }: Props) {
   });
 
   const handleBlockPressed = useCallback(() => {
-    if (!counterpartUserId) {
-      Alert.alert(
-        "Block user",
-        "You can block this person once they've sent a message in this conversation.",
-      );
-      return;
-    }
+    // Only transiently null while a deep link resolves the summary.
+    if (!counterpartUserId) return;
     Alert.alert(
       `Block ${counterpartName ?? "this person"}?`,
       "You won't be able to send or receive messages from each other.",
@@ -323,9 +330,7 @@ export function ConversationScreen({ route, navigation }: Props) {
           }}
           style={styles.headerTitleButton}
           accessibilityRole={canOpenStore ? "button" : "text"}
-          accessibilityLabel={
-            canOpenStore ? `View ${counterpartName}'s stand` : counterpartName
-          }
+          accessibilityLabel={canOpenStore ? `View ${counterpartName}'s stand` : counterpartName}
         >
           <Text style={styles.headerTitleText} numberOfLines={1}>
             {counterpartName ?? "Conversation"}
@@ -352,11 +357,11 @@ export function ConversationScreen({ route, navigation }: Props) {
   // Render
   // -------------------------------------------------------------------------
 
-  const handleEndReached = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const handleEndReached = useInfiniteScrollEnd({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  });
 
   const renderRow = ({ item, index }: { item: ThreadRow; index: number }) => {
     const isMine = item.kind === "pending" || item.message.senderUserId === myId;
@@ -373,9 +378,7 @@ export function ConversationScreen({ route, navigation }: Props) {
       <View>
         {showTimestamp ? (
           <View style={styles.timestampPill}>
-            <Text style={styles.timestampText}>
-              {formatMessageTimestamp(rowCreatedAt(item))}
-            </Text>
+            <Text style={styles.timestampText}>{formatMessageTimestamp(rowCreatedAt(item))}</Text>
           </View>
         ) : null}
         <Pressable
@@ -404,9 +407,7 @@ export function ConversationScreen({ route, navigation }: Props) {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={
-        Platform.OS === "ios" ? insets.top + IOS_NAV_BAR_HEIGHT : 0
-      }
+      keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + IOS_NAV_BAR_HEIGHT : 0}
     >
       {isLoading ? (
         <View style={styles.centeredState}>
@@ -430,11 +431,7 @@ export function ConversationScreen({ route, navigation }: Props) {
           keyboardShouldPersistTaps="handled"
           ListFooterComponent={
             isFetchingNextPage ? (
-              <ActivityIndicator
-                size="small"
-                color={colors.primary}
-                style={styles.footerLoader}
-              />
+              <ActivityIndicator size="small" color={colors.primary} style={styles.footerLoader} />
             ) : null
           }
           ListEmptyComponent={
@@ -464,10 +461,7 @@ export function ConversationScreen({ route, navigation }: Props) {
           editable={!isLoading}
         />
         <Pressable
-          style={[
-            styles.sendButton,
-            draft.trim().length === 0 ? styles.sendButtonDisabled : null,
-          ]}
+          style={[styles.sendButton, draft.trim().length === 0 ? styles.sendButtonDisabled : null]}
           onPress={handleSend}
           disabled={draft.trim().length === 0}
           hitSlop={4}
@@ -481,16 +475,8 @@ export function ConversationScreen({ route, navigation }: Props) {
       {/* Report confirmation "toast" — anchored just above the composer so
           it never hides under the native header. */}
       {showReportConfirmation ? (
-        <View
-          style={[
-            styles.reportToast,
-            shadows.raised,
-            { bottom: composerHeight + spacing.md },
-          ]}
-        >
-          <Text style={styles.reportToastText}>
-            {"\u{1F331}"} Report received — thank you.
-          </Text>
+        <View style={[styles.reportToast, shadows.raised, { bottom: composerHeight + spacing.md }]}>
+          <Text style={styles.reportToastText}>{"\u{1F331}"} Report received — thank you.</Text>
         </View>
       ) : null}
 

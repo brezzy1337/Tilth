@@ -17,6 +17,9 @@
  *   - truncate: no-op under the limit, truncates + appends an ellipsis over it.
  *   - isBlockedEitherDirection: true when a blocks b, true when b blocks a,
  *     false when neither blocks the other.
+ *   - assertSendRateLimit: passes under the 30-message window, throws
+ *     TOO_MANY_REQUESTS at/over it (DB count faked; the real count query is
+ *     exercised in chat.integration.test.ts).
  */
 
 import { describe, it, expect } from "vitest";
@@ -27,6 +30,7 @@ import {
   decodeConversationsCursor,
   truncate,
   isBlockedEitherDirection,
+  assertSendRateLimit,
 } from "./chat";
 import type { Db } from "../context";
 
@@ -127,5 +131,32 @@ describe("chat — isBlockedEitherDirection", () => {
   it("returns false when no block row exists", async () => {
     const db = fakeDb([]);
     await expect(isBlockedEitherDirection(db, UUID_A, UUID_B)).resolves.toBe(false);
+  });
+});
+
+describe("chat — assertSendRateLimit", () => {
+  /** Fake the `select({ count }).from(messages).where(...)` count query. */
+  function fakeCountDb(recentCount: number): Db {
+    const selectBuilder = {
+      from: () => selectBuilder,
+      where: () => Promise.resolve([{ count: recentCount }]),
+    };
+    return { select: () => selectBuilder } as unknown as Db;
+  }
+
+  it("resolves when the sender is under the window (29 recent messages)", async () => {
+    await expect(assertSendRateLimit(fakeCountDb(29), UUID_A)).resolves.toBeUndefined();
+  });
+
+  it("throws TOO_MANY_REQUESTS at the limit (30 recent messages)", async () => {
+    await expect(assertSendRateLimit(fakeCountDb(30), UUID_A)).rejects.toThrow(
+      expect.objectContaining({ code: "TOO_MANY_REQUESTS" }),
+    );
+  });
+
+  it("throws TOO_MANY_REQUESTS over the limit", async () => {
+    await expect(assertSendRateLimit(fakeCountDb(45), UUID_A)).rejects.toThrow(
+      expect.objectContaining({ code: "TOO_MANY_REQUESTS" }),
+    );
   });
 });

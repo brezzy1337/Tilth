@@ -85,6 +85,7 @@ describe("conversationSummary schema", () => {
     id: uuid1,
     storeId: uuid2,
     storeName: "Sunny Acres",
+    storeUserId: uuid2,
     buyerId: uuid1,
     buyerName: "Jane Buyer",
     lastMessageBody: "See you Saturday!",
@@ -95,6 +96,12 @@ describe("conversationSummary schema", () => {
   it("parses a valid summary", () => {
     const result = conversationSummary.safeParse(valid);
     expect(result.success).toBe(true);
+  });
+
+  it("rejects a summary missing storeUserId (buyers need it to block/report the seller)", () => {
+    const { storeUserId: _omitted, ...withoutStoreUserId } = valid;
+    const result = conversationSummary.safeParse(withoutStoreUserId);
+    expect(result.success).toBe(false);
   });
 
   it("accepts null lastMessageBody/lastMessageAt for a conversation with no messages", () => {

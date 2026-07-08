@@ -407,10 +407,10 @@ export const createOrderInput = z
     deliveryAddress: z.string().trim().min(1).max(300).optional(),
     tipCents: z.number().int().nonnegative().max(100000).optional(),
   })
-  .refine(
-    (v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0,
-    { path: ["deliveryAddress"], message: "Delivery address is required for delivery" },
-  );
+  .refine((v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0, {
+    path: ["deliveryAddress"],
+    message: "Delivery address is required for delivery",
+  });
 
 export type CreateOrderInput = z.infer<typeof createOrderInput>;
 
@@ -739,6 +739,11 @@ export const conversationSummary = z.object({
   id: z.string().uuid(),
   storeId: z.string().uuid(),
   storeName: z.string(),
+  /**
+   * The store owner's user id — symmetric with `buyerId`, so a buyer can
+   * block/report the seller (moderation inputs take a USER id, not a store id).
+   */
+  storeUserId: z.string().uuid(),
   buyerId: z.string().uuid(),
   buyerName: z.string(),
   /** Preview text of the most recent message; null if the conversation has none. */

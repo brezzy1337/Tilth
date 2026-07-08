@@ -14,8 +14,12 @@
  *   - messages: participant-only (non-participant gets NOT_FOUND, not FORBIDDEN
  *     — existence isn't leaked); newest-first keyset pagination across 2 pages.
  *   - send: inserts a message, bumps conversations.last_message_at, rejects a
- *     blocked send with a generic FORBIDDEN; fires a push notification to the
- *     OTHER party's registered device after the write commits.
+ *     blocked send with a generic FORBIDDEN; sends a push notification to the
+ *     OTHER party's registered device after the write commits (awaited before
+ *     the mutation returns — see chat.ts on the Cloud Run rationale);
+ *     throttled with TOO_MANY_REQUESTS past 30 messages/60s per sender.
+ *   - reportMessage / registerPushToken: throttled with TOO_MANY_REQUESTS past
+ *     their hourly windows.
  *   - markRead + list: unreadCount reflects messages after the caller's
  *     last_read_at from the OTHER party only; markRead zeroes it.
  *   - list: a user who is a buyer in one conversation and a seller (store
@@ -39,17 +43,6 @@ import * as authHelpers from "../auth";
 
 const TEST_DB_URL = process.env["TEST_DATABASE_URL"];
 const describeWithDb = TEST_DB_URL ? describe : describe.skip;
-
-/** Poll until `predicate()` is true or the timeout elapses. */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error("waitFor: timed out");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 describeWithDb("chat router — Postgres integration", () => {
   let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -293,7 +286,7 @@ describeWithDb("chat router — Postgres integration", () => {
       .where(eq(schema.userBlocks.blockerUserId, sellerUserId));
   });
 
-  it("send: fires a push notification to the other party's registered device after commit", async () => {
+  it("send: sends a push notification to the other party's registered device after commit", async () => {
     const conversationId = seededConversationIds[0]!;
 
     const sellerCaller = createCaller(ctxFor(sellerUserId));
@@ -306,7 +299,10 @@ describeWithDb("chat router — Postgres integration", () => {
     const pushCallsBefore = pushCalls.length;
     await buyerCaller.chat.send({ conversationId, body: "Push me!" });
 
-    await waitFor(() => pushCalls.length > pushCallsBefore);
+    // The push is awaited inside `send` (Cloud Run: a fire-and-forget promise
+    // can be starved after the response flushes), so no polling is needed —
+    // by the time `send` resolves the push call has been made.
+    expect(pushCalls.length).toBe(pushCallsBefore + 1);
     const call = pushCalls[pushCalls.length - 1]!;
     expect(call.tokens).toContain("ExponentPushToken[seller-device]");
     expect(call.title).toBe(buyerUsername);
@@ -326,7 +322,7 @@ describeWithDb("chat router — Postgres integration", () => {
     const pushCallsBefore = pushCalls.length;
     await sellerCaller.chat.send({ conversationId, body: "Reply from the seller" });
 
-    await waitFor(() => pushCalls.length > pushCallsBefore);
+    expect(pushCalls.length).toBe(pushCallsBefore + 1);
     const call = pushCalls[pushCalls.length - 1]!;
     expect(call.tokens).toContain("ExponentPushToken[buyer-device]");
     expect(call.title).toBe(storeName);
@@ -384,6 +380,15 @@ describeWithDb("chat router — Postgres integration", () => {
     const row = inbox.items.find((c) => c.id === conversationId);
     expect(row?.lastMessageBody?.length).toBeLessThanOrEqual(121);
     expect(row?.lastMessageBody).toBe(`${"x".repeat(120)}…`);
+  });
+
+  it("list: rows carry storeUserId so a buyer can block/report the seller", async () => {
+    const conversationId = seededConversationIds[0]!;
+    const buyerCaller = createCaller(ctxFor(buyerId));
+
+    const inbox = await buyerCaller.chat.list({});
+    const row = inbox.items.find((c) => c.id === conversationId);
+    expect(row?.storeUserId).toBe(sellerUserId);
   });
 
   // -------------------------------------------------------------------------
@@ -444,5 +449,87 @@ describeWithDb("chat router — Postgres integration", () => {
       .where(eq(schema.pushTokens.token, token));
     expect(rowAfterSecond?.userId).toBe(otherBuyerId);
     expect(rowAfterSecond?.platform).toBe("android");
+  });
+
+  // -------------------------------------------------------------------------
+  // Rate limiting
+  // -------------------------------------------------------------------------
+
+  it("send: rejects with TOO_MANY_REQUESTS after 30 messages in 60s (per sender, across conversations)", async () => {
+    // Fresh buyer so the sends from earlier tests don't count against this one.
+    const [spammer] = await db
+      .insert(schema.users)
+      .values({ email: "chatspammer@test.invalid", username: "chatspammer", passwordHash: "x" })
+      .returning({ id: schema.users.id });
+    if (!spammer) throw new Error("Failed to seed spammer");
+    seededUserIds.push(spammer.id);
+
+    const spammerCaller = createCaller(ctxFor(spammer.id));
+    const { conversationId } = await spammerCaller.chat.start({ storeId });
+    seededConversationIds.push(conversationId);
+
+    // 29 recent messages: one more send is still allowed…
+    await db.insert(schema.messages).values(
+      Array.from({ length: 29 }, (_, i) => ({
+        conversationId,
+        senderUserId: spammer.id,
+        body: `spam ${i}`,
+      })),
+    );
+    await expect(
+      spammerCaller.chat.send({ conversationId, body: "message 30 — still fine" }),
+    ).resolves.toMatchObject({ conversationId });
+
+    // …but message 31 inside the window is throttled.
+    await expect(
+      spammerCaller.chat.send({ conversationId, body: "message 31 — throttled" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
+  });
+
+  it("reportMessage: rejects with TOO_MANY_REQUESTS after 10 reports in an hour", async () => {
+    const conversationId = seededConversationIds[0]!;
+    const buyerCaller = createCaller(ctxFor(buyerId));
+    const sellerCaller = createCaller(ctxFor(sellerUserId));
+    const sent = await sellerCaller.chat.send({ conversationId, body: "report throttle target" });
+
+    // Seed 10 recent reports by the buyer directly (reporting the same message
+    // repeatedly is exactly the abuse the throttle exists for).
+    await db.insert(schema.messageReports).values(
+      Array.from({ length: 10 }, () => ({
+        messageId: sent.id,
+        reporterUserId: buyerId,
+        reason: "spam",
+      })),
+    );
+
+    await expect(
+      buyerCaller.chat.reportMessage({ messageId: sent.id, reason: "spam again" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
+  });
+
+  it("registerPushToken: rejects with TOO_MANY_REQUESTS after 10 distinct tokens in an hour", async () => {
+    // Fresh user so tokens registered by earlier tests don't interfere.
+    const [hoarder] = await db
+      .insert(schema.users)
+      .values({ email: "chathoarder@test.invalid", username: "chathoarder", passwordHash: "x" })
+      .returning({ id: schema.users.id });
+    if (!hoarder) throw new Error("Failed to seed hoarder");
+    seededUserIds.push(hoarder.id);
+
+    await db.insert(schema.pushTokens).values(
+      Array.from({ length: 10 }, (_, i) => ({
+        token: `ExponentPushToken[hoarder-device-${i}]`,
+        userId: hoarder.id,
+        platform: "ios",
+      })),
+    );
+
+    const hoarderCaller = createCaller(ctxFor(hoarder.id));
+    await expect(
+      hoarderCaller.chat.registerPushToken({
+        token: "ExponentPushToken[hoarder-device-10]",
+        platform: "ios",
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
   });
 });

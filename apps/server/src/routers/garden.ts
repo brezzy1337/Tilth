@@ -38,7 +38,7 @@ import {
 } from "@homegrown/shared";
 import { protectedProcedure, publicProcedure, router } from "../trpc";
 import { gardenPosts } from "../db/schema";
-import { resolveCallerStore } from "./helpers";
+import { resolveCallerStore, encodeKeysetCursor, decodeKeysetCursor } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Local output schemas — composed from shared primitives.
@@ -86,30 +86,6 @@ const CONTENT_TYPE_EXT: Record<z.infer<typeof createPhotoUploadUrlsInput>["conte
   "image/png": "png",
   "image/webp": "webp",
 };
-
-// ---------------------------------------------------------------------------
-// Cursor codec — base64 keyset cursor, same convention as orders.listForMyStore
-// ---------------------------------------------------------------------------
-
-function encodeCursor(createdAt: Date, id: string): string {
-  return btoa(`${createdAt.toISOString()}|${id}`);
-}
-
-function decodeCursor(raw: string): { createdAt: Date; id: string } {
-  try {
-    const decoded = atob(raw);
-    const sepIdx = decoded.indexOf("|");
-    if (sepIdx === -1) throw new Error("missing separator");
-    const dateStr = decoded.slice(0, sepIdx);
-    const id = decoded.slice(sepIdx + 1);
-    const parsedDate = new Date(dateStr);
-    if (isNaN(parsedDate.getTime())) throw new Error("bad date");
-    z.string().uuid().parse(id);
-    return { createdAt: parsedDate, id };
-  } catch {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // feed — raw-SQL row shape
@@ -194,7 +170,7 @@ export const gardenRouter = router({
       let cursorCreatedAt: Date | null = null;
       let cursorId: string | null = null;
       if (cursor) {
-        const decoded = decodeCursor(cursor);
+        const decoded = decodeKeysetCursor(cursor);
         cursorCreatedAt = decoded.createdAt;
         cursorId = decoded.id;
       }
@@ -237,7 +213,7 @@ export const gardenRouter = router({
       let nextCursor: string | null = null;
       if (feedRows.length > limit) {
         const lastRow = feedRows[limit - 1]!;
-        nextCursor = encodeCursor(toDate(lastRow.created_at), lastRow.id);
+        nextCursor = encodeKeysetCursor(toDate(lastRow.created_at), lastRow.id);
       }
 
       const pageRows = feedRows.slice(0, limit);

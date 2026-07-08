@@ -28,7 +28,7 @@
  * React Native only — no DOM elements.
  */
 
-import React, { useCallback, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
@@ -44,6 +44,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { GardenFeedItem } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { GardensTabNavigationProp, TabParamList } from "../navigation/types";
 import { GardenPhotoCarousel } from "../components/GardenPhotoCarousel";
@@ -92,20 +93,18 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
   const activeIndex = items.findIndex((item) => item.id === activeId);
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
-  const onViewableItemsChanged = useRef(
-    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
-      const firstVisible = viewableItems.find((v) => v.isViewable);
-      if (firstVisible) {
-        setActiveId((firstVisible.item as GardenFeedItem).id);
-      }
-    },
-  ).current;
-
-  const handleEndReached = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const firstVisible = viewableItems.find((v) => v.isViewable);
+    if (firstVisible) {
+      setActiveId((firstVisible.item as GardenFeedItem).id);
     }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }).current;
+
+  const handleEndReached = useInfiniteScrollEnd({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  });
 
   if (isLoading) {
     return (

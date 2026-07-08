@@ -6,7 +6,7 @@
  *                        most-recent-activity first, keyset cursor-paginated.
  * `messages`          — authed, participant-only; newest-first keyset pages.
  * `send`              — authed, participant-only; inserts a message, bumps
- *                        `last_message_at`, and fires a best-effort push
+ *                        `last_message_at`, and sends a best-effort push
  *                        notification to the OTHER party after the write commits.
  * `markRead`          — authed, participant-only; marks the caller's side read.
  * `blockUser`         — authed; idempotent upsert (no error if repeated).
@@ -22,13 +22,20 @@
  *   - Block checks that fail must surface a generic FORBIDDEN message — never
  *     reveal WHO blocked whom.
  *   - Push failures must never fail the mutation — `ctx.push.send` already
- *     swallows its own errors (see push.ts); this file never awaits it in a
- *     way that could reject the caller's request.
+ *     swallows its own errors (see push.ts), and the call site in `send`
+ *     wraps the whole push step in its own try/catch. The push IS awaited,
+ *     though: on Cloud Run (minScale 0, CPU throttled outside requests) a
+ *     fire-and-forget promise can be starved or reclaimed after the response
+ *     flushes, silently dropping notifications.
+ *   - Write endpoints are rate-limited per user (pilot-appropriate, DB-count
+ *     based — no extra infra): `send` 30 msgs/60s, `reportMessage` 10/hour,
+ *     `registerPushToken` 10 distinct tokens/hour. Excess gets
+ *     TOO_MANY_REQUESTS.
  */
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and, or, lt, desc, sql } from "drizzle-orm";
+import { eq, and, or, lt, gte, desc, sql, count } from "drizzle-orm";
 import {
   startConversationInput,
   startConversationOutput,
@@ -55,6 +62,12 @@ import {
   messageReports,
   pushTokens,
 } from "../db/schema";
+import {
+  encodeKeysetCursor,
+  decodeKeysetCursor,
+  encodeKeysetCursorParts,
+  decodeKeysetCursorParts,
+} from "./helpers";
 import type { Db } from "../context";
 
 /** Preview text on `conversations.list` rows is truncated server-side to this length. */
@@ -68,32 +81,19 @@ export function truncate(text: string, max: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Cursor codecs — base64 keyset cursors, same convention as garden.feed /
-// orders.listForMyStore. Exported for direct unit testing (see chat.test.ts) —
-// same rationale as other cursor codecs in this codebase being exercised
-// indirectly via the router in most files, but the nullable-lastMessageAt
-// variant here has enough branches to warrant direct coverage.
+// Cursor codecs — thin wrappers over the shared keyset codec in helpers.ts
+// (same convention as garden.feed / orders.listForMyStore). Exported for
+// direct unit testing (see chat.test.ts) — the nullable-lastMessageAt
+// conversations variant has enough branches to warrant direct coverage.
 // ---------------------------------------------------------------------------
 
 /** Messages cursor: (createdAt, id) — createdAt is never null. */
 export function encodeMessagesCursor(createdAt: Date, id: string): string {
-  return btoa(`${createdAt.toISOString()}|${id}`);
+  return encodeKeysetCursor(createdAt, id);
 }
 
 export function decodeMessagesCursor(raw: string): { createdAt: Date; id: string } {
-  try {
-    const decoded = atob(raw);
-    const sepIdx = decoded.indexOf("|");
-    if (sepIdx === -1) throw new Error("missing separator");
-    const dateStr = decoded.slice(0, sepIdx);
-    const id = decoded.slice(sepIdx + 1);
-    const parsedDate = new Date(dateStr);
-    if (isNaN(parsedDate.getTime())) throw new Error("bad date");
-    z.string().uuid().parse(id);
-    return { createdAt: parsedDate, id };
-  } catch {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
-  }
+  return decodeKeysetCursor(raw);
 }
 
 /**
@@ -103,24 +103,17 @@ export function decodeMessagesCursor(raw: string): { createdAt: Date; id: string
  * collides with a real ISO timestamp.
  */
 export function encodeConversationsCursor(lastMessageAt: Date | null, id: string): string {
-  return btoa(`${lastMessageAt ? lastMessageAt.toISOString() : ""}|${id}`);
+  return encodeKeysetCursorParts(lastMessageAt ? lastMessageAt.toISOString() : "", id);
 }
 
 export function decodeConversationsCursor(raw: string): { lastMessageAt: Date | null; id: string } {
-  try {
-    const decoded = atob(raw);
-    const sepIdx = decoded.indexOf("|");
-    if (sepIdx === -1) throw new Error("missing separator");
-    const dateStr = decoded.slice(0, sepIdx);
-    const id = decoded.slice(sepIdx + 1);
-    z.string().uuid().parse(id);
-    if (dateStr === "") return { lastMessageAt: null, id };
-    const parsedDate = new Date(dateStr);
-    if (isNaN(parsedDate.getTime())) throw new Error("bad date");
-    return { lastMessageAt: parsedDate, id };
-  } catch {
+  const { dateStr, id } = decodeKeysetCursorParts(raw);
+  if (dateStr === "") return { lastMessageAt: null, id };
+  const parsedDate = new Date(dateStr);
+  if (isNaN(parsedDate.getTime())) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
   }
+  return { lastMessageAt: parsedDate, id };
 }
 
 /** Normalise a driver-returned timestamp (Date, string, or null) to a Date or null. */
@@ -195,6 +188,82 @@ export async function isBlockedEitherDirection(db: Db, a: string, b: string): Pr
 }
 
 // ---------------------------------------------------------------------------
+// Rate limiting — pilot-appropriate, DB-count based (no Redis / extra infra).
+// Each check counts the caller's recent rows in the relevant table and throws
+// TOO_MANY_REQUESTS when the window is full. Single-region, low-volume pilot:
+// a COUNT over an indexed (user, created_at) range is plenty.
+// ---------------------------------------------------------------------------
+
+/** `send`: max messages per sender (across ALL conversations) per window. */
+const SEND_RATE_LIMIT = { max: 30, windowMs: 60_000 };
+/** `reportMessage`: max reports per reporter per window. */
+const REPORT_RATE_LIMIT = { max: 10, windowMs: 60 * 60_000 };
+/** `registerPushToken`: max DISTINCT tokens registered per user per window (see below). */
+const PUSH_TOKEN_RATE_LIMIT = { max: 10, windowMs: 60 * 60_000 };
+
+/**
+ * Throw TOO_MANY_REQUESTS when a sender has hit the `send` window
+ * (SEND_RATE_LIMIT). Counts messages by sender across all conversations —
+ * served by messages_sender_user_id_created_at_idx. Exported for chat.test.ts.
+ */
+export async function assertSendRateLimit(db: Db, senderUserId: string): Promise<void> {
+  const since = new Date(Date.now() - SEND_RATE_LIMIT.windowMs);
+  const [row] = await db
+    .select({ count: count() })
+    .from(messages)
+    .where(and(eq(messages.senderUserId, senderUserId), gte(messages.createdAt, since)));
+
+  if ((row?.count ?? 0) >= SEND_RATE_LIMIT.max) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "You're sending messages too quickly. Please wait a moment.",
+    });
+  }
+}
+
+/** Throw TOO_MANY_REQUESTS when a reporter has hit the `reportMessage` window. */
+async function assertReportRateLimit(db: Db, reporterUserId: string): Promise<void> {
+  const since = new Date(Date.now() - REPORT_RATE_LIMIT.windowMs);
+  const [row] = await db
+    .select({ count: count() })
+    .from(messageReports)
+    .where(
+      and(eq(messageReports.reporterUserId, reporterUserId), gte(messageReports.createdAt, since)),
+    );
+
+  if ((row?.count ?? 0) >= REPORT_RATE_LIMIT.max) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Too many reports. Please try again later.",
+    });
+  }
+}
+
+/**
+ * Throw TOO_MANY_REQUESTS when a user has registered too many DISTINCT push
+ * tokens recently. `push_tokens` upserts by token, so this counts rows whose
+ * `updated_at` falls in the window — a known limitation: re-registering the
+ * SAME token repeatedly stays at count 1 and is never throttled (harmless — it
+ * rewrites one row), while the actual abuse vector (flooding many tokens onto
+ * one account) is capped. Good enough for the pilot's single-region deployment
+ * without adding a rate-limit store.
+ */
+async function assertPushTokenRateLimit(db: Db, userId: string): Promise<void> {
+  const since = new Date(Date.now() - PUSH_TOKEN_RATE_LIMIT.windowMs);
+  const [row] = await db
+    .select({ count: count() })
+    .from(pushTokens)
+    .where(and(eq(pushTokens.userId, userId), gte(pushTokens.updatedAt, since)));
+
+  if ((row?.count ?? 0) >= PUSH_TOKEN_RATE_LIMIT.max) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Too many device registrations. Please try again later.",
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // list — raw-SQL row shape (nullable last_message_at, lateral last-message join)
 // ---------------------------------------------------------------------------
 
@@ -202,6 +271,7 @@ interface ConversationRow {
   id: string;
   store_id: string;
   store_name: string;
+  store_user_id: string;
   buyer_id: string;
   buyer_name: string;
   last_message_body: string | null;
@@ -214,6 +284,7 @@ function toConversationSummary(row: ConversationRow): ConversationSummary {
     id: row.id,
     storeId: row.store_id,
     storeName: row.store_name,
+    storeUserId: row.store_user_id,
     buyerId: row.buyer_id,
     buyerName: row.buyer_name,
     lastMessageBody:
@@ -323,6 +394,7 @@ export const chatRouter = router({
           c.id,
           c.store_id,
           s.name AS store_name,
+          s.user_id AS store_user_id,
           c.buyer_id,
           u.username AS buyer_name,
           lm.body AS last_message_body,
@@ -425,9 +497,10 @@ export const chatRouter = router({
     }),
 
   /**
-   * Send a message. Participant-only; rejects if either party blocks the
-   * other. After the write commits, fires a best-effort push notification to
-   * the OTHER party's registered devices (never fails the mutation).
+   * Send a message. Participant-only; rate-limited per sender; rejects if
+   * either party blocks the other. After the write commits, sends a
+   * best-effort push notification to the OTHER party's registered devices
+   * (a push failure never fails the mutation).
    */
   send: protectedProcedure
     .input(sendMessageInput)
@@ -444,6 +517,8 @@ export const chatRouter = router({
           message: "You can't send messages in this conversation",
         });
       }
+
+      await assertSendRateLimit(ctx.db, callerId);
 
       const inserted = await ctx.db.transaction(async (tx) => {
         const [row] = await tx
@@ -476,18 +551,20 @@ export const chatRouter = router({
         return row;
       });
 
-      // Fire-and-forget push to the OTHER party, AFTER the transaction commits.
-      // Never awaited in a way that could reject this mutation — ctx.push.send
-      // itself never throws (see push.ts), and we additionally don't `await`
-      // the outer call so a slow push send can't add latency to `send`.
-      void (async () => {
-        try {
-          const tokens = await ctx.db
-            .select({ token: pushTokens.token })
-            .from(pushTokens)
-            .where(eq(pushTokens.userId, otherUserId));
-          if (tokens.length === 0) return;
+      // Push to the OTHER party, AFTER the transaction commits. AWAITED on
+      // purpose: on Cloud Run (minScale 0, CPU throttled outside requests) a
+      // fire-and-forget promise can be starved or reclaimed once the response
+      // flushes, silently dropping the notification. The try/catch preserves
+      // the never-throws guarantee — a push failure (ctx.push.send already
+      // swallows its own errors; this catches everything else, e.g. the token
+      // lookup) must never fail the committed message.
+      try {
+        const tokens = await ctx.db
+          .select({ token: pushTokens.token })
+          .from(pushTokens)
+          .where(eq(pushTokens.userId, otherUserId));
 
+        if (tokens.length > 0) {
           const senderName = isCallerBuyer ? participant.buyerName : participant.storeName;
 
           await ctx.push.send({
@@ -496,15 +573,15 @@ export const chatRouter = router({
             body: truncate(input.body, PUSH_BODY_MAX_CHARS),
             data: { conversationId: input.conversationId },
           });
-        } catch (err) {
-          // Belt-and-braces — ctx.push.send already swallows its own errors,
-          // but never let anything here escape and affect the caller.
-          console.error(
-            "[chat.send] push notification failed",
-            err instanceof Error ? err.message : String(err),
-          );
         }
-      })();
+      } catch (err) {
+        // Never let a push-path failure escape and affect the caller — the
+        // message is already committed.
+        console.error(
+          "[chat.send] push notification failed",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
 
       return {
         id: inserted.id,
@@ -571,6 +648,8 @@ export const chatRouter = router({
       // Verifies participancy; throws NOT_FOUND if the caller isn't one.
       await resolveParticipant(ctx.db, msg.conversationId, ctx.user.id);
 
+      await assertReportRateLimit(ctx.db, ctx.user.id);
+
       await ctx.db.insert(messageReports).values({
         messageId: input.messageId,
         reporterUserId: ctx.user.id,
@@ -589,6 +668,8 @@ export const chatRouter = router({
     .input(registerPushTokenInput)
     .output(z.object({ success: z.literal(true) }))
     .mutation(async ({ input, ctx }) => {
+      await assertPushTokenRateLimit(ctx.db, ctx.user.id);
+
       await ctx.db
         .insert(pushTokens)
         .values({ token: input.token, userId: ctx.user.id, platform: input.platform })

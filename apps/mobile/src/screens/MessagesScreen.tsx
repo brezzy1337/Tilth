@@ -33,6 +33,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import type { ConversationSummary } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
+import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import type { MessagesTabNavigationProp, TabParamList } from "../navigation/types";
 import { formatRelativeTime } from "../utils/time";
 import { colors, radii, spacing, type } from "../theme";
@@ -70,10 +71,7 @@ function ConversationRow({ item, viewerId, onPress }: RowProps) {
     >
       <View style={styles.rowBody}>
         <View style={styles.rowTopLine}>
-          <Text
-            style={[styles.rowName, isUnread ? styles.rowNameUnread : null]}
-            numberOfLines={1}
-          >
+          <Text style={[styles.rowName, isUnread ? styles.rowNameUnread : null]} numberOfLines={1}>
             {counterpartName}
           </Text>
           {item.lastMessageAt ? (
@@ -134,11 +132,11 @@ export function MessagesScreen({ navigation }: Props) {
     }, [utils]),
   );
 
-  const handleEndReached = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const handleEndReached = useInfiniteScrollEnd({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  });
 
   const items: ConversationSummary[] = data?.pages.flatMap((page) => page.items) ?? [];
 
@@ -203,6 +201,7 @@ export function MessagesScreen({ navigation }: Props) {
                 conversationId: item.id,
                 storeId: item.storeId,
                 storeName: item.storeName,
+                storeUserId: item.storeUserId,
                 buyerId: item.buyerId,
                 buyerName: item.buyerName,
               })

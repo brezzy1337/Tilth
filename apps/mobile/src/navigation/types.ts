@@ -16,10 +16,7 @@
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
-import type {
-  CompositeNavigationProp,
-  NavigatorScreenParams,
-} from "@react-navigation/native";
+import type { CompositeNavigationProp, NavigatorScreenParams } from "@react-navigation/native";
 
 export type PreAuthStackParamList = {
   Hero: undefined;
@@ -49,14 +46,17 @@ export type AuthedStackParamList = {
   /**
    * 1:1 chat thread (F-037). Only `conversationId` is guaranteed — push
    * notification deep links carry nothing else. The counterpart fields are
-   * passed when known (inbox row / StoreProfile "Message" button) so the
-   * header renders immediately; otherwise the screen resolves them from
-   * `chat.list`.
+   * passed when known (inbox rows carry the full summary, including
+   * `storeUserId` so a buyer can block the seller before any message exists)
+   * so the header renders immediately; otherwise the screen resolves them
+   * from `chat.list`.
    */
   Conversation: {
     conversationId: string;
     storeId?: string;
     storeName?: string;
+    /** The store owner's USER id (moderation inputs take a user id). */
+    storeUserId?: string;
     buyerId?: string;
     buyerName?: string;
   };
