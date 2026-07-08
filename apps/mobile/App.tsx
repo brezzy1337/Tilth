@@ -11,6 +11,11 @@
  *   - React Navigation: pre-auth stack (Hero / LogIn / SignUp) or
  *     authenticated stack (Home, …), chosen by AuthContext status.
  *     While status === "loading" a centered splash is shown.
+ *   - Push notifications (F-037): once signed in, usePushNotifications
+ *     registers the device's Expo push token (best-effort — a simulator,
+ *     denied permission, or network failure never blocks app start) and
+ *     deep-links notification taps carrying data.conversationId into the
+ *     Conversation screen via navigationRef.
  *
  * Secrets policy: EXPO_PUBLIC_API_URL is read from the environment (set in
  * .env locally; never commit a filled-in .env). No secret keys here.
@@ -38,6 +43,11 @@ import { trpc, API_URL, getAuthToken } from "./src/api/trpc";
 import { colors } from "./src/theme";
 import { AuthProvider, useAuth } from "./src/auth/AuthContext";
 import { CartProvider } from "./src/cart/CartContext";
+import { usePushNotifications } from "./src/push/pushNotifications";
+import {
+  navigationRef,
+  flushPendingConversationNavigation,
+} from "./src/navigation/rootNavigation";
 import { HeroScreen } from "./src/screens/HeroScreen";
 import { LogInScreen } from "./src/screens/LogInScreen";
 import { SignUpScreen } from "./src/screens/SignUpScreen";
@@ -53,6 +63,7 @@ import { OrdersScreen } from "./src/screens/OrdersScreen";
 import { OrderDetailScreen } from "./src/screens/OrderDetailScreen";
 import { StoreOrdersScreen } from "./src/screens/StoreOrdersScreen";
 import { StoreProfileScreen } from "./src/screens/StoreProfileScreen";
+import { ConversationScreen } from "./src/screens/ConversationScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
@@ -151,6 +162,10 @@ function MainTabs() {
 function RootNavigator() {
   const { status } = useAuth();
 
+  // Push token registration + notification-tap deep links; armed once auth
+  // resolves to signedIn. Internally failure-tolerant (see pushNotifications.ts).
+  usePushNotifications(status === "signedIn");
+
   if (status === "loading") {
     return (
       <View style={styles.splash}>
@@ -160,7 +175,7 @@ function RootNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef} onReady={flushPendingConversationNavigation}>
       {status === "signedOut" ? (
         <PreAuthStack.Navigator
           initialRouteName="Hero"
@@ -228,6 +243,11 @@ function RootNavigator() {
             name="Search"
             component={SearchScreen}
             options={{ title: "Search" }}
+          />
+          <AuthedStack.Screen
+            name="Conversation"
+            component={ConversationScreen}
+            options={{ title: "Conversation" }}
           />
           <AuthedStack.Screen
             name="GardenComposer"

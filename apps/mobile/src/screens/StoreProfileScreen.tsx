@@ -13,6 +13,13 @@
  * Data:
  *   trpc.stores.get({ storeId })         → StoreProfile header data
  *   trpc.listings.listByStore({ storeId }) → Listing[] catalog rows
+ *   trpc.stores.getMine                  → hides "Message" on the owner's own stand
+ *
+ * Messaging (F-037): a "Message" button in the header calls
+ * chat.start({ storeId }) (idempotent — resumes an existing thread) and
+ * pushes the Conversation screen. Hidden when the viewer owns this store.
+ * A FORBIDDEN response (a block exists in either direction — the server
+ * deliberately doesn't say which) surfaces as a neutral alert.
  *
  * States: loading (spinner), error + retry, empty catalog notice.
  *
@@ -22,6 +29,7 @@
 import React from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Pressable,
@@ -33,7 +41,9 @@ import {
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
 import { trpc } from "../api/trpc";
+import { useAuth } from "../auth/AuthContext";
 import type { AuthedStackParamList } from "../navigation/types";
+import { Button } from "../components/Button";
 import { ListingCard } from "../components/ListingCard";
 import type { Listing, TrustTier } from "@homegrown/shared";
 import { colors, radii, spacing, type } from "../theme";
@@ -75,8 +85,9 @@ function TrustBadge({ tier }: { tier: TrustTier }) {
   );
 }
 
-export function StoreProfileScreen({ route }: Props) {
+export function StoreProfileScreen({ route, navigation }: Props) {
   const { storeId, storeName: fallbackName } = route.params;
+  const { user } = useAuth();
 
   const {
     data: profile,
@@ -91,6 +102,31 @@ export function StoreProfileScreen({ route }: Props) {
     error: listingsError,
     refetch: refetchListings,
   } = trpc.listings.listByStore.useQuery({ storeId });
+
+  // Own-store detection: stores.get is the public shape (no userId), so
+  // compare against the viewer's own store id from stores.getMine (null/
+  // undefined for non-sellers). Same gating pattern as GardenFeedScreen.
+  const { data: myStore } = trpc.stores.getMine.useQuery();
+  const isOwnStore = myStore != null && myStore.id === storeId;
+
+  const startConversation = trpc.chat.start.useMutation({
+    onSuccess: ({ conversationId }) => {
+      navigation.navigate("Conversation", {
+        conversationId,
+        storeId,
+        storeName: profile?.name ?? fallbackName,
+        buyerId: user?.id,
+        buyerName: user?.username,
+      });
+    },
+    onError: (err) => {
+      if (err.data?.code === "FORBIDDEN") {
+        Alert.alert("You can't message this person.");
+      } else {
+        Alert.alert("Could not start conversation", err.message);
+      }
+    },
+  });
 
   const isLoading = profileLoading || listingsLoading;
   const hasError = profileError ?? listingsError;
@@ -169,6 +205,16 @@ export function StoreProfileScreen({ route }: Props) {
               {profile?.trustTier ? <TrustBadge tier={profile.trustTier} /> : null}
               {profile?.about ? (
                 <Text style={styles.about}>{profile.about}</Text>
+              ) : null}
+              {!isOwnStore ? (
+                <Button
+                  title="Message"
+                  variant="secondary"
+                  fullWidth={false}
+                  loading={startConversation.isPending}
+                  onPress={() => startConversation.mutate({ storeId })}
+                  style={styles.messageButton}
+                />
               ) : null}
             </View>
 
@@ -265,6 +311,10 @@ const styles = StyleSheet.create({
     fontSize: type.body.fontSize,
     color: colors.textMuted,
     lineHeight: 20,
+  },
+  messageButton: {
+    alignSelf: "flex-start",
+    marginTop: spacing.md,
   },
   trustBadge: {
     flexDirection: "row",

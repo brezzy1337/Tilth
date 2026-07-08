@@ -1,10 +1,10 @@
 /**
- * Button — warm themed button used across the "Harvest Warm" rollout.
+ * Button — themed button for the "Garden Fresh" design system (F-044).
  *
  * Variants:
- *   primary   — solid terracotta, white label (default)
- *   secondary — outlined terracotta, terracotta label
- *   ghost     — no border/fill, terracotta label (for low-emphasis actions)
+ *   primary   — solid fresh green, white label (default)
+ *   secondary — outlined green, green label
+ *   ghost     — no border/fill, green label (for low-emphasis actions)
  *
  * Full-width by default (matches the legacy button rows in YourStandScreen);
  * pass `fullWidth={false}` for inline/auto-sized buttons.

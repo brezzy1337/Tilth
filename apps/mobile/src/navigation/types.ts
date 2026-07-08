@@ -46,6 +46,20 @@ export type AuthedStackParamList = {
   // tab slot (F-047) — so Home's seasonal chips can still deep-link into it.
   Search: { initialQuery?: string } | undefined;
   GardenComposer: undefined;
+  /**
+   * 1:1 chat thread (F-037). Only `conversationId` is guaranteed — push
+   * notification deep links carry nothing else. The counterpart fields are
+   * passed when known (inbox row / StoreProfile "Message" button) so the
+   * header renders immediately; otherwise the screen resolves them from
+   * `chat.list`.
+   */
+  Conversation: {
+    conversationId: string;
+    storeId?: string;
+    storeName?: string;
+    buyerId?: string;
+    buyerName?: string;
+  };
 };
 
 // Convenience aliases
@@ -69,6 +83,11 @@ export type HomeTabNavigationProp = CompositeNavigationProp<
 
 export type GardensTabNavigationProp = CompositeNavigationProp<
   BottomTabNavigationProp<TabParamList, "Gardens">,
+  NativeStackNavigationProp<AuthedStackParamList>
+>;
+
+export type MessagesTabNavigationProp = CompositeNavigationProp<
+  BottomTabNavigationProp<TabParamList, "Messages">,
   NativeStackNavigationProp<AuthedStackParamList>
 >;
 
