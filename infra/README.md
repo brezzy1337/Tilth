@@ -825,6 +825,178 @@ the service account itself — nothing project-wide.
 
 ---
 
+## 10. Monitoring & alerting
+
+GCP-native only (Cloud Monitoring, Cloud Logging/Error Reporting, Cloud
+Billing Budgets) — no third-party vendor. Sentry (mobile crash reporting) is a
+separate, later signup and out of scope here. These resources are
+**console/gcloud-managed, not Terraform** — consistent with the repo's
+existing out-of-band pattern for one-off decisions that shouldn't become a
+permanent TF resource before they're settled (see §9). All alert policies
+notify the single email channel below; before this existed, an outage was
+only discovered by opening the app.
+
+### Notification channel
+
+| Field | Value |
+|---|---|
+| Name | `projects/homegrown-1eec2/notificationChannels/4342201031520320359` |
+| Type | `email` |
+| Recipient | `devin.phat97@gmail.com` |
+
+Channels created via the Monitoring API (as this one was, with
+`gcloud alpha monitoring channels create`) do not require the click-through
+verification step that Console-created email channels prompt for — the API
+path skips it entirely, and this channel already shows `enabled: true` with
+no `verificationStatus` field (proto3 omits the default `UNSPECIFIED`), so it
+is live and usable as-is.
+
+**To add another channel** (e.g. a second on-call email or a Slack channel
+via a webhook):
+
+```bash
+cat > channel.json <<'EOF'
+{
+  "type": "email",
+  "displayName": "<label>",
+  "labels": { "email_address": "<address>" }
+}
+EOF
+gcloud alpha monitoring channels create --project=homegrown-1eec2 \
+  --channel-content-from-file=channel.json
+```
+
+Then add its resulting `name` to the `notificationChannels` array of any
+policy (`gcloud alpha monitoring policies update <POLICY_NAME> ...` or edit
+in Console).
+
+### Uptime check
+
+| Field | Value |
+|---|---|
+| Name | `projects/homegrown-1eec2/uptimeCheckConfigs/tilth-api-health-ping-6DWO_DIZ64A` |
+| Target | `GET https://api.tilth.market/trpc/health.ping` |
+| Cadence | 300s (5 min) |
+| Checkers | Global (`STATIC_IP_CHECKERS`, all regions — not a VPC-scoped check) |
+| Success match | HTTP 2xx **and** response body contains `"status":"ok"` |
+| Timeout | 10s |
+
+5-minute cadence was chosen over 60s: this is a pilot with near-zero
+baseline traffic, so a tighter cadence buys faster detection at the cost of
+more billed checks for no real benefit (an outage sitting undetected for up
+to ~5 extra minutes is an acceptable tradeoff pre-launch).
+
+**Alert policy** — `projects/homegrown-1eec2/alertPolicies/8225810025979723021`
+(*"Tilth API — uptime check failing (health.ping)"*): fires when any global
+checker reports a failed check within a 20-minute alignment window
+(`REDUCE_COUNT_FALSE` > 0), notifying the email channel above.
+
+### Alert policy — Cloud Run 5xx rate
+
+`projects/homegrown-1eec2/alertPolicies/104188410881408557`
+(*"Tilth API — Cloud Run 5xx spike (homegrown-server)"*)
+
+Fires when `run.googleapis.com/request_count` (filtered to
+`response_code_class = 5xx`, summed over a 5-minute window) exceeds **5**.
+
+**Why a raw count, not a percentage of requests, at pilot traffic:** a
+ratio-based threshold (e.g. "5xx > 5% of requests") is unreliable when
+traffic is near zero — either the denominator is ~0 and the alert can't
+evaluate at all, or a single request happens to fail and produces a
+meaningless 100% spike. A raw count of "> 5 in 5 min" is a stable, actionable
+signal at current traffic levels and still catches real outages/floods as
+traffic grows. **Revisit as a percentage-of-requests SLO alert once traffic
+is high enough for the ratio to be statistically meaningful** (rough rule of
+thumb: once 5-minute request volume is reliably in the hundreds).
+
+### Alert policy — p95 latency
+
+`projects/homegrown-1eec2/alertPolicies/17459490344936674999`
+(*"Tilth API — Cloud Run p95 latency > 2s (homegrown-server)"*)
+
+Fires when `run.googleapis.com/request_latencies`, aligned per-5-min-window
+with `ALIGN_PERCENTILE_95`, stays above **2000 ms** for a sustained
+**10-minute** duration.
+
+### Alert policy — Cloud SQL disk / CPU
+
+`projects/homegrown-1eec2/alertPolicies/14016503090186983013`
+(*"Tilth DB — Cloud SQL disk/CPU high (homegrown-db)"*)
+
+Two conditions, combined with `OR` (either alone pages — they're distinct
+failure modes: disk-full blocks all writes, CPU saturation degrades every
+query):
+
+| Condition | Metric | Threshold | Sustained |
+|---|---|---|---|
+| Disk utilization | `cloudsql.googleapis.com/database/disk/utilization` | > 80% | 15 min |
+| CPU utilization | `cloudsql.googleapis.com/database/cpu/utilization` | > 90% | 15 min |
+
+Scoped to `resource.label.database_id = "homegrown-1eec2:homegrown-db"`
+(verified against a live `timeSeries.list` call — Cloud SQL's `database_id`
+label is `<project_id>:<instance_id>`, no region segment, unlike the
+`connectionName` used for connection strings).
+
+### Budget alert
+
+Billing account `01268D-78A122-347704` (linked to `homegrown-1eec2`, project
+number `699315973605`) already had a pre-existing `$5 Monthly Budget Alert`
+(account-wide, no project filter, no explicit notification channel — relies
+on the default IAM-role recipients). Left untouched; a second, project-scoped
+budget was added alongside it:
+
+| Field | Value |
+|---|---|
+| Name | `billingAccounts/01268D-78A122-347704/budgets/b66e2a04-8cf3-4e07-b222-ac37c76370b3` |
+| Display name | `Tilth (homegrown-1eec2) — $150/mo` |
+| Amount | $150 USD / calendar month |
+| Scope | `projects/699315973605` (i.e. `homegrown-1eec2` only) |
+| Thresholds | 50%, 90%, 100% of current spend |
+| Notifications | Monitoring email channel above, **plus** default billing-account IAM recipients (not disabled) |
+
+`billingbudgets.googleapis.com` was disabled at the start of this work and
+was enabled as a prerequisite:
+
+```bash
+gcloud services enable billingbudgets.googleapis.com --project=homegrown-1eec2
+```
+
+### Error Reporting — sanity check (no app-code change)
+
+Cloud Run's stderr already flows into Error Reporting by default; verified by
+querying `clouderrorreporting.googleapis.com` for recent groups rather than
+changing any server code. Finding: **partial coverage**. Error Reporting's
+heuristic groups stderr lines that *look like* a stack trace (an `Error: ...`
+line followed by `at ...` frames) — one such log (`Error: Dynamic require of
+"child_process" is not supported`, from a 2026-07-07 boot failure) was
+correctly captured as its own error group. Several other `ERROR`-severity
+Cloud Run logs from the same window (a failed startup probe, a Cloud SQL IAM
+permission error) are **plain single-line text without a stack-trace shape**
+and did **not** produce separate Error Reporting groups — they're visible in
+Cloud Logging (`severity>=ERROR`) but not surfaced as distinct, tracked
+errors in Error Reporting.
+
+**Follow-up (not done here, deliberately out of scope):** switching the
+server's `console.error` calls to structured JSON logging
+(`{"severity":"ERROR","message":...,"stack_trace":...}`, the format Cloud
+Logging/Error Reporting recognize explicitly) would make every error
+groupable, not just the ones that happen to already look like a JS stack
+trace. This is an `apps/server` code change and belongs to a future
+infra-adjacent ticket, not this monitoring pass.
+
+### Adding a channel to an existing alert policy (quick reference)
+
+```bash
+gcloud alpha monitoring policies list --project=homegrown-1eec2 \
+  --format="table(name,displayName)"
+
+gcloud alpha monitoring policies update <POLICY_NAME> \
+  --project=homegrown-1eec2 \
+  --add-notification-channels=<NEW_CHANNEL_NAME>
+```
+
+---
+
 ## Future: compiled build (post-M1)
 
 Replace the `CMD` with a build step that runs `tsc` (or an esbuild bundle) and
