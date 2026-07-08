@@ -48,6 +48,10 @@ import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 import { colors, radii, spacing, type } from "../theme";
 import { CATEGORY_EMOJI, categoryEmoji, produceEmoji } from "../theme/categoryEmoji";
+// Horizontal rows nested inside the bottom sheet must use gesture-handler's
+// FlatList — the sheet's pan gesture swallows horizontal drags from RN-core
+// lists (chips render but won't slide).
+import { FlatList as GestureFlatList } from "react-native-gesture-handler";
 
 // ---------------------------------------------------------------------------
 // Map region fallback — used only when the device coords aren't usable for a
@@ -109,9 +113,10 @@ const FILTER_OPTIONS: { label: string; value: FilterCategory }[] = [
 
 type SeasonalModuleProps = {
   onSelectProduce: (produceName: string) => void;
+  onPressSearch: () => void;
 };
 
-function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
+function SeasonalModule({ onSelectProduce, onPressSearch }: SeasonalModuleProps) {
   const { monthLabel, produce } = getSeasonalProduce();
 
   if (produce.length === 0) {
@@ -120,8 +125,20 @@ function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
 
   return (
     <View style={styles.seasonalSection}>
-      <Text style={styles.seasonalHeading}>In season now · {monthLabel}</Text>
-      <FlatList
+      {/* Search sits in the heading row (not the slider) so it stays visible
+          at any chip-scroll position instead of scrolling off with the row. */}
+      <View style={styles.seasonalHeadingRow}>
+        <Text style={styles.seasonalHeading}>In season now · {monthLabel}</Text>
+        <Pressable
+          style={styles.seasonalSearchButton}
+          onPress={onPressSearch}
+          accessibilityRole="button"
+          accessibilityLabel="Search produce"
+        >
+          <Ionicons name="search" size={16} color={colors.primary} />
+        </Pressable>
+      </View>
+      <GestureFlatList
         data={produce}
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -195,7 +212,7 @@ type CategoryFilterBarProps = {
 
 function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterBarProps) {
   return (
-    <FlatList
+    <GestureFlatList
       data={FILTER_OPTIONS}
       horizontal
       showsHorizontalScrollIndicator={false}
@@ -241,6 +258,7 @@ type ListingsSheetProps = {
   activeCategory: FilterCategory;
   onSelectCategory: (category: FilterCategory) => void;
   onSelectProduce: (produceName: string) => void;
+  onPressSearch: () => void;
   onNavigateToStore: (storeId: string, storeName: string) => void;
 };
 
@@ -252,12 +270,13 @@ function ListingsSheet({
   activeCategory,
   onSelectCategory,
   onSelectProduce,
+  onPressSearch,
   onNavigateToStore,
 }: ListingsSheetProps) {
   const header = useMemo(
     () => (
       <View>
-        <SeasonalModule onSelectProduce={onSelectProduce} />
+        <SeasonalModule onSelectProduce={onSelectProduce} onPressSearch={onPressSearch} />
         <CategoryFilterBar activeCategory={activeCategory} onSelectCategory={onSelectCategory} />
 
         {isLoading && (
@@ -281,7 +300,7 @@ function ListingsSheet({
         ) : null}
       </View>
     ),
-    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce],
+    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce, onPressSearch],
   );
 
   return (
@@ -319,9 +338,10 @@ type MapWithSheetProps = {
   lng: number;
   onNavigateToStore: (storeId: string, storeName: string) => void;
   onSelectProduce: (produceName: string) => void;
+  onPressSearch: () => void;
 };
 
-function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce }: MapWithSheetProps) {
+function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce, onPressSearch }: MapWithSheetProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
 
   const category: ListingCategory | undefined =
@@ -354,6 +374,7 @@ function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce }: MapWithS
         activeCategory={activeCategory}
         onSelectCategory={setActiveCategory}
         onSelectProduce={onSelectProduce}
+        onPressSearch={onPressSearch}
         onNavigateToStore={onNavigateToStore}
       />
     </View>
@@ -449,6 +470,7 @@ export function HomeScreen({ navigation }: Props) {
           onSelectProduce={(produceName) =>
             navigation.navigate("Search", { initialQuery: produceName })
           }
+          onPressSearch={() => navigation.navigate("Search")}
         />
       ) : null}
     </SafeAreaView>
@@ -518,12 +540,25 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.xs,
   },
+  seasonalHeadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
   seasonalHeading: {
     fontSize: type.body.fontSize,
     fontWeight: "700",
     color: colors.primary,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+  },
+  seasonalSearchButton: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
   seasonalChipRow: {
     paddingHorizontal: spacing.lg,
