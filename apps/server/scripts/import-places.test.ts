@@ -313,13 +313,26 @@ describe("mapUsdaRecord", () => {
 });
 
 describe("buildOverpassQuery", () => {
+  // Regression (Twin Cities, 30km): regex filters in the Overpass query are
+  // pathological at metro scale — a shop-key regex can't use the tag index
+  // (timeout at line 7), and even a single case-insensitive name regex took
+  // ~28s for 3 rows vs ~4s to fetch all 324 candidate shops plainly. The
+  // query must be equality-only; co-op selection happens client-side via
+  // isCoopSignal.
+  it("is equality-only: literal shop values, no regex filters at all", () => {
+    const query = buildOverpassQuery(44.9635, -93.1775, 30000);
+    expect(query).not.toContain("~");
+    expect(query).toContain('"shop"="supermarket"');
+    expect(query).toContain('"shop"="greengrocer"');
+    expect(query).toContain('"shop"="convenience"');
+    expect(query).toContain("[timeout:60]");
+  });
+
   it("includes all three tag families and the given radius/lat/lng", () => {
     const query = buildOverpassQuery(33.749, -84.388, 20000);
     expect(query).toContain('shop"="health_food"');
     expect(query).toContain('amenity"="marketplace"');
-    expect(query).toContain("co-?op");
-    expect(query).toContain("operator:type");
-    expect(query).toContain("cooperative");
+    expect(query).toContain('shop"="supermarket"');
     expect(query).toContain("around:20000,33.749000,-84.388000");
     expect(query).toContain("out center tags;");
   });

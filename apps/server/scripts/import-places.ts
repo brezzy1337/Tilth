@@ -127,6 +127,8 @@ export interface OverpassElement {
 
 interface OverpassResponse {
   elements: OverpassElement[];
+  /** Set on runtime failures (timeout/memory) — HTTP stays 200. */
+  remark?: string;
 }
 
 /**
@@ -146,19 +148,30 @@ export function buildOverpassQuery(lat: number, lng: number, radiusM: number): s
   const latStr = lat.toFixed(6);
   const lngStr = lng.toFixed(6);
   const around = `around:${radius},${latStr},${lngStr}`;
-  const coop = `["shop"~"^(supermarket|greengrocer|convenience)$"]`;
-  return `[out:json][timeout:25];
+  // Equality-only clauses — NO regex filters in the query at all. Both regex
+  // forms proved pathological on the public Overpass instance at metro scale
+  // (Twin Cities, 30km): a regex on the shop key can't use the tag index
+  // ("Query timed out at line 7"), and even index-assisted, a single
+  // case-insensitive name regex took ~28s to return 3 rows while fetching
+  // ALL 324 candidate shops plainly took ~4s. So we download the whole
+  // supermarket/greengrocer/convenience set for the radius and let the
+  // client-side classifier (isCoopSignal — which already implements the
+  // co-op name/tag heuristics) pick the co-ops; non-matches are skipped by
+  // classifyOsmElement exactly as before.
+  const coopShops = ["supermarket", "greengrocer", "convenience"];
+  const coopClauses = coopShops
+    .flatMap((shop) => [
+      `  node["shop"="${shop}"](${around});`,
+      `  way["shop"="${shop}"](${around});`,
+    ])
+    .join("\n");
+  return `[out:json][timeout:60];
 (
   node["shop"="health_food"](${around});
   way["shop"="health_food"](${around});
   node["amenity"="marketplace"](${around});
   way["amenity"="marketplace"](${around});
-  node${coop}["name"~"co-?op",i](${around});
-  way${coop}["name"~"co-?op",i](${around});
-  node${coop}["operator:type"="cooperative"](${around});
-  way${coop}["operator:type"="cooperative"](${around});
-  node${coop}["cooperative"="yes"](${around});
-  way${coop}["cooperative"="yes"](${around});
+${coopClauses}
 );
 out center tags;`;
 }
@@ -260,6 +273,13 @@ async function fetchOverpass(lat: number, lng: number, radiusKm: number): Promis
     throw new Error(`Overpass request failed (HTTP ${response.status})`);
   }
   const body = (await response.json()) as OverpassResponse;
+  // Overpass reports runtime failures (timeouts, memory limits) as a `remark`
+  // in an HTTP-200 response with whatever partial elements it got — which
+  // silently looked like "0 results" before this check. Fail loudly instead:
+  // a partial import that reads as complete is worse than no import.
+  if (body.remark && /error/i.test(body.remark)) {
+    throw new Error(`Overpass runtime failure: ${body.remark}`);
+  }
   return body.elements ?? [];
 }
 
