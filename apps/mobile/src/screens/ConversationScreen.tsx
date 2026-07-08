@@ -445,9 +445,10 @@ export function ConversationScreen({ route, navigation }: Props) {
         />
       )}
 
-      {/* Composer */}
+      {/* Composer — bottom-padded by the safe-area inset so Android's
+          edge-to-edge gesture/nav bar can't cover the input. */}
       <View
-        style={styles.composer}
+        style={[styles.composer, { paddingBottom: spacing.sm + insets.bottom }]}
         onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
       >
         <TextInput
@@ -616,8 +617,10 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   emptyThread: {
-    // Inverted list: flip the empty state back upright.
-    transform: [{ scaleY: -1 }],
+    // NO counter-flip here: on this RN version (0.85 / new architecture)
+    // the inverted FlatList renders ListEmptyComponent upright already —
+    // the classic manual scaleY:-1 counter-flip displayed it upside down
+    // on-device (verified by Devin, 2026-07-08).
     alignItems: "center",
     paddingVertical: spacing.xxxl,
     paddingHorizontal: spacing.xxl,
