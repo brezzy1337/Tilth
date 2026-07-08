@@ -47,6 +47,7 @@ import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 import { colors, radii, spacing, type } from "../theme";
+import { CATEGORY_EMOJI, categoryEmoji, produceEmoji } from "../theme/categoryEmoji";
 
 // ---------------------------------------------------------------------------
 // Map region fallback — used only when the device coords aren't usable for a
@@ -95,8 +96,11 @@ type Props = Omit<BottomTabScreenProps<TabParamList, "Home">, "navigation"> & {
 type FilterCategory = ListingCategory | "all";
 
 const FILTER_OPTIONS: { label: string; value: FilterCategory }[] = [
-  { label: "All", value: "all" },
-  ...listingCategory.options.map((cat) => ({ label: capitalise(cat), value: cat as FilterCategory })),
+  { label: `${CATEGORY_EMOJI.other} All`, value: "all" },
+  ...listingCategory.options.map((cat) => ({
+    label: `${categoryEmoji(cat)} ${capitalise(cat)}`,
+    value: cat as FilterCategory,
+  })),
 ];
 
 // ---------------------------------------------------------------------------
@@ -125,7 +129,7 @@ function SeasonalModule({ onSelectProduce }: SeasonalModuleProps) {
         contentContainerStyle={styles.seasonalChipRow}
         renderItem={({ item }) => (
           <Pressable style={styles.seasonalChip} onPress={() => onSelectProduce(item)}>
-            <Text style={styles.seasonalChipText}>{item}</Text>
+            <Text style={styles.seasonalChipText}>{`${produceEmoji(item)} ${item}`}</Text>
           </Pressable>
         )}
       />
