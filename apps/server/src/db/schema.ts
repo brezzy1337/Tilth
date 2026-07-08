@@ -442,3 +442,42 @@ export const pushTokens = pgTable(
   },
   (t) => [index("push_tokens_user_id_idx").on(t.userId)],
 );
+
+// ---------------------------------------------------------------------------
+// Community places — F-048 Home map pins (co-ops, health-food stores,
+// farmers markets) imported from OpenStreetMap + the USDA farmers-market
+// directory into PostGIS. Imports land as 'pending'; only 'approved' rows
+// are served by `places.nearby`. `type`/`source`/`status` are plain text
+// (not pgEnum) — validated against the shared `communityPlaceType` zod enum
+// at the tRPC boundary and written only by the vetted import CLI, so a DB
+// enum isn't load-bearing here the way it is for listings.
+// ---------------------------------------------------------------------------
+
+export const communityPlaces = pgTable(
+  "community_places",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** 'farmers_market' | 'coop' | 'health_food' — mirrors shared `communityPlaceType`. */
+    type: text("type").notNull(),
+    name: text("name").notNull(),
+    /** PostGIS geography(Point,4326) — never parsed JS-side; use ST_X/ST_Y. */
+    location: geography("location").notNull(),
+    address: text("address"),
+    website: text("website"),
+    hoursText: text("hours_text"),
+    /** 'osm' | 'usda' | 'manual' — where this row was imported from. */
+    source: text("source").notNull(),
+    /** OSM element id (e.g. "way/39448667"), USDA listing id, or a manual slug. */
+    sourceRef: text("source_ref").notNull(),
+    /** 'pending' | 'approved' | 'rejected'. Only 'approved' rows are served. */
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("community_places_location_idx").using("gist", t.location),
+    // Idempotent re-imports: same (source, source_ref) upserts instead of duplicating.
+    uniqueIndex("community_places_source_source_ref_key").on(t.source, t.sourceRef),
+    index("community_places_status_idx").on(t.status),
+  ],
+);

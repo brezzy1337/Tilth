@@ -22,7 +22,8 @@
     "test-accounts": "tsx scripts/test-accounts.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "import-places": "tsx scripts/import-places.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "7.21.0",
