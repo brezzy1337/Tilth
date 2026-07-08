@@ -9,7 +9,12 @@
  * the command handlers).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { eq } from "drizzle-orm";
+import { migrateForTest } from "../src/db/migrate-for-test";
+import * as schema from "../src/db/schema";
 import {
   classifyOsmElement,
   isCoopSignal,
@@ -22,6 +27,8 @@ import {
   normalizeName,
   haversineMeters,
   dedupeUsdaOsm,
+  validateCommitableCandidate,
+  upsertCandidate,
   type OverpassElement,
   type PlaceCandidate,
 } from "./import-places";
@@ -84,6 +91,32 @@ describe("isCoopSignal", () => {
 
   it("is false for shop types outside the eligible set", () => {
     expect(isCoopSignal({ shop: "hardware", name: "Tool Co-op" })).toBe(false);
+  });
+
+  // Regression: /co-?op/i (no word boundary) false-positived on names that
+  // merely CONTAIN "coop" as a substring, not as the standalone word.
+  it("does not classify 'Cooper's Grocery' as a co-op (substring, not word)", () => {
+    expect(isCoopSignal({ shop: "supermarket", name: "Cooper's Grocery" })).toBe(false);
+  });
+
+  it("does not classify 'Scoop Ice Cream' as a co-op (substring, not word)", () => {
+    expect(isCoopSignal({ shop: "convenience", name: "Scoop Ice Cream" })).toBe(false);
+  });
+
+  it("still matches 'Park Slope Food Coop'", () => {
+    expect(isCoopSignal({ shop: "supermarket", name: "Park Slope Food Coop" })).toBe(true);
+  });
+
+  it("still matches 'Co-op Market'", () => {
+    expect(isCoopSignal({ shop: "supermarket", name: "Co-op Market" })).toBe(true);
+  });
+
+  it("still matches 'The Coop'", () => {
+    expect(isCoopSignal({ shop: "supermarket", name: "The Coop" })).toBe(true);
+  });
+
+  it("matches the plural 'Willy Street Co-ops'", () => {
+    expect(isCoopSignal({ shop: "supermarket", name: "Willy Street Co-ops" })).toBe(true);
   });
 });
 
@@ -287,8 +320,18 @@ describe("buildOverpassQuery", () => {
     expect(query).toContain("co-?op");
     expect(query).toContain("operator:type");
     expect(query).toContain("cooperative");
-    expect(query).toContain("around:20000,33.749,-84.388");
+    expect(query).toContain("around:20000,33.749000,-84.388000");
     expect(query).toContain("out center tags;");
+  });
+
+  // Regression: JS stringifies very-small-magnitude numbers in exponent
+  // notation ("1e-7"), which Overpass QL rejects. Coords near the equator
+  // or prime meridian must render as fixed-decimal, and the radius as a
+  // plain integer.
+  it("formats near-zero coordinates as fixed decimals, never exponent notation", () => {
+    const query = buildOverpassQuery(1e-7, -1e-7, 20000.7);
+    expect(query).toContain("around:20001,0.000000,-0.000000");
+    expect(query).not.toMatch(/e-/i);
   });
 });
 
@@ -410,5 +453,160 @@ describe("USDA/OSM dedupe", () => {
     ];
     const merged = dedupeUsdaOsm(osm, usda);
     expect(merged).toHaveLength(2);
+  });
+});
+
+// -----------------------------------------------------------------------
+// validateCommitableCandidate — mirrors the shared `communityPlace` schema
+// (minus id/distanceKm) so a hand-edited "manual" candidate can never insert
+// a row that would later break `placesNearbyOutput`'s zod parse once served.
+// -----------------------------------------------------------------------
+
+describe("validateCommitableCandidate", () => {
+  const validManualCandidate: PlaceCandidate = {
+    type: "coop",
+    name: "Neighborhood Co-op",
+    lat: 33.75,
+    lng: -84.39,
+    address: "123 Main St, Atlanta, GA",
+    website: "https://example.org",
+    hoursText: "Mon-Fri 9am-6pm",
+    source: "manual",
+    sourceRef: "manual:neighborhood-coop",
+  };
+
+  it("accepts a valid manual candidate", () => {
+    expect(validateCommitableCandidate(validManualCandidate)).toEqual({ ok: true });
+  });
+
+  it("rejects an over-long address (>300 chars) with a clear per-field error", () => {
+    const result = validateCommitableCandidate({
+      ...validManualCandidate,
+      address: "A".repeat(301),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.some((e) => e.startsWith("address"))).toBe(true);
+  });
+
+  it("rejects an invalid website URL with a clear per-field error", () => {
+    const result = validateCommitableCandidate({
+      ...validManualCandidate,
+      website: "not a url at all!!",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.some((e) => e.startsWith("website"))).toBe(true);
+  });
+
+  it("rejects over-long hoursText (>500 chars) with a clear per-field error", () => {
+    const result = validateCommitableCandidate({
+      ...validManualCandidate,
+      hoursText: "H".repeat(501),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.some((e) => e.startsWith("hoursText"))).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------
+// upsertCandidate — PostGIS integration (F-048 review follow-up).
+//
+// GUARDED — only runs when TEST_DATABASE_URL is set (mirrors
+// places.nearby.integration.test.ts). To run locally:
+//
+//   docker compose up -d db
+//   TEST_DATABASE_URL=postgresql://homegrown:homegrown@localhost:5432/homegrown \
+//     pnpm --filter @homegrown/server test scripts/import-places.test.ts
+// -----------------------------------------------------------------------
+
+const TEST_DB_URL = process.env["TEST_DATABASE_URL"];
+const describeWithDb = TEST_DB_URL ? describe : describe.skip;
+
+describeWithDb("upsertCandidate — type preserved on approved rows (PostGIS integration)", () => {
+  let db: ReturnType<typeof drizzle<typeof schema>>;
+  let client: ReturnType<typeof postgres>;
+  const seededIds: string[] = [];
+
+  beforeAll(async () => {
+    client = postgres(TEST_DB_URL!, { max: 1 });
+    db = drizzle(client, { schema });
+    await migrateForTest(client, db);
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await db.delete(schema.communityPlaces).where(eq(schema.communityPlaces.id, id));
+    }
+    await client.end();
+  });
+
+  async function readTypeAndStatus(id: string) {
+    const [row] = await db
+      .select({ type: schema.communityPlaces.type, status: schema.communityPlaces.status })
+      .from(schema.communityPlaces)
+      .where(eq(schema.communityPlaces.id, id));
+    return row;
+  }
+
+  it("does NOT drift `type` on a re-commit once the row has been approved", async () => {
+    const candidate: PlaceCandidate = {
+      type: "coop",
+      name: "Import Test Co-op (approved-freeze)",
+      lat: 40.001,
+      lng: -75.001,
+      address: null,
+      website: null,
+      hoursText: null,
+      source: "osm",
+      sourceRef: "node/990001",
+    };
+
+    const first = await upsertCandidate(db, candidate);
+    expect(first).toBeDefined();
+    expect(first!.inserted).toBe(true);
+    seededIds.push(first!.id);
+
+    // Devin approves the vetted classification.
+    await db
+      .update(schema.communityPlaces)
+      .set({ status: "approved" })
+      .where(eq(schema.communityPlaces.id, first!.id));
+
+    // A re-import (e.g. upstream OSM tag drift) tries to reclassify it.
+    const recommit = await upsertCandidate(db, { ...candidate, type: "health_food" });
+    expect(recommit).toBeDefined();
+    expect(recommit!.id).toBe(first!.id);
+    expect(recommit!.inserted).toBe(false);
+
+    const row = await readTypeAndStatus(first!.id);
+    expect(row?.status).toBe("approved");
+    expect(row?.type).toBe("coop"); // unchanged despite the re-commit's "health_food"
+  });
+
+  it("still refreshes `type` on a re-commit while the row is pending", async () => {
+    const candidate: PlaceCandidate = {
+      type: "coop",
+      name: "Import Test Co-op (pending-refresh)",
+      lat: 40.002,
+      lng: -75.002,
+      address: null,
+      website: null,
+      hoursText: null,
+      source: "osm",
+      sourceRef: "node/990002",
+    };
+
+    const first = await upsertCandidate(db, candidate);
+    expect(first).toBeDefined();
+    seededIds.push(first!.id);
+
+    const recommit = await upsertCandidate(db, { ...candidate, type: "health_food" });
+    expect(recommit!.id).toBe(first!.id);
+
+    const row = await readTypeAndStatus(first!.id);
+    expect(row?.status).toBe("pending");
+    expect(row?.type).toBe("health_food");
   });
 });

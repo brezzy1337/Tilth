@@ -38,7 +38,11 @@
  * and it upserts idempotently on (source, source_ref): re-running `fetch` +
  * `commit` after edits refreshes name/address/location/website/hours but
  * NEVER resets an already-reviewed row's status back to 'pending' — a
- * re-import must not silently undo Devin's approve/reject decision.
+ * re-import must not silently undo Devin's approve/reject decision. `type`
+ * gets the same treatment once a row is 'approved': re-imports keep
+ * refreshing `type` for 'pending'/'rejected' rows, but an approved row's
+ * `type` is frozen — a re-import must not silently flip a human-vetted
+ * classification (e.g. co-op vs. plain supermarket) out from under Devin.
  *
  * USDA — https://www.usdalocalfoodportal.com/api/farmersmarket/ requires a
  * registered `apikey` query param (confirmed live: an unregistered/demo key
@@ -63,7 +67,7 @@ import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { sql, eq, asc } from "drizzle-orm";
-import { communityPlaceType, type CommunityPlaceType } from "@homegrown/shared";
+import { communityPlace, type CommunityPlaceType } from "@homegrown/shared";
 import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
 
@@ -134,7 +138,14 @@ interface OverpassResponse {
  * overpass-api.de (one smoke call, tiny radius, during development).
  */
 export function buildOverpassQuery(lat: number, lng: number, radiusM: number): string {
-  const around = `around:${radiusM},${lat},${lng}`;
+  // Overpass QL rejects exponent notation (e.g. "1e-7"), which is how JS
+  // stringifies very-small-magnitude numbers (coords near the equator/prime
+  // meridian). Fix to 6 decimal places (~11cm precision, plenty for this
+  // radius search) and round the radius to an integer metre count.
+  const radius = Math.round(radiusM);
+  const latStr = lat.toFixed(6);
+  const lngStr = lng.toFixed(6);
+  const around = `around:${radius},${latStr},${lngStr}`;
   const coop = `["shop"~"^(supermarket|greengrocer|convenience)$"]`;
   return `[out:json][timeout:25];
 (
@@ -152,11 +163,19 @@ export function buildOverpassQuery(lat: number, lng: number, radiusM: number): s
 out center tags;`;
 }
 
+/**
+ * Word-bounded so "Cooper's Grocery" / "Scoop Ice Cream" (which contain the
+ * literal substring "coop") don't false-positive — only a standalone
+ * "coop"/"co-op" token matches. Trailing "s" is allowed ("Co-ops", plural)
+ * since that's still unambiguously the co-op word, not a substring hit.
+ */
+const COOP_NAME_RE = /\bco-?ops?\b/i;
+
 /** True when an OSM element's tags satisfy the co-op heuristic (see module header). */
 export function isCoopSignal(tags: Record<string, string>): boolean {
   const shop = tags["shop"];
   if (!shop || !COOP_ELIGIBLE_SHOP_TYPES.has(shop)) return false;
-  if (tags["name"] && /co-?op/i.test(tags["name"])) return true;
+  if (tags["name"] && COOP_NAME_RE.test(tags["name"])) return true;
   if (tags["operator:type"] === "cooperative") return true;
   if (tags["cooperative"] === "yes") return true;
   return false;
@@ -452,17 +471,29 @@ async function closeDb(): Promise<void> {
   if (pgClient) await pgClient.end();
 }
 
-/** Runtime defense-in-depth: `community_places.type`/`.status` are plain text columns (no DB CHECK). */
-function isCommitableCandidate(c: PlaceCandidate): boolean {
-  return (
-    communityPlaceType.safeParse(c.type).success &&
-    c.lat >= -90 &&
-    c.lat <= 90 &&
-    c.lng >= -180 &&
-    c.lng <= 180 &&
-    c.name.length > 0 &&
-    c.name.length <= 200
+/**
+ * Runtime defense-in-depth: `community_places.type`/`.status` are plain text
+ * columns (no DB CHECK), and `source: "manual"` candidates are human-edited
+ * in the gitignored candidates file — not shaped by `osmElementToCandidate`
+ * or `mapUsdaRecord`'s truncation/validation at all. Validated against the
+ * SAME shared `communityPlace` schema that `places.nearby` output must
+ * satisfy (minus the server-computed `id`/`distanceKm` fields): a candidate
+ * that inserts fine (plain text columns accept anything) but violates those
+ * bounds — address > 300 chars, an unparseable `website`, hoursText > 500
+ * chars — would fail `placesNearbyOutput`'s zod parse for the WHOLE response
+ * once approved, not just that row.
+ */
+const commitableCandidateSchema = communityPlace.omit({ id: true, distanceKm: true });
+
+export function validateCommitableCandidate(
+  c: PlaceCandidate,
+): { ok: true } | { ok: false; errors: string[] } {
+  const result = commitableCandidateSchema.safeParse(c);
+  if (result.success) return { ok: true };
+  const errors = result.error.issues.map(
+    (issue) => `${issue.path.join(".") || "(value)"}: ${issue.message}`,
   );
+  return { ok: false, errors };
 }
 
 async function getPendingOrdered(db: ReturnType<typeof getDb>) {
@@ -537,6 +568,54 @@ async function cmdFetch(lat: number, lng: number, radiusKm: number): Promise<voi
   console.log(`Review the list above, then run: pnpm import-places commit`);
 }
 
+/**
+ * Upserts one already-validated candidate into `community_places`, keyed on
+ * (source, source_ref). Extracted from `cmdCommit` so integration tests can
+ * exercise the real upsert (in particular the type-preservation-on-approved
+ * CASE below) against a live Postgres without going through the CLI's
+ * file/env plumbing. Returns undefined only if the DB driver returns no row
+ * (shouldn't happen for an insert/upsert).
+ */
+export async function upsertCandidate(
+  db: ReturnType<typeof getDb>,
+  c: PlaceCandidate,
+): Promise<{ id: string; inserted: boolean } | undefined> {
+  const point = sql`ST_SetSRID(ST_MakePoint(${c.lng}, ${c.lat}), 4326)::geography`;
+  const [row] = await db
+    .insert(schema.communityPlaces)
+    .values({
+      type: c.type,
+      name: c.name,
+      location: point,
+      address: c.address,
+      website: c.website,
+      hoursText: c.hoursText,
+      source: c.source,
+      sourceRef: c.sourceRef,
+    })
+    .onConflictDoUpdate({
+      target: [schema.communityPlaces.source, schema.communityPlaces.sourceRef],
+      set: {
+        // `type` only refreshes while the row hasn't been human-approved —
+        // once Devin approves a classification, a re-import must not
+        // silently flip it back (e.g. an upstream OSM tag edit re-tagging
+        // a co-op as a plain supermarket). Pending/rejected rows still get
+        // the latest classification on every re-import. See module header.
+        type: sql`CASE WHEN ${schema.communityPlaces.status} = 'approved' THEN ${schema.communityPlaces.type} ELSE ${c.type} END`,
+        name: c.name,
+        location: point,
+        address: c.address,
+        website: c.website,
+        hoursText: c.hoursText,
+        updatedAt: sql`now()`,
+        // status intentionally NOT touched — see module header.
+      },
+    })
+    .returning({ id: schema.communityPlaces.id, inserted: sql<boolean>`(xmax = 0)` });
+
+  return row;
+}
+
 async function cmdCommit(): Promise<void> {
   const file = loadCandidatesFile();
   if (!file || file.candidates.length === 0) {
@@ -552,40 +631,17 @@ async function cmdCommit(): Promise<void> {
   let skipped = 0;
 
   for (const c of file.candidates) {
-    if (!isCommitableCandidate(c)) {
-      console.warn(`  ⚠ skipping invalid candidate "${c.name}" (${c.source}:${c.sourceRef})`);
+    const validation = validateCommitableCandidate(c);
+    if (!validation.ok) {
+      console.warn(
+        `  ⚠ skipping invalid candidate "${c.name}" (${c.source}:${c.sourceRef}): ` +
+          validation.errors.join("; "),
+      );
       skipped++;
       continue;
     }
 
-    const point = sql`ST_SetSRID(ST_MakePoint(${c.lng}, ${c.lat}), 4326)::geography`;
-    const [row] = await db
-      .insert(schema.communityPlaces)
-      .values({
-        type: c.type,
-        name: c.name,
-        location: point,
-        address: c.address,
-        website: c.website,
-        hoursText: c.hoursText,
-        source: c.source,
-        sourceRef: c.sourceRef,
-      })
-      .onConflictDoUpdate({
-        target: [schema.communityPlaces.source, schema.communityPlaces.sourceRef],
-        set: {
-          type: c.type,
-          name: c.name,
-          location: point,
-          address: c.address,
-          website: c.website,
-          hoursText: c.hoursText,
-          updatedAt: sql`now()`,
-          // status intentionally NOT touched — see module header.
-        },
-      })
-      .returning({ id: schema.communityPlaces.id, inserted: sql<boolean>`(xmax = 0)` });
-
+    const row = await upsertCandidate(db, c);
     if (!row) continue;
     if (row.inserted) inserted++;
     else updated++;
@@ -693,7 +749,8 @@ Commands:
   commit                     Upsert scripts/.places-import.json into
                              community_places as 'pending'. Idempotent on
                              (source, source_ref) — re-imports refresh data
-                             but never reset an already-reviewed row's status.
+                             but never reset an already-reviewed row's status,
+                             and never change 'type' once a row is 'approved'.
   review                     List pending rows with ids.
   approve --ids=1,2,3        Flip the given pending rows (by review's
         (or --all)           1-based index) to 'approved'.
