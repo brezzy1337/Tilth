@@ -265,9 +265,12 @@ async function reverseGeocode(lat: number, lng: number): Promise<SetStoreLocatio
   });
   if (!response.ok) return null;
 
-  const body = (await response.json()) as {
-    address?: Record<string, string | undefined>;
-  };
+  let body: { address?: Record<string, string | undefined> };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return null; // malformed response — caller falls back like the !ok case
+  }
   const a = body.address;
   if (!a) return null;
 
@@ -443,7 +446,12 @@ async function status(api: string): Promise<void> {
   }
 }
 
-async function reply(api: string, message: string, conversationArg?: string): Promise<void> {
+async function reply(
+  api: string,
+  message: string,
+  conversationArg?: string,
+  confirmed = false,
+): Promise<void> {
   const state = requireState();
   const seller = await mutate<AuthResponse>(api, "auth.login", {
     usernameOrEmail: state.seller.email,
@@ -465,9 +473,24 @@ async function reply(api: string, message: string, conversationArg?: string): Pr
     target = inbox.items.find((c) => c.id === conversationArg);
     if (!target) fail(`Conversation ${conversationArg} not found in the test stand's inbox.`);
   } else {
-    // Prefer the most recent conversation with a REAL buyer (i.e. Devin's own
-    // account) over the seeded buyer<->stand thread; fall back to the latter.
+    // Most recent conversation with a non-seeded buyer. NOTE: the test stand
+    // is publicly discoverable, so this is NOT guaranteed to be the operator's
+    // own account — any nearby pilot user may have messaged it. Auto-selection
+    // is therefore a dry-run unless --yes is passed: we show who was resolved
+    // and refuse to send, so a canned reply can never reach a stranger
+    // unconfirmed.
     target = inbox.items.find((c) => c.buyerId !== state.buyer.userId) ?? inbox.items[0];
+    if (target && !confirmed) {
+      console.log(`Auto-selected the most recent conversation:`);
+      console.log(`  buyer:        ${target.buyerName} (${target.buyerId})`);
+      console.log(`  conversation: ${target.id}`);
+      console.log(`  last message: ${target.lastMessageBody ?? "(none)"}`);
+      console.log(
+        `\nNothing sent. Verify this buyer is YOU, then re-run with --yes` +
+          `\n(or target explicitly with --conversation=${target.id}).`,
+      );
+      return;
+    }
   }
   if (!target) fail("No conversation to reply to.");
 
@@ -546,12 +569,18 @@ Commands:
         [--address=… --city=… --state=… --zip=…]  use this address instead of
                                                   reverse geocoding the coords
         [--password=<pw>]    adopt pre-existing accounts when the state file is lost
-  reply --message=<text>     Log in as the test stand and reply to the most
-        [--conversation=<id>] recent REAL buyer conversation (triggers a real
-                             push to that buyer's device). Defaults to the
-                             seeded buyer thread when no one else has written.
+  reply --message=<text>     Log in as the test stand and reply. With
+        [--conversation=<id>] --conversation, targets that thread. Without it,
+        [--yes]              auto-selects the most recent non-test-buyer thread
+                             but only PRINTS the resolved buyer (dry run) —
+                             pass --yes to actually send. The stand is publicly
+                             discoverable, so the newest thread may belong to a
+                             real user, not you; sending fires a real push.
   status                     Print the test stand's inbox (unread counts, previews).
-  cleanup                    Best-effort teardown via API; prints what needs manual removal.
+  cleanup                    Best-effort teardown via API; prints what needs manual
+                             removal. Note: a later re-seed re-creates listings
+                             fresh — the old "🧪 [removed]" rows stay (no delete
+                             endpoint exists), so expect leftovers until manual SQL.
 
 Options:
   --api=<url>                API base URL. seed defaults to ${DEFAULT_API};
@@ -576,6 +605,7 @@ async function main(): Promise<void> {
       zip: { type: "string" },
       message: { type: "string" },
       conversation: { type: "string" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -623,7 +653,12 @@ async function main(): Promise<void> {
     }
     case "reply": {
       if (!values.message) fail('reply requires --message="<text>".');
-      await reply(values.api ?? stateApi ?? DEFAULT_API, values.message, values.conversation);
+      await reply(
+        values.api ?? stateApi ?? DEFAULT_API,
+        values.message,
+        values.conversation,
+        values.yes === true,
+      );
       break;
     }
     case "status":
