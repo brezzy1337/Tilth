@@ -152,6 +152,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -184,6 +185,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -216,6 +218,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -248,6 +251,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -290,6 +294,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -326,6 +331,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -349,6 +355,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -380,6 +387,7 @@ describe("auth.me", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID5 },
     };
     const caller = createCaller(ctx);
@@ -400,6 +408,7 @@ describe("auth.me", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -425,6 +434,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -444,6 +454,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -474,6 +485,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID6 },
     };
     const caller = createCaller(ctx);
@@ -513,6 +525,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -536,6 +549,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -564,6 +578,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -589,6 +604,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID7 },
     };
     const caller = createCaller(ctx);
@@ -606,6 +622,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -644,6 +661,7 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -680,6 +698,7 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -704,6 +723,7 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -756,6 +776,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -787,6 +808,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -812,6 +834,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -854,6 +877,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -888,6 +912,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -908,6 +933,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
     const caller = createCaller(ctx);
@@ -927,6 +953,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -958,6 +985,7 @@ describe("listings.listByStore", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -979,6 +1007,7 @@ describe("listings.listByStore", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
@@ -1027,6 +1056,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -1053,6 +1083,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -1073,6 +1104,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
     const caller = createCaller(ctx);
@@ -1092,6 +1124,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);

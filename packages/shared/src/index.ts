@@ -763,6 +763,14 @@ export const conversationsListOutput = z.object({
 
 export type ConversationsListOutput = z.infer<typeof conversationsListOutput>;
 
+/** Input to `conversations.list` (protected) — cursor-paginated inbox. */
+export const conversationsListInput = z.object({
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+
+export type ConversationsListInput = z.infer<typeof conversationsListInput>;
+
 /**
  * Input to `conversations.start` (protected, buyer-initiated).
  * A buyer opens a conversation with a store; sellers reply within conversations

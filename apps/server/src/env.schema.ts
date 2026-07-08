@@ -121,6 +121,14 @@ export const envSchema = z.object({
    * Cloud Run env var.
    */
   GCS_MEDIA_BUCKET: z.string().min(1).optional(),
+  /**
+   * Expo access token for sending push notifications (F-037/F-038 chat).
+   *
+   * OPTIONAL — Expo's push API works without one; supplying it only raises
+   * rate limits. Locally: set in .env (gitignored). Production: GCP Secret
+   * Manager, if used at all.
+   */
+  EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

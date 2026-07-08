@@ -106,6 +106,7 @@ function makeCtx(capturedKeys: string[]): Context {
     stripe,
     media: null,
     mux: null,
+    push: { send: async () => {} },
     user:      { id: UUID_USER },
   };
 }

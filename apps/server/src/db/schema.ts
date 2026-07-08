@@ -29,6 +29,8 @@ import {
   customType,
   index,
   boolean,
+  uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -334,3 +336,105 @@ export const processedStripeEvents = pgTable("processed_stripe_events", {
   /** Wall-clock time the event was first received by the webhook handler. */
   receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Messaging — F-037/F-038 1:1 buyer<->store conversations + moderation + push
+// ---------------------------------------------------------------------------
+
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    buyerId: uuid("buyer_id")
+      .notNull()
+      .references(() => users.id),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    /** Last time the buyer read this conversation; null = never. */
+    buyerLastReadAt: timestamp("buyer_last_read_at", { withTimezone: true }),
+    /** Last time the seller (store owner) read this conversation; null = never. */
+    sellerLastReadAt: timestamp("seller_last_read_at", { withTimezone: true }),
+    /** Denormalised for cheap inbox sort/pagination; kept in sync on every `messages.send`. */
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One conversation per (buyer, store) pair — `conversations.start` upserts on this.
+    uniqueIndex("conversations_buyer_id_store_id_key").on(t.buyerId, t.storeId),
+    index("conversations_last_message_at_idx").on(t.lastMessageAt.desc()),
+  ],
+);
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id),
+    senderUserId: uuid("sender_user_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Keyset pagination within a conversation: ORDER BY created_at DESC, id DESC.
+    index("messages_conversation_id_created_at_id_idx").on(
+      t.conversationId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+  ],
+);
+
+/**
+ * Directional user-to-user block. `blocker_user_id` no longer wants to receive
+ * messages from (or send to) `blocked_user_id`. Enforcement checks both
+ * directions so either party blocking the other silences the conversation.
+ */
+export const userBlocks = pgTable(
+  "user_blocks",
+  {
+    blockerUserId: uuid("blocker_user_id")
+      .notNull()
+      .references(() => users.id),
+    blockedUserId: uuid("blocked_user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.blockerUserId, t.blockedUserId] })],
+);
+
+export const messageReports = pgTable("message_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: uuid("message_id")
+    .notNull()
+    .references(() => messages.id),
+  reporterUserId: uuid("reporter_user_id")
+    .notNull()
+    .references(() => users.id),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Expo push tokens. Primary key is the token itself — `push.registerToken`
+ * upserts by token, so re-registering a token on a new account (device changed
+ * accounts) moves ownership to the new user rather than erroring.
+ */
+export const pushTokens = pgTable(
+  "push_tokens",
+  {
+    token: text("token").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    platform: text("platform").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("push_tokens_user_id_idx").on(t.userId)],
+);

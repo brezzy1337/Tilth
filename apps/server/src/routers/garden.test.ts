@@ -108,6 +108,7 @@ function makeCtx(overrides: Partial<Context> = {}): Context {
     stripe: stubStripe,
     media: null,
     mux: null,
+    push: { send: async () => {} },
     user: { id: UUID_USER },
     ...overrides,
   };

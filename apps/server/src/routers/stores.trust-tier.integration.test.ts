@@ -76,6 +76,7 @@ describeWithDb("stores.get — trust tier (F-016) PostGIS/Postgres integration",
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
   }

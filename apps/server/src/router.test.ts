@@ -40,6 +40,7 @@ const stubCtx: Context = {
   stripe: stubStripe,
   media: null,
   mux: null,
+  push: { send: async () => {} },
   user: null,
 };
 
