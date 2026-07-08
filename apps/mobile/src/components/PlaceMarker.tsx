@@ -67,8 +67,10 @@ export function PlaceMarker({ place, onPress }: Props) {
 
 const styles = StyleSheet.create({
   badge: {
-    width: 34,
-    height: 34,
+    // 36px circle-equivalent + 18px emoji — matches SectionHeader's badge
+    // convention (borderWidth 2 stays: deliberate distinctness for map pins).
+    width: 36,
+    height: 36,
     borderRadius: radii.sm,
     backgroundColor: colors.surface,
     borderWidth: 2,
@@ -77,6 +79,6 @@ const styles = StyleSheet.create({
     ...shadows.soft,
   },
   emoji: {
-    fontSize: 16,
+    fontSize: 18,
   },
 });

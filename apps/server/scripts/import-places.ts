@@ -66,7 +66,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { sql, eq, asc } from "drizzle-orm";
+import { sql, eq, and, asc } from "drizzle-orm";
 import { communityPlace, communityPlaceType, type CommunityPlaceType } from "@homegrown/shared";
 import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
@@ -147,7 +147,10 @@ interface OverpassResponse {
  */
 export function parseTypesArg(raw?: string): CommunityPlaceType[] {
   if (raw === undefined || raw.trim() === "") return [...communityPlaceType.options];
-  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  const parts = raw
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (parts.length === 0) return [...communityPlaceType.options];
   const seen = new Set<CommunityPlaceType>();
   for (const part of parts) {
@@ -188,10 +191,16 @@ export function buildOverpassQuery(
   // classifyOsmElement exactly as before.
   const clauses: string[] = [];
   if (types.includes("health_food")) {
-    clauses.push(`  node["shop"="health_food"](${around});`, `  way["shop"="health_food"](${around});`);
+    clauses.push(
+      `  node["shop"="health_food"](${around});`,
+      `  way["shop"="health_food"](${around});`,
+    );
   }
   if (types.includes("farmers_market")) {
-    clauses.push(`  node["amenity"="marketplace"](${around});`, `  way["amenity"="marketplace"](${around});`);
+    clauses.push(
+      `  node["amenity"="marketplace"](${around});`,
+      `  way["amenity"="marketplace"](${around});`,
+    );
   }
   if (types.includes("coop")) {
     for (const shop of ["supermarket", "greengrocer", "convenience"]) {
@@ -431,7 +440,10 @@ async function fetchUsda(
 // ---------------------------------------------------------------------------
 
 export function normalizeName(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 export function namesSimilar(a: string, b: string): boolean {
@@ -466,7 +478,10 @@ export function dedupeUsdaOsm(
   for (const usda of usdaCandidates) {
     for (const osm of osmCandidates) {
       if (osm.type !== "farmers_market" || dropOsmRefs.has(osm.sourceRef)) continue;
-      if (namesSimilar(usda.name, osm.name) && haversineMeters(usda.lat, usda.lng, osm.lat, osm.lng) < 200) {
+      if (
+        namesSimilar(usda.name, osm.name) &&
+        haversineMeters(usda.lat, usda.lng, osm.lat, osm.lng) < 200
+      ) {
         dropOsmRefs.add(osm.sourceRef);
       }
     }
@@ -487,11 +502,24 @@ function saveCandidatesFile(file: CandidatesFile): void {
   writeFileSync(STATE_FILE, `${JSON.stringify(file, null, 2)}\n`);
 }
 
+/**
+ * Strips C0 control characters (and DEL) before terminal display. OSM tag
+ * text is publicly editable — a crafted name/address could otherwise smuggle
+ * ANSI escape sequences (colors, cursor movement, screen clears) into the
+ * operator's approve/reject terminal output and misrepresent what's being
+ * reviewed. Display-only: stored values are untouched (the shared schema's
+ * length/URL bounds govern what's persisted).
+ */
+export function sanitizeForDisplay(s: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping control chars is the point
+  return s.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
 function printCandidatesTable(candidates: PlaceCandidate[]): void {
   candidates.forEach((c, i) => {
     console.log(
       `${String(i + 1).padStart(3)}. [${c.source.padEnd(6)}] ${c.type.padEnd(15)} ` +
-        `${c.name.padEnd(40)} ${c.address ?? "—"}`,
+        `${sanitizeForDisplay(c.name).padEnd(40)} ${c.address ? sanitizeForDisplay(c.address) : "—"}`,
     );
   });
 }
@@ -628,7 +656,13 @@ async function cmdFetch(
   console.log(`\n${merged.length} candidate(s):\n`);
   printCandidatesTable(merged);
 
-  saveCandidatesFile({ fetchedAt: new Date().toISOString(), lat, lng, radiusKm, candidates: merged });
+  saveCandidatesFile({
+    fetchedAt: new Date().toISOString(),
+    lat,
+    lng,
+    radiusKm,
+    candidates: merged,
+  });
   console.log(`\nWritten to ${STATE_FILE} — NO database writes yet.`);
   console.log(`Review the list above, then run: pnpm import-places commit`);
 }
@@ -681,6 +715,76 @@ export async function upsertCandidate(
   return row;
 }
 
+/**
+ * Commit-time guard against creating a SECOND identity for one physical
+ * place across sources (phase 2 hangs relationships off place ids, so "one
+ * physical place, one row" matters). Only applies to candidates whose
+ * (source, source_ref) does NOT already exist — a matching pair is the
+ * normal idempotent refresh path and never a duplicate. Otherwise, any
+ * existing `community_places` row within 200m (PostGIS ST_DWithin — geo
+ * queries never use app-side math against real rows) whose normalized name
+ * is similar (`namesSimilar`, same heuristic as the in-memory fetch dedupe)
+ * is returned so the caller can SKIP the insert and tell the operator which
+ * row already covers this place.
+ */
+export async function findNearbyDuplicate(
+  db: ReturnType<typeof getDb>,
+  c: PlaceCandidate,
+): Promise<{ id: string; name: string; source: string } | null> {
+  const [existing] = await db
+    .select({ id: schema.communityPlaces.id })
+    .from(schema.communityPlaces)
+    .where(
+      and(
+        eq(schema.communityPlaces.source, c.source),
+        eq(schema.communityPlaces.sourceRef, c.sourceRef),
+      ),
+    )
+    .limit(1);
+  if (existing) return null; // refresh upsert of the same identity — not a duplicate
+
+  // Name similarity is a normalized-substring heuristic, not expressible as a
+  // sane SQL predicate — pull the (few) rows within 200m and compare in JS.
+  const nearby = await db
+    .select({
+      id: schema.communityPlaces.id,
+      name: schema.communityPlaces.name,
+      source: schema.communityPlaces.source,
+    })
+    .from(schema.communityPlaces)
+    .where(
+      sql`ST_DWithin(${schema.communityPlaces.location}, ST_SetSRID(ST_MakePoint(${c.lng}, ${c.lat}), 4326)::geography, 200)`,
+    );
+
+  for (const row of nearby) {
+    if (namesSimilar(c.name, row.name)) return row;
+  }
+  return null;
+}
+
+export type CommitOutcome =
+  | { action: "inserted" | "updated"; id: string }
+  | { action: "skipped_nearby_duplicate"; existing: { id: string; name: string; source: string } };
+
+/**
+ * The full per-candidate commit step: cross-source proximity dedupe (see
+ * `findNearbyDuplicate`), then the idempotent (source, source_ref) upsert.
+ * Extracted from `cmdCommit` so integration tests can exercise the real
+ * skip/insert decision against a live Postgres without the CLI's file/env
+ * plumbing. Returns undefined only if the DB driver returns no row.
+ */
+export async function commitCandidate(
+  db: ReturnType<typeof getDb>,
+  c: PlaceCandidate,
+): Promise<CommitOutcome | undefined> {
+  const duplicate = await findNearbyDuplicate(db, c);
+  if (duplicate) return { action: "skipped_nearby_duplicate", existing: duplicate };
+
+  const row = await upsertCandidate(db, c);
+  if (!row) return undefined;
+  return { action: row.inserted ? "inserted" : "updated", id: row.id };
+}
+
 async function cmdCommit(): Promise<void> {
   const file = loadCandidatesFile();
   if (!file || file.candidates.length === 0) {
@@ -694,6 +798,7 @@ async function cmdCommit(): Promise<void> {
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
+  let skippedDuplicates = 0;
 
   for (const c of file.candidates) {
     const validation = validateCommitableCandidate(c);
@@ -706,9 +811,21 @@ async function cmdCommit(): Promise<void> {
       continue;
     }
 
-    const row = await upsertCandidate(db, c);
-    if (!row) continue;
-    if (row.inserted) inserted++;
+    const outcome = await commitCandidate(db, c);
+    if (!outcome) continue;
+    if (outcome.action === "skipped_nearby_duplicate") {
+      console.warn(
+        `  ⚠ skipping "${sanitizeForDisplay(c.name)}" (${c.source}:${c.sourceRef}): ` +
+          `an existing place within 200m has a similar name — ` +
+          `id=${outcome.existing.id} source=${outcome.existing.source} ` +
+          `("${sanitizeForDisplay(outcome.existing.name)}"). One physical place must keep ` +
+          `one row/id; if these really are different places, adjust the candidate name ` +
+          `in ${STATE_FILE} and re-commit.`,
+      );
+      skippedDuplicates++;
+      continue;
+    }
+    if (outcome.action === "inserted") inserted++;
     else updated++;
   }
 
@@ -716,7 +833,8 @@ async function cmdCommit(): Promise<void> {
   console.log(
     `\n✓ committed ${inserted + updated} of ${file.candidates.length} candidate(s): ` +
       `${inserted} inserted (pending), ${updated} updated (status preserved)` +
-      (skipped > 0 ? `, ${skipped} skipped (invalid)` : ""),
+      (skipped > 0 ? `, ${skipped} skipped (invalid)` : "") +
+      (skippedDuplicates > 0 ? `, ${skippedDuplicates} skipped (nearby duplicate)` : ""),
   );
   console.log(`Run \`pnpm import-places review\` to see what needs approval.`);
 }
@@ -738,7 +856,7 @@ async function cmdReview(): Promise<void> {
   pending.forEach((p, i) => {
     console.log(
       `${String(i + 1).padStart(3)}. [${p.source.padEnd(6)}] ${p.type.padEnd(15)} ` +
-        `${p.name.padEnd(40)} ${p.address ?? "—"}`,
+        `${sanitizeForDisplay(p.name).padEnd(40)} ${p.address ? sanitizeForDisplay(p.address) : "—"}`,
     );
     console.log(`      id=${p.id}  sourceRef=${p.sourceRef}`);
   });
@@ -826,7 +944,9 @@ Commands:
   approve --ids=1,2,3        Flip the given pending rows (by review's
         (or --all)           1-based index) to 'approved'.
   reject  --ids=1,2,3        Flip the given pending rows to 'rejected'.
-        (or --all)
+        (or --all)           NOTE: reject is one-way via this CLI — re-instating
+                             a rejected row needs manual SQL (intentional for
+                             the pilot).
 
 Options:
   --radius-km=<n>            Capped at 80 for fetch.

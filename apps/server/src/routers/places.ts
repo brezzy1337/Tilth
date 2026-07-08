@@ -14,13 +14,10 @@
  * No direct imports of env, db, or any helper with side-effects.
  */
 
-import {
-  placesNearbyInput,
-  placesNearbyOutput,
-  type CommunityPlaceType,
-} from "@homegrown/shared";
+import { placesNearbyInput, placesNearbyOutput, type CommunityPlaceType } from "@homegrown/shared";
 import { sql } from "drizzle-orm";
 import { publicProcedure, router } from "../trpc";
+import { geoRadius } from "./helpers";
 
 export const placesRouter = router({
   /**
@@ -35,7 +32,8 @@ export const placesRouter = router({
     .output(placesNearbyOutput)
     .query(async ({ input, ctx }) => {
       const { lat, lng, radiusKm, type } = input;
-      const radiusMeters = radiusKm * 1000;
+      const geo = geoRadius(lat, lng, radiusKm);
+      const geogColumn = sql`cp.location`;
 
       // Build type filter clause — omit entirely when not supplied. `type`
       // is bound as a parameter (no SQL injection); it is also validated
@@ -62,14 +60,14 @@ export const placesRouter = router({
           cp.address,
           cp.website,
           cp.hours_text,
-          ST_Distance(cp.location, ST_MakePoint(${lng}, ${lat})::geography) AS distance_m,
+          ${geo.distanceExpr(geogColumn)} AS distance_m,
           ST_Y(cp.location::geometry) AS lat,
           ST_X(cp.location::geometry) AS lng
         FROM community_places cp
         WHERE cp.status = 'approved'
-        AND ST_DWithin(cp.location, ST_MakePoint(${lng}, ${lat})::geography, ${radiusMeters})
+        AND ${geo.withinClause(geogColumn)}
         ${typeFilter}
-        ORDER BY ST_Distance(cp.location, ST_MakePoint(${lng}, ${lat})::geography) ASC
+        ORDER BY ${geo.distanceExpr(geogColumn)} ASC
         LIMIT 200
       `);
 

@@ -7,8 +7,9 @@
  * job (✕ here, or tapping the map itself, wired in HomeScreen).
  *
  * Visual treatment follows GardenPostOverlay's precedent for map/media
- * overlays, but as an opaque surface + shadow card (not a text-over-media
- * scrim) since this floats over the map rather than a photo/video cell.
+ * overlays, but as an opaque `Card` (shadow="raised" since it floats over
+ * the map) rather than a text-over-media scrim. The hairline border is a
+ * local addition on top of Card — it separates the card from busy map tiles.
  *
  * React Native only — no DOM elements.
  */
@@ -17,7 +18,8 @@ import React from "react";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { CommunityPlace, CommunityPlaceType } from "@homegrown/shared";
-import { colors, radii, shadows, spacing, type } from "../theme";
+import { colors, radii, spacing, type } from "../theme";
+import { Card } from "./Card";
 
 const TYPE_LABEL: Record<CommunityPlaceType, string> = {
   farmers_market: "Farmers market",
@@ -46,7 +48,7 @@ export function PlaceInfoCard({ place, onClose }: Props) {
   };
 
   return (
-    <View style={[styles.card, shadows.raised]}>
+    <Card shadow="raised" style={styles.card}>
       <View style={styles.headerRow}>
         <Text style={styles.title} numberOfLines={1}>
           {TYPE_EMOJI[place.type]} {place.name}
@@ -81,20 +83,19 @@ export function PlaceInfoCard({ place, onClose }: Props) {
         accessibilityRole="button"
         accessibilityLabel="Directions"
       >
-        <Ionicons name="navigate-outline" size={14} color={colors.onPrimary} />
+        <Ionicons name="navigate-outline" size={16} color={colors.onPrimary} />
         <Text style={styles.directionsText}>Directions</Text>
       </Pressable>
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
+  // Surface/radius/padding/shadow come from Card; only the map-separating
+  // hairline border and the internal row gap are local.
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md,
     gap: spacing.xs,
   },
   headerRow: {
@@ -105,8 +106,8 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
-    fontSize: type.body.fontSize + 1,
-    fontWeight: "700",
+    fontSize: type.section.fontSize,
+    fontWeight: type.section.fontWeight,
     color: colors.text,
   },
   typeLabel: {

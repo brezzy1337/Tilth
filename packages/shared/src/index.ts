@@ -894,7 +894,13 @@ export const communityPlace = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
   address: z.string().max(300).nullable(),
-  website: z.string().url().nullable(),
+  // `.url()` alone admits any scheme (`javascript:`, `data:`, …) — the mobile
+  // app may render this as a tappable link, so pin it to http(s).
+  website: z
+    .string()
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), { message: "website must be an http(s) URL" })
+    .nullable(),
   /** Freeform display text, e.g. "Sat 8am–1pm, May–Oct". Not structured hours. */
   hoursText: z.string().max(500).nullable(),
   /** Computed by ST_Distance on the server; kilometres. */

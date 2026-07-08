@@ -30,6 +30,8 @@ import {
   dedupeUsdaOsm,
   validateCommitableCandidate,
   upsertCandidate,
+  commitCandidate,
+  sanitizeForDisplay,
   type OverpassElement,
   type PlaceCandidate,
 } from "./import-places";
@@ -49,14 +51,18 @@ describe("classifyOsmElement", () => {
 
   it("classifies operator:type=cooperative as coop", () => {
     expect(
-      classifyOsmElement({ shop: "greengrocer", name: "Green Grocer", "operator:type": "cooperative" }),
+      classifyOsmElement({
+        shop: "greengrocer",
+        name: "Green Grocer",
+        "operator:type": "cooperative",
+      }),
     ).toBe("coop");
   });
 
   it("classifies cooperative=yes as coop", () => {
-    expect(classifyOsmElement({ shop: "convenience", name: "Corner Store", cooperative: "yes" })).toBe(
-      "coop",
-    );
+    expect(
+      classifyOsmElement({ shop: "convenience", name: "Corner Store", cooperative: "yes" }),
+    ).toBe("coop");
   });
 
   it("does not classify a plain supermarket without any co-op signal", () => {
@@ -232,18 +238,30 @@ describe("osmElementToCandidate", () => {
   });
 
   it("skips an element with no name", () => {
-    expect(osmElementToCandidate({ type: "node", id: 1, lat: 1, lon: 1, tags: { shop: "health_food" } })).toBeNull();
+    expect(
+      osmElementToCandidate({ type: "node", id: 1, lat: 1, lon: 1, tags: { shop: "health_food" } }),
+    ).toBeNull();
   });
 
   it("skips an element that doesn't classify into any community place type", () => {
     expect(
-      osmElementToCandidate({ type: "node", id: 2, lat: 1, lon: 1, tags: { shop: "clothes", name: "Fashion" } }),
+      osmElementToCandidate({
+        type: "node",
+        id: 2,
+        lat: 1,
+        lon: 1,
+        tags: { shop: "clothes", name: "Fashion" },
+      }),
     ).toBeNull();
   });
 
   it("skips a way with no Overpass center", () => {
     expect(
-      osmElementToCandidate({ type: "way", id: 3, tags: { amenity: "marketplace", name: "No Center Market" } }),
+      osmElementToCandidate({
+        type: "way",
+        id: 3,
+        tags: { amenity: "marketplace", name: "No Center Market" },
+      }),
     ).toBeNull();
   });
 
@@ -292,12 +310,19 @@ describe("mapUsdaRecord", () => {
 
   it("returns null when the coordinates aren't numeric", () => {
     expect(
-      mapUsdaRecord({ listing_id: 1, listing_name: "Bad Coords Market", location_x: "n/a", location_y: "n/a" }),
+      mapUsdaRecord({
+        listing_id: 1,
+        listing_name: "Bad Coords Market",
+        location_x: "n/a",
+        location_y: "n/a",
+      }),
     ).toBeNull();
   });
 
   it("returns null when listing_id is missing", () => {
-    expect(mapUsdaRecord({ listing_name: "No Id Market", location_x: 1, location_y: 1 })).toBeNull();
+    expect(
+      mapUsdaRecord({ listing_name: "No Id Market", location_x: 1, location_y: 1 }),
+    ).toBeNull();
   });
 
   it("accepts string-typed numeric coordinates", () => {
@@ -550,6 +575,52 @@ describe("validateCommitableCandidate", () => {
     if (result.ok) throw new Error("expected rejection");
     expect(result.errors.some((e) => e.startsWith("hoursText"))).toBe(true);
   });
+
+  // Inherited from the shared communityPlace schema's http(s)-scheme refine:
+  // a hand-edited manual candidate must not be able to land a javascript:/data:
+  // website that the mobile app could later render as a tappable link.
+  it("rejects a javascript: URI website on a manual candidate", () => {
+    const result = validateCommitableCandidate({
+      ...validManualCandidate,
+      website: "javascript:alert(1)",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.some((e) => e.startsWith("website"))).toBe(true);
+  });
+
+  it("rejects a data: URI website on a manual candidate", () => {
+    const result = validateCommitableCandidate({
+      ...validManualCandidate,
+      website: "data:text/html,<script>alert(1)</script>",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.some((e) => e.startsWith("website"))).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------
+// sanitizeForDisplay — OSM text is publicly editable; the preview table and
+// `review` listing must not pass raw control characters (ANSI escapes,
+// cursor movement, screen clears) to the operator's terminal.
+// -----------------------------------------------------------------------
+
+describe("sanitizeForDisplay", () => {
+  it("strips ANSI escape sequences from a crafted OSM name", () => {
+    // ESC (0x1b) is stripped; the now-inert printable remainder stays visible.
+    expect(sanitizeForDisplay("Totally \x1b[32mAPPROVED\x1b[0m Market")).toBe(
+      "Totally [32mAPPROVED[0m Market",
+    );
+  });
+
+  it("strips other C0 control chars and DEL", () => {
+    expect(sanitizeForDisplay("A\x00B\x07C\rD\nE\x7fF")).toBe("ABCDEF");
+  });
+
+  it("leaves ordinary unicode text untouched", () => {
+    expect(sanitizeForDisplay("Café Co-op — 100% organic 🧺")).toBe("Café Co-op — 100% organic 🧺");
+  });
 });
 
 // -----------------------------------------------------------------------
@@ -650,5 +721,87 @@ describeWithDb("upsertCandidate — type preserved on approved rows (PostGIS int
     const row = await readTypeAndStatus(first!.id);
     expect(row?.status).toBe("pending");
     expect(row?.type).toBe("health_food");
+  });
+});
+
+describeWithDb("commitCandidate — cross-source proximity dedupe (PostGIS integration)", () => {
+  let db: ReturnType<typeof drizzle<typeof schema>>;
+  let client: ReturnType<typeof postgres>;
+  const seededIds: string[] = [];
+
+  // Isolated corner of the map — nothing else in these suites seeds near here.
+  const baseLat = 41.101;
+  const baseLng = -73.501;
+
+  const manualCandidate: PlaceCandidate = {
+    type: "farmers_market",
+    name: "Dedupe Test Farmers Market",
+    lat: baseLat,
+    lng: baseLng,
+    address: "1 Test Sq",
+    website: null,
+    hoursText: null,
+    source: "manual",
+    sourceRef: "manual:dedupe-test-market",
+  };
+
+  beforeAll(async () => {
+    client = postgres(TEST_DB_URL!, { max: 1 });
+    db = drizzle(client, { schema });
+    await migrateForTest(client, db);
+
+    const seeded = await commitCandidate(db, manualCandidate);
+    expect(seeded).toEqual({ action: "inserted", id: expect.any(String) });
+    if (seeded && seeded.action === "inserted") seededIds.push(seeded.id);
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await db.delete(schema.communityPlaces).where(eq(schema.communityPlaces.id, id));
+    }
+    await client.end();
+  });
+
+  it("SKIPs an OSM candidate for the same physical place (~50m, similar name), naming the existing row", async () => {
+    const osmSameSpot: PlaceCandidate = {
+      ...manualCandidate,
+      name: "Dedupe Test Farmers Market (Saturdays)", // namesSimilar: containment match
+      lat: baseLat + 0.0004, // ~45m north
+      source: "osm",
+      sourceRef: "node/991001",
+    };
+
+    const outcome = await commitCandidate(db, osmSameSpot);
+    expect(outcome).toEqual({
+      action: "skipped_nearby_duplicate",
+      existing: { id: seededIds[0]!, name: manualCandidate.name, source: "manual" },
+    });
+
+    // No second identity was created for the physical place.
+    const [osmRow] = await db
+      .select({ id: schema.communityPlaces.id })
+      .from(schema.communityPlaces)
+      .where(eq(schema.communityPlaces.sourceRef, "node/991001"));
+    expect(osmRow).toBeUndefined();
+  });
+
+  it("still INSERTs a genuinely different place at the same distance", async () => {
+    const differentPlace: PlaceCandidate = {
+      ...manualCandidate,
+      name: "Riverbend Health Foods", // no name similarity
+      type: "health_food",
+      lat: baseLat + 0.0004, // same ~45m offset as the skipped candidate
+      source: "osm",
+      sourceRef: "node/991002",
+    };
+
+    const outcome = await commitCandidate(db, differentPlace);
+    expect(outcome).toEqual({ action: "inserted", id: expect.any(String) });
+    if (outcome && outcome.action === "inserted") seededIds.push(outcome.id);
+  });
+
+  it("does NOT treat the same (source, source_ref) re-commit as a duplicate (refresh path intact)", async () => {
+    const outcome = await commitCandidate(db, { ...manualCandidate, address: "2 Test Sq" });
+    expect(outcome).toEqual({ action: "updated", id: seededIds[0]! });
   });
 });

@@ -120,6 +120,31 @@ describe("communityPlace schema", () => {
     expect(result.success).toBe(false);
   });
 
+  // Scheme guarantee — website may be rendered as a tappable link, so only
+  // http(s) URLs are allowed; javascript:/data: URIs must never get through.
+  it("rejects a javascript: URI website", () => {
+    const result = communityPlace.safeParse({ ...valid, website: "javascript:alert(1)" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a data: URI website", () => {
+    const result = communityPlace.safeParse({
+      ...valid,
+      website: "data:text/html,<script>alert(1)</script>",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an http:// website", () => {
+    const result = communityPlace.safeParse({ ...valid, website: "http://coop.example.org" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an https:// website", () => {
+    const result = communityPlace.safeParse({ ...valid, website: "https://coop.example.org" });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects hoursText over the 500-character maximum", () => {
     const result = communityPlace.safeParse({ ...valid, hoursText: "x".repeat(501) });
     expect(result.success).toBe(false);
