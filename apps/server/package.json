@@ -14,8 +14,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.mjs",
-    "build:reconcile": "esbuild src/jobs/reconcile.main.ts --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/reconcile.mjs",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\" --outfile=dist/index.mjs",
+    "build:reconcile": "esbuild src/jobs/reconcile.main.ts --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\" --outfile=dist/reconcile.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -28,6 +28,7 @@
     "@homegrown/shared": "workspace:*",
     "@trpc/server": "catalog:",
     "drizzle-orm": "catalog:",
+    "expo-server-sdk": "6.1.0",
     "jose": "catalog:",
     "postgres": "catalog:",
     "stripe": "22.2.0",

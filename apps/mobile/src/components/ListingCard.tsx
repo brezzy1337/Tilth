@@ -2,10 +2,10 @@
  * ListingCard — shared produce listing card used by HomeScreen, SearchScreen,
  * and StoreProfileScreen.
  *
- * Shows: name, category, price/unit, optionally distance, optionally store name,
- * and an Add/Sold-out button with brief "Added" feedback. Handles the
- * single-store cart prompt (Alert) when the user taps Add on a listing from a
- * different store.
+ * Shows: category emoji, name, category, price/unit, optionally distance,
+ * optionally store name, and an Add/Sold-out button with brief "Added"
+ * feedback. Handles the single-store cart prompt (Alert) when the user taps
+ * Add on a listing from a different store.
  *
  * storeName and distanceKm are optional — they are present on NearbyListing
  * (Home/Search) but absent on Listing (store catalog). The card renders them
@@ -14,21 +14,20 @@
  * When onPressStore is provided AND storeName is present, the store name is
  * rendered as a tappable Pressable so buyers can navigate to the store profile.
  *
+ * Restyled to "Garden Fresh" tokens (F-044) — Card primitive, category emoji
+ * leading the row, warm colors throughout.
  * React Native only — no DOM elements.
  */
 
 import React, { useState } from "react";
-import {
-  Alert,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ListingCategory, ListingUnit } from "@homegrown/shared";
 import { useCart } from "../cart/CartContext";
 import { capitalise } from "../utils/text";
 import { formatCents } from "../utils/money";
+import { Card } from "./Card";
+import { colors, radii, spacing, type } from "../theme";
+import { categoryEmoji } from "../theme/categoryEmoji";
 
 /**
  * Minimal item shape the card needs. Both NearbyListing (Home/Search) and
@@ -92,8 +91,9 @@ export function ListingCard({ item, onPressStore }: Props) {
   }
 
   return (
-    <View style={styles.card}>
+    <Card style={styles.card}>
       <View style={styles.row}>
+        <Text style={styles.emoji}>{categoryEmoji(item.category)}</Text>
         <Text style={styles.name}>{item.name}</Text>
         {item.distanceKm !== undefined ? (
           <Text style={styles.distance}>{item.distanceKm.toFixed(1)} km</Text>
@@ -132,80 +132,75 @@ export function ListingCard({ item, onPressStore }: Props) {
           {item.quantity === 0 ? "Sold out" : justAdded ? "Added" : "Add"}
         </Text>
       </Pressable>
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
+    marginBottom: spacing.sm,
   },
   row: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
+  },
+  emoji: {
+    fontSize: 18,
+    marginRight: spacing.sm,
   },
   name: {
-    fontSize: 16,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "600",
-    color: "#1a1a1a",
+    color: colors.text,
     flex: 1,
   },
   distance: {
-    fontSize: 13,
-    color: "#2d6a4f",
+    fontSize: type.caption.fontSize,
+    color: colors.primary,
     fontWeight: "500",
-    marginLeft: 8,
+    marginLeft: spacing.sm,
   },
   price: {
-    fontSize: 15,
-    color: "#2d6a4f",
+    fontSize: type.body.fontSize,
+    color: colors.primary,
     fontWeight: "700",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   availability: {
-    fontSize: 13,
-    color: "#555",
-    marginBottom: 4,
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
   },
   soldOut: {
-    fontSize: 13,
-    color: "#b71c1c",
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     fontWeight: "600",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   meta: {
     fontSize: 12,
-    color: "#888",
+    color: colors.textMuted,
   },
   storeLink: {
     fontSize: 12,
-    color: "#2d6a4f",
+    color: colors.primary,
     fontWeight: "600",
     textDecorationLine: "underline",
   },
   addButton: {
-    marginTop: 10,
+    marginTop: spacing.md,
     alignSelf: "flex-start",
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 6,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.sm,
   },
   addButtonAdded: {
-    backgroundColor: "#52b788",
+    backgroundColor: colors.secondary,
   },
   addButtonText: {
-    color: "#fff",
+    color: colors.onPrimary,
     fontSize: 13,
     fontWeight: "600",
   },

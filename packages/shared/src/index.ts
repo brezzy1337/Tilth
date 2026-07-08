@@ -407,10 +407,10 @@ export const createOrderInput = z
     deliveryAddress: z.string().trim().min(1).max(300).optional(),
     tipCents: z.number().int().nonnegative().max(100000).optional(),
   })
-  .refine(
-    (v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0,
-    { path: ["deliveryAddress"], message: "Delivery address is required for delivery" },
-  );
+  .refine((v) => v.fulfillmentMethod !== "delivery" || (v.deliveryAddress?.length ?? 0) > 0, {
+    path: ["deliveryAddress"],
+    message: "Delivery address is required for delivery",
+  });
 
 export type CreateOrderInput = z.infer<typeof createOrderInput>;
 
@@ -704,3 +704,164 @@ export const gardenFeedOutput = z.object({
 });
 
 export type GardenFeedOutput = z.infer<typeof gardenFeedOutput>;
+
+// ---------------------------------------------------------------------------
+// Messaging — 1:1 buyer<->store conversations (F-037/F-038)
+// One conversation per (buyerId, storeId) pair. Buyers start a conversation;
+// sellers may only reply within one that already exists. Text-only for the
+// MVP. Includes reporting/blocking for App Store Guideline 1.2 (UGC
+// moderation) and Expo push-token registration for message notifications.
+// ---------------------------------------------------------------------------
+
+/** A message's text content. Trimmed; 1-2000 characters. */
+export const messageBody = z.string().trim().min(1).max(2000);
+
+export type MessageBody = z.infer<typeof messageBody>;
+
+/** A single chat message, as returned by `messages.list` / sent via `messages.send`. */
+export const chatMessage = z.object({
+  id: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  senderUserId: z.string().uuid(),
+  body: messageBody,
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+});
+
+export type ChatMessage = z.infer<typeof chatMessage>;
+
+/**
+ * Inbox row returned by `conversations.list`. Includes both parties' display
+ * names since the client (buyer or seller) determines which side is "self"
+ * from its own auth context — the server doesn't assume a viewpoint.
+ */
+export const conversationSummary = z.object({
+  id: z.string().uuid(),
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+  /**
+   * The store owner's user id — symmetric with `buyerId`, so a buyer can
+   * block/report the seller (moderation inputs take a USER id, not a store id).
+   */
+  storeUserId: z.string().uuid(),
+  buyerId: z.string().uuid(),
+  buyerName: z.string(),
+  /** Preview text of the most recent message; null if the conversation has none. */
+  lastMessageBody: z.string().nullable(),
+  /** ISO 8601 datetime of the most recent message; null if the conversation has none. */
+  lastMessageAt: z.string().datetime().nullable(),
+  /** Count of messages unread by the caller. */
+  unreadCount: z.number().int().nonnegative(),
+});
+
+export type ConversationSummary = z.infer<typeof conversationSummary>;
+
+/**
+ * Paginated response from `conversations.list`, most-recent-activity first.
+ * `nextCursor` is null when the caller has reached the last page, matching
+ * `listForMyStoreOutput` / `gardenFeedOutput`'s pagination convention.
+ */
+export const conversationsListOutput = z.object({
+  items: z.array(conversationSummary),
+  nextCursor: z.string().nullable(),
+});
+
+export type ConversationsListOutput = z.infer<typeof conversationsListOutput>;
+
+/** Input to `conversations.list` (protected) — cursor-paginated inbox. */
+export const conversationsListInput = z.object({
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+
+export type ConversationsListInput = z.infer<typeof conversationsListInput>;
+
+/**
+ * Input to `conversations.start` (protected, buyer-initiated).
+ * A buyer opens a conversation with a store; sellers reply within conversations
+ * that already exist rather than starting new ones. Idempotent per
+ * (buyerId, storeId) pair — the server returns the existing conversation if one
+ * is already open.
+ */
+export const startConversationInput = z.object({
+  storeId: z.string().uuid(),
+});
+
+export type StartConversationInput = z.infer<typeof startConversationInput>;
+
+/** Response from `conversations.start`. */
+export const startConversationOutput = z.object({
+  conversationId: z.string().uuid(),
+});
+
+export type StartConversationOutput = z.infer<typeof startConversationOutput>;
+
+/**
+ * Input to `messages.list` (protected, caller must be a participant).
+ * Cursor-paginated, newest-first pages (mirrors chat-app convention: most
+ * recent messages load first, older ones page in on scroll-up).
+ */
+export const messagesListInput = z.object({
+  conversationId: z.string().uuid(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+
+export type MessagesListInput = z.infer<typeof messagesListInput>;
+
+/**
+ * Paginated response from `messages.list`, newest-first.
+ * `nextCursor` is null when the caller has reached the last (oldest) page.
+ */
+export const messagesListOutput = z.object({
+  items: z.array(chatMessage),
+  nextCursor: z.string().nullable(),
+});
+
+export type MessagesListOutput = z.infer<typeof messagesListOutput>;
+
+/** Input to `messages.send` (protected, caller must be a participant). */
+export const sendMessageInput = z.object({
+  conversationId: z.string().uuid(),
+  body: messageBody,
+});
+
+export type SendMessageInput = z.infer<typeof sendMessageInput>;
+
+/** Input to `conversations.markRead` (protected, caller must be a participant). */
+export const markConversationReadInput = z.object({
+  conversationId: z.string().uuid(),
+});
+
+export type MarkConversationReadInput = z.infer<typeof markConversationReadInput>;
+
+/**
+ * Input to `moderation.blockUser` (protected).
+ * Blocking a user prevents further messages between the caller and `userId`;
+ * enforcement happens server-side.
+ */
+export const blockUserInput = z.object({
+  userId: z.string().uuid(),
+});
+
+export type BlockUserInput = z.infer<typeof blockUserInput>;
+
+/**
+ * Input to `moderation.reportMessage` (protected).
+ * Satisfies App Store Guideline 1.2 (apps with user-generated content must
+ * offer a mechanism to report objectionable content).
+ */
+export const reportMessageInput = z.object({
+  messageId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(500),
+});
+
+export type ReportMessageInput = z.infer<typeof reportMessageInput>;
+
+/** Input to `push.registerToken` (protected). Registers an Expo push token for the device. */
+export const registerPushTokenInput = z.object({
+  token: z.string().min(1).max(200),
+  platform: z.enum(["ios", "android"]),
+});
+
+export type RegisterPushTokenInput = z.infer<typeof registerPushTokenInput>;

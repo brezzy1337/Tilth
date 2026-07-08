@@ -11,6 +11,11 @@
  *   - React Navigation: pre-auth stack (Hero / LogIn / SignUp) or
  *     authenticated stack (Home, …), chosen by AuthContext status.
  *     While status === "loading" a centered splash is shown.
+ *   - Push notifications (F-037): once signed in, usePushNotifications
+ *     registers the device's Expo push token (best-effort — a simulator,
+ *     denied permission, or network failure never blocks app start) and
+ *     deep-links notification taps carrying data.conversationId into the
+ *     Conversation screen via navigationRef.
  *
  * Secrets policy: EXPO_PUBLIC_API_URL is read from the environment (set in
  * .env locally; never commit a filled-in .env). No secret keys here.
@@ -35,8 +40,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { StripeProvider } from "@stripe/stripe-react-native";
 
 import { trpc, API_URL, getAuthToken } from "./src/api/trpc";
+import { colors } from "./src/theme";
 import { AuthProvider, useAuth } from "./src/auth/AuthContext";
 import { CartProvider } from "./src/cart/CartContext";
+import { usePushNotifications } from "./src/push/pushNotifications";
+import {
+  navigationRef,
+  flushPendingConversationNavigation,
+} from "./src/navigation/rootNavigation";
 import { HeroScreen } from "./src/screens/HeroScreen";
 import { LogInScreen } from "./src/screens/LogInScreen";
 import { SignUpScreen } from "./src/screens/SignUpScreen";
@@ -52,6 +63,7 @@ import { OrdersScreen } from "./src/screens/OrdersScreen";
 import { OrderDetailScreen } from "./src/screens/OrderDetailScreen";
 import { StoreOrdersScreen } from "./src/screens/StoreOrdersScreen";
 import { StoreProfileScreen } from "./src/screens/StoreProfileScreen";
+import { ConversationScreen } from "./src/screens/ConversationScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
@@ -76,8 +88,12 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
-        tabBarActiveTintColor: "#2d6a4f",
-        tabBarInactiveTintColor: "#8a8a8a",
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+        },
       }}
     >
       <Tab.Screen
@@ -146,18 +162,29 @@ function MainTabs() {
 function RootNavigator() {
   const { status } = useAuth();
 
+  // Push token registration + notification-tap deep links; armed once auth
+  // resolves to signedIn. Internally failure-tolerant (see pushNotifications.ts).
+  usePushNotifications(status === "signedIn");
+
   if (status === "loading") {
     return (
       <View style={styles.splash}>
-        <ActivityIndicator size="large" color="#2d6a4f" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef} onReady={flushPendingConversationNavigation}>
       {status === "signedOut" ? (
-        <PreAuthStack.Navigator initialRouteName="Hero">
+        <PreAuthStack.Navigator
+          initialRouteName="Hero"
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.primary,
+            headerTitleStyle: { color: colors.text },
+          }}
+        >
           <PreAuthStack.Screen
             name="Hero"
             component={HeroScreen}
@@ -175,7 +202,13 @@ function RootNavigator() {
           />
         </PreAuthStack.Navigator>
       ) : (
-        <AuthedStack.Navigator>
+        <AuthedStack.Navigator
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.primary,
+            headerTitleStyle: { color: colors.text },
+          }}
+        >
           <AuthedStack.Screen
             name="MainTabs"
             component={MainTabs}
@@ -210,6 +243,11 @@ function RootNavigator() {
             name="Search"
             component={SearchScreen}
             options={{ title: "Search" }}
+          />
+          <AuthedStack.Screen
+            name="Conversation"
+            component={ConversationScreen}
+            options={{ title: "Conversation" }}
           />
           <AuthedStack.Screen
             name="GardenComposer"
@@ -275,6 +313,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: colors.bg,
   },
 });

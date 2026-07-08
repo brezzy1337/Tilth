@@ -73,6 +73,7 @@ describeWithDb("garden.feed — PostGIS integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: null,
     };
   }

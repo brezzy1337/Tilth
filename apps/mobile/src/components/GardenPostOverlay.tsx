@@ -11,6 +11,7 @@
 
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { colors, spacing, type } from "../theme";
 
 type Props = {
   storeName: string;
@@ -39,31 +40,35 @@ export function GardenPostOverlay({ storeName, caption, distanceKm, onPressStore
 }
 
 const styles = StyleSheet.create({
+  // Scrim stays a neutral dark overlay (readability over arbitrary media),
+  // independent of the warm palette; only the text colors below are tokened.
   scrim: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 16,
+    paddingHorizontal: spacing.lg,
     paddingTop: 40,
-    paddingBottom: 24,
+    paddingBottom: spacing.xxl,
     backgroundColor: "rgba(0,0,0,0.35)",
   },
   textBlock: {
-    gap: 4,
+    gap: spacing.xs,
   },
   storeName: {
-    color: "#fff",
-    fontSize: 16,
+    color: colors.onPrimary,
+    fontSize: type.body.fontSize + 1,
     fontWeight: "700",
   },
   distance: {
-    color: "#e8eae8",
-    fontSize: 13,
+    color: colors.onPrimary,
+    opacity: 0.85,
+    fontSize: type.caption.fontSize,
     fontWeight: "500",
   },
   caption: {
-    color: "#f7f9f7",
-    fontSize: 14,
+    color: colors.onPrimary,
+    opacity: 0.95,
+    fontSize: type.body.fontSize,
   },
 });

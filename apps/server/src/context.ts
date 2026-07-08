@@ -179,6 +179,28 @@ export interface MuxClient {
   }): Promise<{ uploadId: string; uploadUrl: string }>;
 }
 
+/**
+ * DI interface for sending Expo push notifications (F-037/F-038).
+ *
+ * Backed by `expo-server-sdk` in production (see `push.ts`), but routers only
+ * depend on this small interface — never the SDK directly — so the router
+ * import tree stays SDK-free and mobile-typecheck-safe (mirrors `stripe.ts` /
+ * `gcs.ts` / `mux.ts`).
+ *
+ * Unlike `media`/`mux`, this is never `null` in context — Expo push does not
+ * require credentials to send (an access token is optional, used only to
+ * raise rate limits). `send` must NEVER throw: push failures are logged and
+ * swallowed so a notification problem never fails the caller's mutation.
+ */
+export interface PushClient {
+  send(input: {
+    tokens: string[];
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }): Promise<void>;
+}
+
 /** The database type — Drizzle + our schema. */
 export type Db = PostgresJsDatabase<typeof schema>;
 
@@ -193,6 +215,8 @@ export interface ContextDeps {
   media: MediaClient | null;
   /** Null when Mux credentials are unset — see MuxClient doc comment. */
   mux: MuxClient | null;
+  /** Never null — see PushClient doc comment. */
+  push: PushClient;
 }
 
 export async function createContext({ req }: CreateHTTPContextOptions, deps: ContextDeps) {
@@ -215,6 +239,7 @@ export async function createContext({ req }: CreateHTTPContextOptions, deps: Con
     stripe: deps.stripe,
     media: deps.media,
     mux: deps.mux,
+    push: deps.push,
     user,
   };
 }

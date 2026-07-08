@@ -27,6 +27,7 @@ import { handleMuxWebhookRequest } from "./webhook-mux";
 import { createRequestListener } from "./request-listener";
 import { createGcsMediaClient } from "./gcs";
 import { createMuxClient } from "./mux";
+import { createExpoPushClient } from "./push";
 
 const stripe = createStripeClient(env.STRIPE_SECRET_KEY, {
   refreshUrl: env.STRIPE_CONNECT_REFRESH_URL,
@@ -43,6 +44,10 @@ const mux =
     ? createMuxClient(env.MUX_TOKEN_ID, env.MUX_TOKEN_SECRET)
     : null;
 
+// F-037/F-038 — Expo push never needs credentials to send (EXPO_ACCESS_TOKEN
+// is optional, only raises rate limits), so this client is always constructed.
+const push = createExpoPushClient(env.EXPO_ACCESS_TOKEN);
+
 const trpcHandler = createHTTPHandler({
   router: appRouter,
   createContext: (opts) =>
@@ -54,6 +59,7 @@ const trpcHandler = createHTTPHandler({
       stripe,
       media,
       mux,
+      push,
     }),
 });
 

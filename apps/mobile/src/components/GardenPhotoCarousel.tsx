@@ -13,6 +13,7 @@ import React, { useState } from "react";
 import { Dimensions, FlatList, Image, StyleSheet, View, type NativeSyntheticEvent, type NativeScrollEvent } from "react-native";
 import type { GardenFeedPhotoSetItem } from "@homegrown/shared";
 import { GardenPostOverlay } from "./GardenPostOverlay";
+import { colors } from "../theme";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
@@ -90,9 +91,13 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.5)",
+    backgroundColor: colors.onPrimary,
+    opacity: 0.5,
   },
+  // Active dot stays white — a brand-green dot disappears against the leafy
+  // produce photos this carousel exists to show.
   dotActive: {
-    backgroundColor: "#fff",
+    backgroundColor: colors.onPrimary,
+    opacity: 1,
   },
 });

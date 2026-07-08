@@ -480,6 +480,7 @@ describe("orders.create", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
   }
@@ -787,6 +788,7 @@ describe("connect.createOnboardingLink", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
   }
@@ -861,6 +863,7 @@ describe("connect.createOnboardingLink", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -902,6 +905,7 @@ describe("connect.status", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -936,6 +940,7 @@ describe("connect.status", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
@@ -985,6 +990,7 @@ describe("connect.dashboardLink", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
   }
@@ -1140,6 +1146,7 @@ function makeRefundCtx(opts: {
     stripe: makeStripeStub(opts.stripeOverrides ?? {}),
     media: null,
     mux: null,
+    push: { send: async () => {} },
     user: { id: opts.userId },
   };
 }

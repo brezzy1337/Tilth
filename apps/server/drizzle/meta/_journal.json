@@ -85,6 +85,20 @@
       "when": 1783391074231,
       "tag": "0011_military_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783464254868,
+      "tag": "0012_square_sentry",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1783487004372,
+      "tag": "0013_wealthy_mole_man",
+      "breakpoints": true
     }
   ]
 }

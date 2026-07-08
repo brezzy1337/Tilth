@@ -1,0 +1,1 @@
+CREATE INDEX "messages_sender_user_id_created_at_idx" ON "messages" USING btree ("sender_user_id","created_at" DESC NULLS LAST);

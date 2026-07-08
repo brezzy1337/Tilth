@@ -2,11 +2,14 @@
  * ColorBadge — primitive rounded-pill badge used by StatusPill and refund states.
  *
  * Accepts explicit `bg` and `text` colours so every caller owns its own palette
- * without duplicating View/Text layout code.
+ * without duplicating View/Text layout code. Restyled to "Garden Fresh" tokens
+ * (F-044) — pill radius token, spacing tokens. Callers own the bg/text hues
+ * (see StatusPill's STATUS_CONFIG for the status→token colour mapping).
  */
 
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { radii, spacing } from "../theme";
 
 interface ColorBadgeProps {
   label: string;
@@ -24,9 +27,9 @@ export function ColorBadge({ label, bg, text }: ColorBadgeProps) {
 
 const styles = StyleSheet.create({
   pill: {
-    paddingVertical: 3,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    paddingVertical: spacing.xs - 1,
+    paddingHorizontal: spacing.md - 2,
+    borderRadius: radii.pill,
     alignSelf: "flex-start",
   },
   pillText: {

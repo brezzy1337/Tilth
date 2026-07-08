@@ -3,19 +3,19 @@
  * Navigates to LogIn or SignUp; never directly to Home
  * (the navigation gate in App.tsx handles that after sign-in).
  *
+ * Restyled to "Garden Fresh" tokens (F-044) — warm bg, Card-wrapped CTA
+ * block, Button primitives, a touch of produce-emoji personality.
+ *
  * React Native only — no DOM elements.
  */
 
 import React from "react";
-import {
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { SafeAreaView, StyleSheet, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { PreAuthStackParamList } from "../navigation/types";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { colors, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<PreAuthStackParamList, "Hero">;
 
@@ -23,26 +23,20 @@ export function HeroScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
+        <Text style={styles.emoji}>{"\u{1F331}"}</Text>
         <Text style={styles.title}>Tilth</Text>
         <Text style={styles.subtitle}>Local food, straight from the source.</Text>
 
-        <View style={styles.buttonRow}>
-          <Pressable
-            style={styles.button}
-            onPress={() => navigation.navigate("LogIn")}
-          >
-            <Text style={styles.buttonText}>Log In</Text>
-          </Pressable>
-
-          <Pressable
-            style={[styles.button, styles.buttonSecondary]}
-            onPress={() => navigation.navigate("SignUp")}
-          >
-            <Text style={[styles.buttonText, styles.buttonTextSecondary]}>
-              Sign Up
-            </Text>
-          </Pressable>
-        </View>
+        <Card style={styles.card}>
+          <View style={styles.buttonRow}>
+            <Button title="Log In" onPress={() => navigation.navigate("LogIn")} />
+            <Button
+              title="Sign Up"
+              variant="secondary"
+              onPress={() => navigation.navigate("SignUp")}
+            />
+          </View>
+        </Card>
       </View>
     </SafeAreaView>
   );
@@ -51,47 +45,35 @@ export function HeroScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: colors.bg,
   },
   container: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: spacing.xxl,
+  },
+  emoji: {
+    fontSize: 48,
+    marginBottom: spacing.sm,
   },
   title: {
-    fontSize: 36,
-    fontWeight: "bold",
-    color: "#2d6a4f",
-    marginBottom: 8,
+    fontSize: type.display.fontSize,
+    fontWeight: type.display.fontWeight,
+    color: colors.primary,
+    marginBottom: spacing.sm,
   },
   subtitle: {
-    fontSize: 16,
-    color: "#555",
-    marginBottom: 48,
+    fontSize: type.body.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.xxxl,
     textAlign: "center",
+  },
+  card: {
+    width: "100%",
   },
   buttonRow: {
     width: "100%",
-    gap: 12,
-  },
-  button: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  buttonSecondary: {
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#2d6a4f",
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  buttonTextSecondary: {
-    color: "#2d6a4f",
+    gap: spacing.md,
   },
 });

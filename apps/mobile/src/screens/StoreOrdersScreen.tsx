@@ -31,9 +31,12 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { Order } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { StatusPill } from "../components/StatusPill";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatCents } from "../utils/money";
 import { isPendingRefund } from "../utils/orders";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "StoreOrders">;
 
@@ -237,7 +240,7 @@ function OrderRow({ order }: { order: Order }) {
       : "Pickup";
 
   return (
-    <View style={styles.orderCard}>
+    <Card style={styles.orderCard}>
       <View style={styles.orderRow}>
         <Text style={styles.orderId}>#{order.id.slice(0, 8).toUpperCase()}</Text>
         <StatusPill status={order.status} preparationState={order.preparationState} />
@@ -260,7 +263,7 @@ function OrderRow({ order }: { order: Order }) {
           <FulfillAction order={order} />
         </>
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -291,7 +294,7 @@ export function StoreOrdersScreen(_props: Props) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color="#2d6a4f" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
     );
@@ -303,9 +306,7 @@ export function StoreOrdersScreen(_props: Props) {
         <View style={styles.centeredState}>
           <Text style={styles.stateText}>Could not load orders.</Text>
           <Text style={styles.stateSubText}>{error.message}</Text>
-          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
+          <Button title="Retry" variant="ghost" fullWidth={false} onPress={() => void refetch()} />
         </View>
       </SafeAreaView>
     );
@@ -342,7 +343,7 @@ export function StoreOrdersScreen(_props: Props) {
         ListFooterComponent={
           isFetchingNextPage ? (
             <View style={styles.footerSpinner}>
-              <ActivityIndicator size="small" color="#2d6a4f" />
+              <ActivityIndicator size="small" color={colors.primary} />
             </View>
           ) : null
         }
@@ -358,42 +359,34 @@ export function StoreOrdersScreen(_props: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.sm,
   },
   stateText: {
-    fontSize: 16,
-    color: "#444",
+    fontSize: type.body.fontSize + 1,
+    color: colors.text,
     textAlign: "center",
     fontWeight: "600",
   },
   stateSubText: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     textAlign: "center",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 32,
-    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxxl,
+    gap: spacing.sm + 2,
   },
   orderCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
-    gap: 8,
+    gap: spacing.sm,
   },
   orderRow: {
     flexDirection: "row",
@@ -401,89 +394,76 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   orderId: {
-    fontSize: 14,
+    fontSize: type.caption.fontSize + 1,
     fontWeight: "700",
-    color: "#1a1a1a",
+    color: colors.text,
     fontVariant: ["tabular-nums"],
   },
   orderDate: {
-    fontSize: 13,
-    color: "#888",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   orderTotal: {
-    fontSize: 15,
+    fontSize: type.body.fontSize,
     fontWeight: "700",
-    color: "#2d6a4f",
-  },
-  retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    marginTop: 8,
-  },
-  retryText: {
-    color: "#2d6a4f",
-    fontSize: 14,
-    fontWeight: "600",
+    color: colors.primary,
   },
   footerSpinner: {
-    paddingVertical: 16,
+    paddingVertical: spacing.lg,
     alignItems: "center",
   },
   fulfillmentLine: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
     fontWeight: "500",
   },
   // Refund block
   refundBlock: {
-    marginTop: 4,
+    marginTop: spacing.xs,
     borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-    paddingTop: 10,
-    gap: 8,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm + 2,
+    gap: spacing.sm,
   },
   refundMarker: {
     gap: 2,
   },
   refundMarkerText: {
-    fontSize: 13,
+    fontSize: type.caption.fontSize,
     fontWeight: "700",
-    color: "#e65100",
+    color: colors.pop,
   },
   refundReason: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
   },
   refundActions: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
   },
   approveButton: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#2d6a4f",
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: colors.primary,
     alignItems: "center",
   },
   approveButtonText: {
-    color: "#fff",
-    fontSize: 13,
+    color: colors.onPrimary,
+    fontSize: type.caption.fontSize,
     fontWeight: "600",
   },
   declineButton: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#e65100",
+    borderColor: colors.pop,
     alignItems: "center",
   },
   declineButtonText: {
-    color: "#e65100",
-    fontSize: 13,
+    color: colors.pop,
+    fontSize: type.caption.fontSize,
     fontWeight: "600",
   },
   actionButtonDisabled: {
@@ -491,39 +471,39 @@ const styles = StyleSheet.create({
   },
   // Preparation block
   prepBlock: {
-    marginTop: 4,
+    marginTop: spacing.xs,
     borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-    paddingTop: 10,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm + 2,
   },
   prepButton: {
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
     borderWidth: 1,
-    borderColor: "#b45309",
+    borderColor: colors.accent,
     alignItems: "center",
   },
   prepButtonText: {
-    color: "#b45309",
-    fontSize: 13,
+    color: colors.text,
+    fontSize: type.caption.fontSize,
     fontWeight: "600",
   },
   // Fulfill block
   fulfillBlock: {
-    marginTop: 4,
+    marginTop: spacing.xs,
     borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-    paddingTop: 10,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm + 2,
   },
   fulfillButton: {
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#2d6a4f",
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: colors.primary,
     alignItems: "center",
   },
   fulfillButtonText: {
-    color: "#fff",
-    fontSize: 13,
+    color: colors.onPrimary,
+    fontSize: type.caption.fontSize,
     fontWeight: "600",
   },
 });

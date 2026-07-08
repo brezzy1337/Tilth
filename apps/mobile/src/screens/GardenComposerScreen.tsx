@@ -29,7 +29,6 @@
 
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -46,6 +45,9 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { GardenPostPhoto } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import type { AuthedStackParamList } from "../navigation/types";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { colors, radii, spacing, type } from "../theme";
 
 type Props = NativeStackScreenProps<AuthedStackParamList, "GardenComposer">;
 
@@ -213,13 +215,14 @@ export function GardenComposerScreen({ navigation }: Props) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centeredState}>
-          <Text style={styles.stateText}>Your video is processing</Text>
-          <Text style={styles.stateSubText}>
-            It'll appear in the garden feed shortly, once it finishes encoding.
-          </Text>
-          <Pressable style={styles.button} onPress={handleDone}>
-            <Text style={styles.buttonText}>Done</Text>
-          </Pressable>
+          <Card variant="tint" style={styles.processingCard}>
+            <Text style={styles.processingEmoji}>{"\u{1F331}"}</Text>
+            <Text style={styles.stateText}>Your video is growing…</Text>
+            <Text style={styles.stateSubText}>
+              It'll appear in the garden feed shortly, once it finishes encoding.
+            </Text>
+          </Card>
+          <Button title="Done" onPress={handleDone} style={styles.doneButton} />
         </View>
       </SafeAreaView>
     );
@@ -232,52 +235,46 @@ export function GardenComposerScreen({ navigation }: Props) {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.pageTitle}>Share what's growing</Text>
+          <Text style={styles.pageTitle}>{"\u{1F33F}"} Share what's growing</Text>
           <Text style={styles.pageSubtitle}>
             Post a photo set or a short video (up to 60s) for buyers nearby.
           </Text>
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Caption</Text>
-            <TextInput
-              style={styles.captionInput}
-              value={caption}
-              onChangeText={(text) => setCaption(text.slice(0, CAPTION_MAX))}
-              placeholder="Fresh heirloom tomatoes just picked…"
-              placeholderTextColor="#aaa"
-              multiline
-              numberOfLines={3}
+          <Card style={styles.formCard}>
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Caption</Text>
+              <TextInput
+                style={styles.captionInput}
+                value={caption}
+                onChangeText={(text) => setCaption(text.slice(0, CAPTION_MAX))}
+                placeholder="Fresh heirloom tomatoes just picked…"
+                placeholderTextColor={colors.textMuted}
+                multiline
+                numberOfLines={3}
+              />
+              <Text style={styles.captionCount}>
+                {caption.length}/{CAPTION_MAX}
+              </Text>
+            </View>
+
+            {errorMessage ? <Text style={styles.serverError}>{errorMessage}</Text> : null}
+
+            <Button
+              title="Choose Photos"
+              onPress={() => void handlePickPhotos()}
+              loading={busy}
+              disabled={busy}
             />
-            <Text style={styles.captionCount}>
-              {caption.length}/{CAPTION_MAX}
-            </Text>
-          </View>
 
-          {errorMessage ? <Text style={styles.serverError}>{errorMessage}</Text> : null}
-
-          <Pressable
-            style={[styles.button, busy ? styles.buttonDisabled : null]}
-            onPress={() => void handlePickPhotos()}
-            disabled={busy}
-          >
-            {busy ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Choose Photos</Text>
-            )}
-          </Pressable>
-
-          <Pressable
-            style={[styles.secondaryButton, busy ? styles.buttonDisabled : null]}
-            onPress={() => void handlePickVideo()}
-            disabled={busy}
-          >
-            {busy ? (
-              <ActivityIndicator size="small" color="#2d6a4f" />
-            ) : (
-              <Text style={styles.secondaryButtonText}>Choose Video</Text>
-            )}
-          </Pressable>
+            <Button
+              title="Choose Video"
+              variant="secondary"
+              onPress={() => void handlePickVideo()}
+              loading={busy}
+              disabled={busy}
+              style={styles.secondaryButtonSpacing}
+            />
+          </Card>
 
           <Pressable
             style={styles.cancelButton}
@@ -300,111 +297,99 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f9f7",
+    backgroundColor: colors.bg,
   },
   container: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 48,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxxl * 1.5,
   },
   pageTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#2d6a4f",
-    marginBottom: 4,
+    fontSize: type.title.fontSize,
+    fontWeight: type.title.fontWeight,
+    color: colors.text,
+    marginBottom: spacing.xs,
   },
   pageSubtitle: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 20,
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    marginBottom: spacing.xl,
+  },
+  formCard: {
+    marginBottom: spacing.lg,
   },
   fieldGroup: {
-    marginBottom: 20,
+    marginBottom: spacing.lg,
   },
   label: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#444",
-    marginBottom: 6,
+    fontSize: type.label.fontSize,
+    fontWeight: type.label.fontWeight,
+    color: colors.text,
+    marginBottom: spacing.sm,
   },
   captionInput: {
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    fontSize: 15,
-    color: "#222",
-    backgroundColor: "#fff",
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    fontSize: type.body.fontSize,
+    color: colors.text,
+    backgroundColor: colors.surface,
     minHeight: 80,
     textAlignVertical: "top",
   },
   captionCount: {
-    marginTop: 4,
+    marginTop: spacing.xs,
     fontSize: 12,
-    color: "#999",
+    color: colors.textMuted,
     textAlign: "right",
   },
   serverError: {
-    marginBottom: 12,
-    fontSize: 13,
-    color: "#c0392b",
+    marginBottom: spacing.md,
+    fontSize: type.caption.fontSize,
+    color: colors.danger,
     textAlign: "center",
   },
-  button: {
-    backgroundColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: 12,
-  },
-  secondaryButtonText: {
-    color: "#2d6a4f",
-    fontSize: 16,
-    fontWeight: "600",
+  secondaryButtonSpacing: {
+    marginTop: spacing.md,
   },
   cancelButton: {
-    paddingVertical: 14,
+    paddingVertical: spacing.md,
     alignItems: "center",
-    marginTop: 12,
+    marginTop: spacing.md,
   },
   cancelButtonText: {
-    color: "#888",
-    fontSize: 14,
+    color: colors.textMuted,
+    fontSize: type.caption.fontSize + 1,
   },
   centeredState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingHorizontal: spacing.xxxl,
+    gap: spacing.lg,
+  },
+  processingCard: {
+    alignItems: "center",
+  },
+  processingEmoji: {
+    fontSize: 36,
+    marginBottom: spacing.sm,
+  },
+  doneButton: {
+    alignSelf: "stretch",
   },
   stateText: {
-    fontSize: 18,
-    color: "#2d6a4f",
+    fontSize: type.section.fontSize,
+    color: colors.text,
     textAlign: "center",
     fontWeight: "700",
   },
   stateSubText: {
-    fontSize: 14,
-    color: "#666",
+    fontSize: type.caption.fontSize + 1,
+    color: colors.textMuted,
     textAlign: "center",
-    marginBottom: 16,
+    marginTop: spacing.xs,
   },
 });
