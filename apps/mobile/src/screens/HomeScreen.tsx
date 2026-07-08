@@ -228,8 +228,10 @@ function MapSection({
           onPress={() => onNavigateToStore(store.storeId, store.storeName)}
         />
       ))}
+      {/* Keyed on id+type: PlaceMarker sets tracksViewChanges={false}, so a
+          type reclassification must force a remount to re-rasterize the badge. */}
       {(places ?? []).map((place) => (
-        <PlaceMarker key={place.id} place={place} onPress={() => onSelectPlace(place)} />
+        <PlaceMarker key={`${place.id}-${place.type}`} place={place} onPress={() => onSelectPlace(place)} />
       ))}
     </MapView>
   );
@@ -283,7 +285,10 @@ function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterB
 // scroll away with the list rather than eating fixed sheet height.
 // ---------------------------------------------------------------------------
 
-const SHEET_SNAP_POINTS = ["14%", "48%", "90%"];
+// Peek height is shared with mapOverlayStack.bottom so the place info card /
+// attribution always sit exactly above the docked sheet — change it here only.
+const SHEET_PEEK_SNAP = "14%" as const;
+const SHEET_SNAP_POINTS = [SHEET_PEEK_SNAP, "48%", "90%"];
 
 type ListingsSheetProps = {
   data: NearbyListing[] | undefined;
@@ -658,7 +663,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: "14%",
+    bottom: SHEET_PEEK_SNAP,
     paddingHorizontal: spacing.lg,
     gap: spacing.sm,
   },
