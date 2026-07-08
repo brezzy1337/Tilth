@@ -1,0 +1,136 @@
+/**
+ * PlaceInfoCard — compact info card shown when a community-place map pin
+ * (F-048) is tapped: type emoji + name, type label, address/hours if
+ * present, and two actions — Directions (opens the platform maps app via
+ * `Linking`) and a close ✕. Swaps in place when a different pin is tapped
+ * (the caller just re-renders with a new `place`); closing is the caller's
+ * job (✕ here, or tapping the map itself, wired in HomeScreen).
+ *
+ * Visual treatment follows GardenPostOverlay's precedent for map/media
+ * overlays, but as an opaque surface + shadow card (not a text-over-media
+ * scrim) since this floats over the map rather than a photo/video cell.
+ *
+ * React Native only — no DOM elements.
+ */
+
+import React from "react";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import type { CommunityPlace, CommunityPlaceType } from "@homegrown/shared";
+import { colors, radii, shadows, spacing, type } from "../theme";
+
+const TYPE_LABEL: Record<CommunityPlaceType, string> = {
+  farmers_market: "Farmers market",
+  coop: "Co-op",
+  health_food: "Health food",
+};
+
+const TYPE_EMOJI: Record<CommunityPlaceType, string> = {
+  farmers_market: "\u{1F9FA}", // 🧺 — matches PlaceMarker's choice
+  coop: "\u{1F6D2}", // 🛒
+  health_food: "\u{1F957}", // 🥗
+};
+
+type Props = {
+  place: CommunityPlace;
+  onClose: () => void;
+};
+
+export function PlaceInfoCard({ place, onClose }: Props) {
+  const handleDirections = () => {
+    // Works on both iOS and Android — opens the destination in whichever
+    // maps app (or browser) the device resolves the URL to; no platform
+    // branching needed.
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${place.lat},${place.lng}`;
+    void Linking.openURL(url);
+  };
+
+  return (
+    <View style={[styles.card, shadows.raised]}>
+      <View style={styles.headerRow}>
+        <Text style={styles.title} numberOfLines={1}>
+          {TYPE_EMOJI[place.type]} {place.name}
+        </Text>
+        <Pressable
+          onPress={onClose}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        >
+          <Ionicons name="close" size={18} color={colors.textMuted} />
+        </Pressable>
+      </View>
+
+      <Text style={styles.typeLabel}>{TYPE_LABEL[place.type]}</Text>
+
+      {place.address ? (
+        <Text style={styles.detailText} numberOfLines={1}>
+          {place.address}
+        </Text>
+      ) : null}
+
+      {place.hoursText ? (
+        <Text style={styles.detailText} numberOfLines={1}>
+          {place.hoursText}
+        </Text>
+      ) : null}
+
+      <Pressable
+        style={styles.directionsButton}
+        onPress={handleDirections}
+        accessibilityRole="button"
+        accessibilityLabel="Directions"
+      >
+        <Ionicons name="navigate-outline" size={14} color={colors.onPrimary} />
+        <Text style={styles.directionsText}>Directions</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  title: {
+    flex: 1,
+    fontSize: type.body.fontSize + 1,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  typeLabel: {
+    fontSize: type.caption.fontSize,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  detailText: {
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+  },
+  directionsButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.primary,
+    borderRadius: radii.sm,
+    paddingVertical: spacing.sm - 2,
+    marginTop: spacing.xs,
+  },
+  directionsText: {
+    color: colors.onPrimary,
+    fontSize: type.caption.fontSize,
+    fontWeight: "600",
+  },
+});
