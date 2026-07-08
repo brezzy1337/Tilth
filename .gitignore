@@ -11,6 +11,8 @@ build/
 .env
 .env.*
 !.env.example
+# Test-account CLI state — holds generated passwords for the 🧪 test accounts.
+apps/server/scripts/.test-accounts.json
 
 # Expo / React Native
 .expo/
