@@ -67,6 +67,7 @@ import {
   decodeKeysetCursor,
   encodeKeysetCursorParts,
   decodeKeysetCursorParts,
+  loadSourcingRequestsByIds,
 } from "./helpers";
 import type { Db } from "../context";
 
@@ -472,6 +473,7 @@ export const chatRouter = router({
           conversationId: messages.conversationId,
           senderUserId: messages.senderUserId,
           body: messages.body,
+          sourcingRequestId: messages.sourcingRequestId,
           createdAt: messages.createdAt,
         })
         .from(messages)
@@ -485,11 +487,26 @@ export const chatRouter = router({
         nextCursor = encodeMessagesCursor(lastRow.createdAt ?? new Date(), lastRow.id);
       }
 
-      const items: ChatMessage[] = rows.slice(0, input.limit).map((row) => ({
+      const pageRows = rows.slice(0, input.limit);
+
+      // F-049 — attach the structured request/offer "card" to its originating
+      // message (null for everything else, including the plain-text
+      // accept/decline/withdraw follow-ups). Batch-loaded to avoid an N+1.
+      const sourcingRequestIds = [
+        ...new Set(
+          pageRows
+            .map((row) => row.sourcingRequestId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+      const sourcingMap = await loadSourcingRequestsByIds(ctx.db, sourcingRequestIds);
+
+      const items: ChatMessage[] = pageRows.map((row) => ({
         id: row.id,
         conversationId: row.conversationId,
         senderUserId: row.senderUserId,
         body: row.body,
+        sourcingRequest: row.sourcingRequestId ? (sourcingMap.get(row.sourcingRequestId) ?? null) : null,
         createdAt: (row.createdAt ?? new Date()).toISOString(),
       }));
 
@@ -588,6 +605,9 @@ export const chatRouter = router({
         conversationId: inserted.conversationId,
         senderUserId: inserted.senderUserId,
         body: inserted.body,
+        // chat.send never creates a sourcing-request card — those are only
+        // attached via sourcing.createRequest / sourcing.createOffer.
+        sourcingRequest: null,
         createdAt: (inserted.createdAt ?? new Date()).toISOString(),
       };
     }),

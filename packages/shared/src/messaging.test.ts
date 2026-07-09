@@ -56,12 +56,19 @@ describe("chatMessage schema", () => {
     conversationId: uuid2,
     senderUserId: uuid1,
     body: "hey there",
+    sourcingRequest: null,
     createdAt: "2026-07-07T12:00:00.000Z",
   };
 
   it("parses a valid message", () => {
     const result = chatMessage.safeParse(valid);
     expect(result.success).toBe(true);
+  });
+
+  it("rejects a message missing sourcingRequest", () => {
+    const { sourcingRequest: _omitted, ...withoutSourcingRequest } = valid;
+    const result = chatMessage.safeParse(withoutSourcingRequest);
+    expect(result.success).toBe(false);
   });
 
   it("rejects a non-uuid id", () => {

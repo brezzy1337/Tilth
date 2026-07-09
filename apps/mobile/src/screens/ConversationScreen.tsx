@@ -58,13 +58,15 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import type { ChatMessage } from "@homegrown/shared";
+import type { ChatMessage, SourcingRequest } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import type { AuthedStackParamList } from "../navigation/types";
-import { formatMessageTimestamp } from "../utils/time";
+import { formatIsoDateShort, formatMessageTimestamp } from "../utils/time";
 import { colors, radii, shadows, spacing, type } from "../theme";
+import { Button } from "../components/Button";
+import { SourcingStatusChip } from "../components/SourcingStatusChip";
 
 const PAGE_LIMIT = 30;
 const MAX_BODY_CHARS = 2000;
@@ -72,6 +74,8 @@ const MAX_BODY_CHARS = 2000;
 const TIMESTAMP_GAP_MS = 15 * 60 * 1000;
 const BLOCKED_SEND_MESSAGE = "You can't message this person.";
 const RATE_LIMITED_SEND_MESSAGE = "You're sending messages too quickly — give it a moment.";
+/** Shown when a respond/withdraw races another actor updating the same request. */
+const SOURCING_RACE_NOTICE = "That request just changed — refreshed below.";
 /** Poll cadence for new incoming messages while the thread is focused. */
 const THREAD_REFRESH_MS = 10_000;
 /**
@@ -102,6 +106,99 @@ function rowKey(row: ThreadRow): string {
 
 function rowCreatedAt(row: ThreadRow): string {
   return row.kind === "message" ? row.message.createdAt : row.pending.createdAt;
+}
+
+// ---------------------------------------------------------------------------
+// SourcingRequestCard — renders in place of a plain bubble for a message
+// carrying a structured produce request/offer (F-049). Counterparty/creator
+// are derived directly from `createdByUserId === myId` rather than
+// direction + buyer/seller side: a conversation has exactly two
+// participants, so whoever is viewing this and isn't the creator IS the
+// counterparty, regardless of which direction (place->grower or
+// grower->place) the request went. That sidesteps re-deriving "am I the
+// buyer or the seller of this conversation" for a check the request object
+// already answers on its own.
+// ---------------------------------------------------------------------------
+
+function SourcingRequestCard({
+  request,
+  myId,
+  onRespond,
+  onWithdraw,
+  isResponding,
+  isWithdrawing,
+}: {
+  request: SourcingRequest;
+  myId: string;
+  onRespond: (requestId: string, response: "accepted" | "declined") => void;
+  onWithdraw: (requestId: string) => void;
+  isResponding: boolean;
+  isWithdrawing: boolean;
+}) {
+  const isCreator = request.createdByUserId === myId;
+  const isCounterparty = !isCreator;
+  const isPending = request.status === "pending";
+
+  const isOffer = request.direction === "grower_to_place";
+  const title = isOffer ? "🧺 Offer to supply" : "🧺 Fulfillment request";
+  const dateLabel = isOffer ? "Available by" : "Needed by";
+
+  return (
+    <View style={styles.sourcingCard}>
+      <View style={styles.sourcingCardHeader}>
+        <Text style={styles.sourcingCardTitle}>{title}</Text>
+        <SourcingStatusChip status={request.status} />
+      </View>
+
+      <Text style={styles.sourcingCardProduce}>
+        {request.quantity} of {request.produce}
+      </Text>
+
+      {request.neededBy ? (
+        <Text style={styles.sourcingCardMeta}>
+          {dateLabel} {formatIsoDateShort(request.neededBy)}
+        </Text>
+      ) : null}
+
+      {request.note ? <Text style={styles.sourcingCardNote}>{request.note}</Text> : null}
+
+      {isPending && isCounterparty ? (
+        <View style={styles.sourcingCardActions}>
+          <Button
+            title="Accept"
+            fullWidth={false}
+            onPress={() => onRespond(request.id, "accepted")}
+            loading={isResponding}
+            disabled={isResponding || isWithdrawing}
+            style={styles.sourcingCardActionButton}
+          />
+          <Button
+            title="Decline"
+            variant="secondary"
+            fullWidth={false}
+            onPress={() => onRespond(request.id, "declined")}
+            loading={isResponding}
+            disabled={isResponding || isWithdrawing}
+            style={styles.sourcingCardActionButton}
+          />
+        </View>
+      ) : null}
+
+      {isPending && isCreator ? (
+        <Pressable
+          style={styles.sourcingCardWithdraw}
+          onPress={() => onWithdraw(request.id)}
+          disabled={isWithdrawing}
+          accessibilityRole="button"
+          accessibilityLabel="Withdraw request"
+        >
+          <Text style={styles.sourcingCardWithdrawText}>
+            {isWithdrawing ? "Withdrawing…" : "Withdraw"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
 }
 
 export function ConversationScreen({ route, navigation }: Props) {
@@ -243,6 +340,60 @@ export function ConversationScreen({ route, navigation }: Props) {
   }, [draft, conversationId, send, utils, messagesInput]);
 
   // -------------------------------------------------------------------------
+  // Sourcing request/offer cards (F-049) — respond (counterparty-only) /
+  // withdraw (creator-only). Invalidate-refetch (not optimistic): messages
+  // are re-pulled from the server so the request's status chip and the
+  // follow-up plain-text message both land together. A BAD_REQUEST means
+  // the other side already acted (race between respond/withdraw) — refetch
+  // and show a brief inline notice rather than a blocking alert.
+  // -------------------------------------------------------------------------
+
+  const [sourcingNotice, setSourcingNotice] = useState<string | null>(null);
+
+  const handleSourcingMutationError = useCallback(
+    (err: { data?: { code?: string } | null; message?: string }) => {
+      void refetch();
+      if (err.data?.code === "BAD_REQUEST") {
+        setSourcingNotice(SOURCING_RACE_NOTICE);
+        setTimeout(() => setSourcingNotice(null), 2500);
+      } else {
+        Alert.alert("Could not update request", err.message ?? "Please try again.");
+      }
+    },
+    [refetch],
+  );
+
+  const respondSourcing = trpc.sourcing.respond.useMutation({
+    onSuccess: () => {
+      void refetch();
+      void utils.sourcing.listMine.invalidate();
+    },
+    onError: handleSourcingMutationError,
+  });
+
+  const withdrawSourcing = trpc.sourcing.withdraw.useMutation({
+    onSuccess: () => {
+      void refetch();
+      void utils.sourcing.listMine.invalidate();
+    },
+    onError: handleSourcingMutationError,
+  });
+
+  const handleRespondSourcing = useCallback(
+    (requestId: string, response: "accepted" | "declined") => {
+      respondSourcing.mutate({ requestId, response });
+    },
+    [respondSourcing],
+  );
+
+  const handleWithdrawSourcing = useCallback(
+    (requestId: string) => {
+      withdrawSourcing.mutate({ requestId });
+    },
+    [withdrawSourcing],
+  );
+
+  // -------------------------------------------------------------------------
   // Block user (header overflow)
   // -------------------------------------------------------------------------
 
@@ -374,6 +525,32 @@ export function ConversationScreen({ route, navigation }: Props) {
       new Date(rowCreatedAt(item)).getTime() - new Date(rowCreatedAt(older)).getTime() >
         TIMESTAMP_GAP_MS;
 
+    // Sourcing request/offer cards (F-049) render in place of the plain
+    // bubble, still positioned by sender side — but aren't long-press
+    // reportable (structured content, not free text).
+    if (item.kind === "message" && item.message.sourcingRequest) {
+      const request = item.message.sourcingRequest;
+      return (
+        <View>
+          {showTimestamp ? (
+            <View style={styles.timestampPill}>
+              <Text style={styles.timestampText}>{formatMessageTimestamp(rowCreatedAt(item))}</Text>
+            </View>
+          ) : null}
+          <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
+            <SourcingRequestCard
+              request={request}
+              myId={myId}
+              onRespond={handleRespondSourcing}
+              onWithdraw={handleWithdrawSourcing}
+              isResponding={respondSourcing.isPending}
+              isWithdrawing={withdrawSourcing.isPending}
+            />
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View>
         {showTimestamp ? (
@@ -478,6 +655,13 @@ export function ConversationScreen({ route, navigation }: Props) {
       {showReportConfirmation ? (
         <View style={[styles.reportToast, shadows.raised, { bottom: composerHeight + spacing.md }]}>
           <Text style={styles.reportToastText}>{"\u{1F331}"} Report received — thank you.</Text>
+        </View>
+      ) : null}
+
+      {/* Sourcing respond/withdraw race notice — same toast treatment. */}
+      {sourcingNotice ? (
+        <View style={[styles.reportToast, shadows.raised, { bottom: composerHeight + spacing.md }]}>
+          <Text style={styles.reportToastText}>{sourcingNotice}</Text>
         </View>
       ) : null}
 
@@ -771,5 +955,61 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: type.body.fontSize,
     fontWeight: "700",
+  },
+  // Sourcing request/offer card (F-049) — replaces the plain bubble for
+  // messages carrying a structured request. Sized like a bubble (maxWidth
+  // 85%) but styled as a Card-like surface since it holds more structure
+  // than a text bubble.
+  sourcingCard: {
+    maxWidth: "85%",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  sourcingCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  sourcingCardTitle: {
+    fontSize: type.label.fontSize,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  sourcingCardProduce: {
+    fontSize: type.body.fontSize,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  sourcingCardMeta: {
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+  },
+  sourcingCardNote: {
+    fontSize: type.caption.fontSize,
+    color: colors.text,
+    fontStyle: "italic",
+  },
+  sourcingCardActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  sourcingCardActionButton: {
+    paddingHorizontal: spacing.lg,
+  },
+  sourcingCardWithdraw: {
+    marginTop: spacing.xs,
+    alignSelf: "flex-start",
+  },
+  sourcingCardWithdrawText: {
+    fontSize: type.caption.fontSize,
+    color: colors.textMuted,
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
 });

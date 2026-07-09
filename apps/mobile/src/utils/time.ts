@@ -45,3 +45,27 @@ export function formatMessageTimestamp(iso: string, now: Date = new Date()): str
   }
   return `${then.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
 }
+
+/**
+ * Local-calendar YYYY-MM-DD for a Date (F-049 sourcing `neededBy`/`quick
+ * chip` math). Deliberately NOT `toISOString().slice(0, 10)` — that reads
+ * the UTC calendar date, which can land on the wrong day depending on the
+ * device's timezone offset near midnight.
+ */
+export function toIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Short display date for a "YYYY-MM-DD" string (F-049 request/offer cards), e.g. "Aug 1". */
+export function formatIsoDateShort(isoDate: string): string {
+  // Parsed as local calendar components (not `new Date(isoDate)`, which
+  // treats a bare date string as UTC midnight and can display a day early
+  // in timezones behind UTC).
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return isoDate;
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}

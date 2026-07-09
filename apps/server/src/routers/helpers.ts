@@ -8,10 +8,11 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, sql, type SQL } from "drizzle-orm";
+import { eq, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "../context";
-import { stores } from "../db/schema";
+import { stores, sourcingRequests, communityPlaces } from "../db/schema";
+import type { SourcingRequest, SourcingRequestDirection, SourcingRequestStatus } from "@homegrown/shared";
 
 // ---------------------------------------------------------------------------
 // PostGIS radius idiom — the ONE ST_MakePoint/ST_DWithin/ST_Distance shape
@@ -158,4 +159,92 @@ export async function resolveCallerStoreWithConnect(
   }
 
   return store;
+}
+
+// ---------------------------------------------------------------------------
+// Sourcing (F-049) — the ONE `sourcing_requests` row -> `SourcingRequest` DTO
+// mapping, and the ONE batch-load-by-id query, shared by chat.ts (which
+// attaches a nullable `sourcingRequest` to each chat message) and
+// sourcing.ts. Lives here — not in either router — because chat.ts and
+// sourcing.ts each import the other's exported rate-limit/block/truncate
+// helpers would create a cycle; both already depend on this file.
+// ---------------------------------------------------------------------------
+
+/** The shape needed to build a `SourcingRequest` DTO — a superset is fine (structural typing). */
+export interface SourcingRequestFullRow {
+  id: string;
+  direction: string;
+  status: string;
+  placeId: string;
+  placeName: string;
+  storeId: string;
+  storeName: string;
+  conversationId: string;
+  produce: string;
+  quantity: string;
+  neededBy: string | null;
+  note: string | null;
+  createdByUserId: string;
+  respondedAt: Date | null;
+  createdAt: Date | null;
+}
+
+/** Map a joined `sourcing_requests` row (+ place/store names) to the shared `SourcingRequest` DTO. */
+export function toSourcingRequestDto(row: SourcingRequestFullRow): SourcingRequest {
+  return {
+    id: row.id,
+    direction: row.direction as SourcingRequestDirection,
+    status: row.status as SourcingRequestStatus,
+    placeId: row.placeId,
+    placeName: row.placeName,
+    storeId: row.storeId,
+    storeName: row.storeName,
+    conversationId: row.conversationId,
+    produce: row.produce,
+    quantity: row.quantity,
+    neededBy: row.neededBy,
+    note: row.note,
+    createdByUserId: row.createdByUserId,
+    respondedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+    createdAt: (row.createdAt ?? new Date()).toISOString(),
+  };
+}
+
+/**
+ * Batch-load sourcing requests by id (joined to place/store names) as a
+ * `Map<id, SourcingRequest>` — used by `chat.messages` to attach the request
+ * card to its originating message without an N+1 query per page.
+ */
+export async function loadSourcingRequestsByIds(
+  db: Db,
+  ids: string[],
+): Promise<Map<string, SourcingRequest>> {
+  const map = new Map<string, SourcingRequest>();
+  if (ids.length === 0) return map;
+
+  const rows = await db
+    .select({
+      id: sourcingRequests.id,
+      direction: sourcingRequests.direction,
+      status: sourcingRequests.status,
+      placeId: sourcingRequests.placeId,
+      placeName: communityPlaces.name,
+      storeId: sourcingRequests.storeId,
+      storeName: stores.name,
+      conversationId: sourcingRequests.conversationId,
+      produce: sourcingRequests.produce,
+      quantity: sourcingRequests.quantity,
+      neededBy: sourcingRequests.neededBy,
+      note: sourcingRequests.note,
+      createdByUserId: sourcingRequests.createdByUserId,
+      respondedAt: sourcingRequests.respondedAt,
+      createdAt: sourcingRequests.createdAt,
+    })
+    .from(sourcingRequests)
+    .innerJoin(communityPlaces, eq(communityPlaces.id, sourcingRequests.placeId))
+    .innerJoin(stores, eq(stores.id, sourcingRequests.storeId))
+    .where(inArray(sourcingRequests.id, ids));
+
+  for (const row of rows) map.set(row.id, toSourcingRequestDto(row));
+  return map;
 }

@@ -27,6 +27,16 @@
  * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
  * icons. Search and Sell live in the bottom tab bar (F-041), not here.
  *
+ * Sourcing entry point (F-049) — when `trpc.places.mine` is non-null (the
+ * signed-in user is a linked community-place buyer), a "🧺 Sourcing for
+ * {placeName}" banner renders above the map and pushes the SourcingScreen.
+ * Separately, `trpc.stores.getMine` (the same "does this user own a store"
+ * query YourStandScreen/GardenFeedScreen already use) gates the
+ * PlaceInfoCard's "Offer to supply" CTA — a grower taps a place pin, sees
+ * the offer button, and it pushes SourcingComposeScreen in offer mode.
+ * These two are independent: a user is virtually never both a place buyer
+ * and a grower, but nothing here assumes that.
+ *
  * States covered: loading (location or query), granted, denied, error, empty.
  * The denied/error/loading location states render in place of the map+sheet,
  * unchanged from before.
@@ -379,9 +389,19 @@ type MapWithSheetProps = {
   onNavigateToStore: (storeId: string, storeName: string) => void;
   onSelectProduce: (produceName: string) => void;
   onPressSearch: () => void;
+  canOfferToSupply: boolean;
+  onOfferToSupply: (place: CommunityPlace) => void;
 };
 
-function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce, onPressSearch }: MapWithSheetProps) {
+function MapWithSheet({
+  lat,
+  lng,
+  onNavigateToStore,
+  onSelectProduce,
+  onPressSearch,
+  canOfferToSupply,
+  onOfferToSupply,
+}: MapWithSheetProps) {
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("all");
   const [selectedPlace, setSelectedPlace] = useState<CommunityPlace | undefined>(undefined);
 
@@ -434,7 +454,12 @@ function MapWithSheet({ lat, lng, onNavigateToStore, onSelectProduce, onPressSea
           required. */}
       <View style={styles.mapOverlayStack} pointerEvents="box-none">
         {selectedPlace ? (
-          <PlaceInfoCard place={selectedPlace} onClose={handleDismissPlace} />
+          <PlaceInfoCard
+            place={selectedPlace}
+            onClose={handleDismissPlace}
+            canOfferToSupply={canOfferToSupply}
+            onOfferToSupply={() => onOfferToSupply(selectedPlace)}
+          />
         ) : null}
         <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
       </View>
@@ -462,6 +487,13 @@ export function HomeScreen({ navigation }: Props) {
   const { user, signOut } = useAuth();
   const { itemCount } = useCart();
   const location = useDeviceLocation();
+
+  // F-049 sourcing gates — independent of each other (see file-level doc
+  // comment). `stores.getMine`/`places.mine` are the same "does this user
+  // own a store" / "is this user a linked place buyer" queries other
+  // screens already use (YourStandScreen, GardenFeedScreen).
+  const { data: myStore } = trpc.stores.getMine.useQuery();
+  const { data: myPlace } = trpc.places.mine.useQuery();
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -509,6 +541,19 @@ export function HomeScreen({ navigation }: Props) {
         </View>
       </View>
 
+      {/* Sourcing entry point (F-049) — only for linked community-place buyers */}
+      {myPlace ? (
+        <Pressable
+          style={styles.sourcingBanner}
+          onPress={() => navigation.navigate("Sourcing")}
+          accessibilityRole="button"
+          accessibilityLabel={`Sourcing for ${myPlace.name}`}
+        >
+          <Text style={styles.sourcingBannerText}>{"\u{1F9FA}"} Sourcing for {myPlace.name}</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+        </Pressable>
+      ) : null}
+
       {/* Body — state-driven */}
       {location.status === "loading" ? (
         <View style={styles.centeredState}>
@@ -544,6 +589,14 @@ export function HomeScreen({ navigation }: Props) {
             navigation.navigate("Search", { initialQuery: produceName })
           }
           onPressSearch={() => navigation.navigate("Search")}
+          canOfferToSupply={myStore !== null && myStore !== undefined}
+          onOfferToSupply={(place) =>
+            navigation.navigate("SourcingCompose", {
+              mode: "offer",
+              placeId: place.id,
+              placeName: place.name,
+            })
+          }
         />
       ) : null}
     </SafeAreaView>
@@ -605,6 +658,22 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: 10,
     fontWeight: "700",
+  },
+  sourcingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    borderRadius: radii.md,
+  },
+  sourcingBannerText: {
+    fontSize: type.body.fontSize,
+    fontWeight: "700",
+    color: colors.primary,
   },
   seasonalSection: {
     backgroundColor: colors.surface,

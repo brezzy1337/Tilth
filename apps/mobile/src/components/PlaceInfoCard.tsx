@@ -11,6 +11,14 @@
  * the map) rather than a text-over-media scrim. The hairline border is a
  * local addition on top of Card — it separates the card from busy map tiles.
  *
+ * "🧺 Offer to supply" CTA (F-049) — shown only when BOTH `place.acceptsOffers`
+ * is true (the place has a linked buyer account to notify) AND the caller
+ * passes `canOfferToSupply` (the signed-in user owns a store — HomeScreen
+ * gates this via `trpc.stores.getMine`, the same query YourStandScreen uses).
+ * When `acceptsOffers` is false, no CTA renders at all — never a disabled
+ * button, per the F-049 spec. Opening the offer compose form is the caller's
+ * job (`onOfferToSupply`), consistent with `onClose`/`handleDirections`.
+ *
  * React Native only — no DOM elements.
  */
 
@@ -20,6 +28,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { CommunityPlace, CommunityPlaceType } from "@homegrown/shared";
 import { colors, radii, spacing, type } from "../theme";
 import { Card } from "./Card";
+import { Button } from "./Button";
 
 const TYPE_LABEL: Record<CommunityPlaceType, string> = {
   farmers_market: "Farmers market",
@@ -36,9 +45,13 @@ const TYPE_EMOJI: Record<CommunityPlaceType, string> = {
 type Props = {
   place: CommunityPlace;
   onClose: () => void;
+  /** True when the signed-in user owns a store (can offer to supply). */
+  canOfferToSupply?: boolean;
+  /** Opens the offer-mode compose form for this place. Required when `canOfferToSupply` is true. */
+  onOfferToSupply?: () => void;
 };
 
-export function PlaceInfoCard({ place, onClose }: Props) {
+export function PlaceInfoCard({ place, onClose, canOfferToSupply = false, onOfferToSupply }: Props) {
   const handleDirections = () => {
     // Works on both iOS and Android — opens the destination in whichever
     // maps app (or browser) the device resolves the URL to; no platform
@@ -86,6 +99,15 @@ export function PlaceInfoCard({ place, onClose }: Props) {
         <Ionicons name="navigate-outline" size={16} color={colors.onPrimary} />
         <Text style={styles.directionsText}>Directions</Text>
       </Pressable>
+
+      {place.acceptsOffers && canOfferToSupply ? (
+        <Button
+          title="🧺 Offer to supply"
+          variant="secondary"
+          onPress={() => onOfferToSupply?.()}
+          style={styles.offerButton}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -133,5 +155,8 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: type.caption.fontSize,
     fontWeight: "600",
+  },
+  offerButton: {
+    marginTop: spacing.xs,
   },
 });
