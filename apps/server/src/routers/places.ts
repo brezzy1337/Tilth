@@ -27,10 +27,9 @@ import {
   myPlaceOutput,
   type CommunityPlaceType,
 } from "@homegrown/shared";
-import { eq, and, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
-import { communityPlaces } from "../db/schema";
-import { geoRadius } from "./helpers";
+import { geoRadius, findLinkedApprovedPlace } from "./helpers";
 
 export const placesRouter = router({
   /**
@@ -109,16 +108,7 @@ export const placesRouter = router({
    * the common case for ordinary buyer/seller accounts.
    */
   mine: protectedProcedure.output(myPlaceOutput).query(async ({ ctx }) => {
-    const [place] = await ctx.db
-      .select({
-        id: communityPlaces.id,
-        name: communityPlaces.name,
-        type: communityPlaces.type,
-        address: communityPlaces.address,
-      })
-      .from(communityPlaces)
-      .where(and(eq(communityPlaces.linkedUserId, ctx.user.id), eq(communityPlaces.status, "approved")))
-      .limit(1);
+    const place = await findLinkedApprovedPlace(ctx.db, ctx.user.id);
 
     if (!place) return null;
 

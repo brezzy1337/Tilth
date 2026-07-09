@@ -38,7 +38,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, inArray, asc } from "drizzle-orm";
+import { eq, and, inArray, asc, count } from "drizzle-orm";
 import { registerInput } from "@homegrown/shared";
 import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
@@ -286,6 +286,23 @@ async function cmdUnlink(placeId: string, confirmed: boolean): Promise<void> {
   }
 
   console.log(`Plan: unlink "${place.name}" (${place.id}) from user ${place.linkedUserId}`);
+
+  // F-049 — a pending sourcing_requests row that references this place will
+  // be orphaned once it's unlinked: for a grower_to_place offer, the (former)
+  // place buyer is the only one who could accept/decline it, so that
+  // resolution path becomes impossible (the creator can still withdraw).
+  // Warning only — this never blocks the unlink.
+  const [pendingCount] = await db
+    .select({ count: count() })
+    .from(schema.sourcingRequests)
+    .where(and(eq(schema.sourcingRequests.placeId, place.id), eq(schema.sourcingRequests.status, "pending")));
+  const pending = pendingCount?.count ?? 0;
+  if (pending > 0) {
+    console.log(
+      `\n⚠ ${pending} pending sourcing request(s) reference "${place.name}". Unlinking will orphan ` +
+        "them: accept/decline becomes impossible for grower_to_place offers (creators can still withdraw).",
+    );
+  }
 
   if (!confirmed) {
     await closeDb();

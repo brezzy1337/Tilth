@@ -66,6 +66,7 @@ import type { AuthedStackParamList } from "../navigation/types";
 import { formatIsoDateShort, formatMessageTimestamp } from "../utils/time";
 import { colors, radii, shadows, spacing, type } from "../theme";
 import { Button } from "../components/Button";
+import { Card } from "../components/Card";
 import { SourcingStatusChip } from "../components/SourcingStatusChip";
 
 const PAGE_LIMIT = 30;
@@ -144,7 +145,7 @@ function SourcingRequestCard({
   const dateLabel = isOffer ? "Available by" : "Needed by";
 
   return (
-    <View style={styles.sourcingCard}>
+    <Card flat style={styles.sourcingCard}>
       <View style={styles.sourcingCardHeader}>
         <Text style={styles.sourcingCardTitle}>{title}</Text>
         <SourcingStatusChip status={request.status} />
@@ -197,7 +198,7 @@ function SourcingRequestCard({
           </Text>
         </Pressable>
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -959,10 +960,13 @@ const styles = StyleSheet.create({
   // Sourcing request/offer card (F-049) — replaces the plain bubble for
   // messages carrying a structured request. Sized like a bubble (maxWidth
   // 85%) but styled as a Card-like surface since it holds more structure
-  // than a text bubble.
+  // than a text bubble. Composes the `Card` primitive (`flat` — no shadow,
+  // matching a bubble in a scrolling list) with the hairline border as a
+  // local addition, per PlaceInfoCard's precedent; radius/padding are
+  // overridden here (radii.md/spacing.md vs. Card's default radii.lg/
+  // spacing.lg) to keep the bubble-scaled visual unchanged.
   sourcingCard: {
     maxWidth: "85%",
-    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radii.md,

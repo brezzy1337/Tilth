@@ -31,8 +31,11 @@
  *     BAD_REQUEST, matching orders.ts's guarded-UPDATE convention.
  *   - Geo (`growers`) goes through PostGIS ST_DWithin/ST_Distance — never
  *     app-side haversine math.
- *   - Reuses chat.ts's `isBlockedEitherDirection` / `assertSendRateLimit` /
- *     `truncate` rather than duplicating them.
+ *   - Reuses chat.ts's `isBlockedEitherDirection` / `assertSendRateLimit`,
+ *     and helpers.ts's `upsertConversation` / `pushToUser` (also used by
+ *     chat.ts) — rather than duplicating them. `respond`/`withdraw` also
+ *     call `assertSendRateLimit` (defense-in-depth: they insert a follow-up
+ *     message + fire a push, same shape as the create mutations).
  *   - Message-body summaries may say "fulfillment request" (user-facing
  *     copy) — no *code identifier* here uses that word.
  */
@@ -50,22 +53,22 @@ import {
   sourcingGrowersOutput,
   nearbyInput,
   type SourcingRequest,
+  type SourcingRequestDirection,
 } from "@homegrown/shared";
 import { protectedProcedure, router } from "../trpc";
+import { sourcingRequests, communityPlaces, stores, conversations, messages } from "../db/schema";
 import {
-  sourcingRequests,
-  communityPlaces,
-  stores,
-  conversations,
-  messages,
-  pushTokens,
-} from "../db/schema";
-import { geoRadius, toSourcingRequestDto, type SourcingRequestFullRow } from "./helpers";
-import { isBlockedEitherDirection, assertSendRateLimit, truncate } from "./chat";
-import type { Db, PushClient } from "../context";
-
-/** Push notification body is truncated to this length (mirrors chat.ts). */
-const PUSH_BODY_MAX_CHARS = 100;
+  geoRadius,
+  toSourcingRequestDto,
+  resolveCallerStore,
+  findLinkedApprovedPlace,
+  upsertConversation,
+  pushToUser,
+  type SourcingRequestFullRow,
+} from "./helpers";
+import type { DbOrTx } from "../db/order-transitions";
+import { isBlockedEitherDirection, assertSendRateLimit } from "./chat";
+import type { Db } from "../context";
 
 /** Columns returned by every sourcing_requests insert/update `.returning()`. */
 const sourcingRequestCols = {
@@ -128,20 +131,18 @@ export function buildWithdrawBody(quantity: string, produce: string): string {
  * Resolve the approved community place linked to `userId`. Throws NOT_FOUND
  * ("no linked place") when the caller has no linked place — the same message
  * regardless of "never linked" vs "linked to a pending/rejected place", so a
- * prober can't distinguish the two.
+ * prober can't distinguish the two. Wraps helpers.ts's `findLinkedApprovedPlace`
+ * (the shared "linked approved place" query, also used directly by
+ * `places.mine`) with the NOT_FOUND semantics this router needs.
  */
 export async function resolveCallerPlace(db: Db, userId: string): Promise<{ id: string; name: string }> {
-  const [place] = await db
-    .select({ id: communityPlaces.id, name: communityPlaces.name })
-    .from(communityPlaces)
-    .where(and(eq(communityPlaces.linkedUserId, userId), eq(communityPlaces.status, "approved")))
-    .limit(1);
+  const place = await findLinkedApprovedPlace(db, userId);
 
   if (!place) {
     throw new TRPCError({ code: "NOT_FOUND", message: "No linked community place for this account" });
   }
 
-  return place;
+  return { id: place.id, name: place.name };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,36 +206,124 @@ function counterpartyDisplayName(row: SourcingRequestAuthRow): string {
   return row.direction === "place_to_grower" ? row.storeName : row.placeName;
 }
 
-/**
- * Best-effort push to `userId`'s registered devices, AFTER the caller's
- * transaction has committed. Never throws — mirrors chat.send's push step
- * (awaited on purpose: Cloud Run minScale-0 can starve a fire-and-forget
- * promise after the response flushes).
- */
-async function pushAfterCommit(
-  db: Db,
-  push: PushClient,
-  userId: string,
-  title: string,
-  body: string,
-  conversationId: string,
-): Promise<void> {
-  try {
-    const tokens = await db.select({ token: pushTokens.token }).from(pushTokens).where(eq(pushTokens.userId, userId));
-    if (tokens.length > 0) {
-      await push.send({
-        tokens: tokens.map((t) => t.token),
-        title,
-        body: truncate(body, PUSH_BODY_MAX_CHARS),
-        data: { conversationId },
-      });
-    }
-  } catch (err) {
-    console.error(
-      "[sourcing] push notification failed",
-      err instanceof Error ? err.message : String(err),
-    );
+// ---------------------------------------------------------------------------
+// createRequest/createOffer shared core — upserts the (buyer, store)
+// conversation, inserts the sourcing_requests row, inserts the originating
+// "card" message (carrying `sourcingRequestId`), and bumps `last_message_at`.
+// Both create mutations run this inside their own `ctx.db.transaction`, then
+// push to the other party after it commits.
+// ---------------------------------------------------------------------------
+
+interface CreateSourcingExchangeArgs {
+  direction: SourcingRequestDirection;
+  placeId: string;
+  storeId: string;
+  /** The conversation's buyer_id — the place-linked user in both directions. */
+  buyerId: string;
+  createdByUserId: string;
+  produce: string;
+  quantity: string;
+  neededBy: string | null;
+  note: string | null;
+  body: string;
+}
+
+async function createSourcingExchange(tx: DbOrTx, args: CreateSourcingExchangeArgs) {
+  const conversationId = await upsertConversation(tx, args.buyerId, args.storeId);
+
+  const [reqRow] = await tx
+    .insert(sourcingRequests)
+    .values({
+      direction: args.direction,
+      placeId: args.placeId,
+      storeId: args.storeId,
+      conversationId,
+      produce: args.produce,
+      quantity: args.quantity,
+      neededBy: args.neededBy,
+      note: args.note,
+      createdByUserId: args.createdByUserId,
+    })
+    .returning(sourcingRequestCols);
+
+  if (!reqRow) {
+    // Same distinct wording each direction used before this was collapsed.
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        args.direction === "place_to_grower"
+          ? "Failed to create sourcing request"
+          : "Failed to create sourcing offer",
+    });
   }
+
+  const [msgRow] = await tx
+    .insert(messages)
+    .values({
+      conversationId,
+      senderUserId: args.createdByUserId,
+      body: args.body,
+      sourcingRequestId: reqRow.id,
+    })
+    .returning({ createdAt: messages.createdAt });
+
+  await tx
+    .update(conversations)
+    .set({ lastMessageAt: msgRow?.createdAt ?? new Date() })
+    .where(eq(conversations.id, conversationId));
+
+  return { requestRow: reqRow, conversationId };
+}
+
+// ---------------------------------------------------------------------------
+// respond/withdraw shared core — a guarded `status = 'pending'` UPDATE
+// (race-safe re: a concurrent respond/withdraw), a plain-text follow-up
+// message, and a `last_message_at` bump.
+// ---------------------------------------------------------------------------
+
+interface GuardedTransitionArgs {
+  requestId: string;
+  newStatus: "accepted" | "declined" | "withdrawn";
+  /** `respond` also stamps `respondedAt`; `withdraw` leaves it untouched. */
+  setRespondedAt: boolean;
+  senderUserId: string;
+  conversationId: string;
+  followUpBody: string;
+}
+
+async function applyGuardedTransition(db: Db, args: GuardedTransitionArgs) {
+  const now = new Date();
+
+  return db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(sourcingRequests)
+      .set({
+        status: args.newStatus,
+        updatedAt: now,
+        ...(args.setRespondedAt ? { respondedAt: now } : {}),
+      })
+      .where(and(eq(sourcingRequests.id, args.requestId), eq(sourcingRequests.status, "pending")))
+      .returning(sourcingRequestCols);
+
+    const row = claimed[0];
+    if (!row) {
+      // Status raced away between the pre-check read and the guarded UPDATE.
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
+    }
+
+    await tx.insert(messages).values({
+      conversationId: args.conversationId,
+      senderUserId: args.senderUserId,
+      body: args.followUpBody,
+    });
+
+    await tx
+      .update(conversations)
+      .set({ lastMessageAt: now })
+      .where(eq(conversations.id, args.conversationId));
+
+    return row;
+  });
 }
 
 export const sourcingRouter = router({
@@ -279,67 +368,22 @@ export const sourcingRouter = router({
       const note = input.note ?? null;
       const body = buildCreateRequestBody(input.quantity, input.produce, neededBy);
 
-      const { requestRow, conversationId } = await ctx.db.transaction(async (tx) => {
-        const [convRow] = await tx
-          .insert(conversations)
-          .values({ buyerId: ctx.user.id, storeId: targetStore.id })
-          .onConflictDoUpdate({
-            target: [conversations.buyerId, conversations.storeId],
-            // No-op update (same shape as chat.start) — required by Postgres
-            // upsert syntax to RETURNING the existing row on conflict.
-            set: { buyerId: sql`excluded.buyer_id` },
-          })
-          .returning({ id: conversations.id });
+      const { requestRow, conversationId } = await ctx.db.transaction((tx) =>
+        createSourcingExchange(tx, {
+          direction: "place_to_grower",
+          placeId: place.id,
+          storeId: targetStore.id,
+          buyerId: ctx.user.id,
+          createdByUserId: ctx.user.id,
+          produce: input.produce,
+          quantity: input.quantity,
+          neededBy,
+          note,
+          body,
+        }),
+      );
 
-        if (!convRow) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to start conversation",
-          });
-        }
-        const conversationId = convRow.id;
-
-        const [reqRow] = await tx
-          .insert(sourcingRequests)
-          .values({
-            direction: "place_to_grower",
-            placeId: place.id,
-            storeId: targetStore.id,
-            conversationId,
-            produce: input.produce,
-            quantity: input.quantity,
-            neededBy,
-            note,
-            createdByUserId: ctx.user.id,
-          })
-          .returning(sourcingRequestCols);
-
-        if (!reqRow) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to create sourcing request",
-          });
-        }
-
-        const [msgRow] = await tx
-          .insert(messages)
-          .values({
-            conversationId,
-            senderUserId: ctx.user.id,
-            body,
-            sourcingRequestId: reqRow.id,
-          })
-          .returning({ createdAt: messages.createdAt });
-
-        await tx
-          .update(conversations)
-          .set({ lastMessageAt: msgRow?.createdAt ?? new Date() })
-          .where(eq(conversations.id, conversationId));
-
-        return { requestRow: reqRow, conversationId };
-      });
-
-      await pushAfterCommit(ctx.db, ctx.push, targetStore.userId, place.name, body, conversationId);
+      await pushToUser(ctx.db, ctx.push, targetStore.userId, place.name, body, { conversationId });
 
       return {
         request: toSourcingRequestDto({ ...requestRow, placeName: place.name, storeName: targetStore.name }),
@@ -357,18 +401,7 @@ export const sourcingRouter = router({
     .input(createSourcingOfferInput)
     .output(createSourcingRequestOutput)
     .mutation(async ({ input, ctx }) => {
-      const [callerStore] = await ctx.db
-        .select({ id: stores.id, name: stores.name })
-        .from(stores)
-        .where(eq(stores.userId, ctx.user.id))
-        .limit(1);
-
-      if (!callerStore) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "You do not have a store. Create one first.",
-        });
-      }
+      const callerStore = await resolveCallerStore(ctx.db, ctx.user.id);
 
       const [targetPlace] = await ctx.db
         .select({
@@ -399,67 +432,22 @@ export const sourcingRouter = router({
       const note = input.note ?? null;
       const body = buildCreateOfferBody(input.quantity, input.produce, neededBy);
 
-      const { requestRow, conversationId } = await ctx.db.transaction(async (tx) => {
-        const [convRow] = await tx
-          .insert(conversations)
-          .values({ buyerId: placeLinkedUserId, storeId: callerStore.id })
-          .onConflictDoUpdate({
-            target: [conversations.buyerId, conversations.storeId],
-            // No-op update (same shape as chat.start) — required by Postgres
-            // upsert syntax to RETURNING the existing row on conflict.
-            set: { buyerId: sql`excluded.buyer_id` },
-          })
-          .returning({ id: conversations.id });
+      const { requestRow, conversationId } = await ctx.db.transaction((tx) =>
+        createSourcingExchange(tx, {
+          direction: "grower_to_place",
+          placeId: targetPlace.id,
+          storeId: callerStore.id,
+          buyerId: placeLinkedUserId,
+          createdByUserId: ctx.user.id,
+          produce: input.produce,
+          quantity: input.quantity,
+          neededBy,
+          note,
+          body,
+        }),
+      );
 
-        if (!convRow) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to start conversation",
-          });
-        }
-        const conversationId = convRow.id;
-
-        const [reqRow] = await tx
-          .insert(sourcingRequests)
-          .values({
-            direction: "grower_to_place",
-            placeId: targetPlace.id,
-            storeId: callerStore.id,
-            conversationId,
-            produce: input.produce,
-            quantity: input.quantity,
-            neededBy,
-            note,
-            createdByUserId: ctx.user.id,
-          })
-          .returning(sourcingRequestCols);
-
-        if (!reqRow) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to create sourcing offer",
-          });
-        }
-
-        const [msgRow] = await tx
-          .insert(messages)
-          .values({
-            conversationId,
-            senderUserId: ctx.user.id,
-            body,
-            sourcingRequestId: reqRow.id,
-          })
-          .returning({ createdAt: messages.createdAt });
-
-        await tx
-          .update(conversations)
-          .set({ lastMessageAt: msgRow?.createdAt ?? new Date() })
-          .where(eq(conversations.id, conversationId));
-
-        return { requestRow: reqRow, conversationId };
-      });
-
-      await pushAfterCommit(ctx.db, ctx.push, placeLinkedUserId, callerStore.name, body, conversationId);
+      await pushToUser(ctx.db, ctx.push, placeLinkedUserId, callerStore.name, body, { conversationId });
 
       return {
         request: toSourcingRequestDto({
@@ -489,44 +477,25 @@ export const sourcingRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
       }
 
-      const now = new Date();
+      // Defense-in-depth: respond inserts a follow-up message + fires a push,
+      // same shape as the create mutations — subject to the same per-sender
+      // rate limit.
+      await assertSendRateLimit(ctx.db, ctx.user.id);
+
       const body = buildRespondBody(input.response, found.quantity, found.produce);
 
-      const updated = await ctx.db.transaction(async (tx) => {
-        const claimed = await tx
-          .update(sourcingRequests)
-          .set({ status: input.response, respondedAt: now, updatedAt: now })
-          .where(and(eq(sourcingRequests.id, input.requestId), eq(sourcingRequests.status, "pending")))
-          .returning(sourcingRequestCols);
-
-        const row = claimed[0];
-        if (!row) {
-          // Status raced away between the pre-check read and the guarded UPDATE.
-          throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
-        }
-
-        await tx.insert(messages).values({
-          conversationId: found.conversationId,
-          senderUserId: ctx.user.id,
-          body,
-        });
-
-        await tx
-          .update(conversations)
-          .set({ lastMessageAt: now })
-          .where(eq(conversations.id, found.conversationId));
-
-        return row;
+      const updated = await applyGuardedTransition(ctx.db, {
+        requestId: input.requestId,
+        newStatus: input.response,
+        setRespondedAt: true,
+        senderUserId: ctx.user.id,
+        conversationId: found.conversationId,
+        followUpBody: body,
       });
 
-      await pushAfterCommit(
-        ctx.db,
-        ctx.push,
-        found.createdByUserId,
-        counterpartyDisplayName(found),
-        body,
-        found.conversationId,
-      );
+      await pushToUser(ctx.db, ctx.push, found.createdByUserId, counterpartyDisplayName(found), body, {
+        conversationId: found.conversationId,
+      });
 
       return toSourcingRequestDto({ ...updated, placeName: found.placeName, storeName: found.storeName });
     }),
@@ -548,45 +517,27 @@ export const sourcingRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
       }
 
-      const now = new Date();
+      // Defense-in-depth: withdraw inserts a follow-up message + fires a
+      // push, same shape as the create mutations — subject to the same
+      // per-sender rate limit.
+      await assertSendRateLimit(ctx.db, ctx.user.id);
+
       const body = buildWithdrawBody(found.quantity, found.produce);
 
-      const updated = await ctx.db.transaction(async (tx) => {
-        const claimed = await tx
-          .update(sourcingRequests)
-          .set({ status: "withdrawn", updatedAt: now })
-          .where(and(eq(sourcingRequests.id, input.requestId), eq(sourcingRequests.status, "pending")))
-          .returning(sourcingRequestCols);
-
-        const row = claimed[0];
-        if (!row) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
-        }
-
-        await tx.insert(messages).values({
-          conversationId: found.conversationId,
-          senderUserId: ctx.user.id,
-          body,
-        });
-
-        await tx
-          .update(conversations)
-          .set({ lastMessageAt: now })
-          .where(eq(conversations.id, found.conversationId));
-
-        return row;
+      const updated = await applyGuardedTransition(ctx.db, {
+        requestId: input.requestId,
+        newStatus: "withdrawn",
+        setRespondedAt: false,
+        senderUserId: ctx.user.id,
+        conversationId: found.conversationId,
+        followUpBody: body,
       });
 
       const counterparty = counterpartyUserId(found);
       if (counterparty) {
-        await pushAfterCommit(
-          ctx.db,
-          ctx.push,
-          counterparty,
-          creatorDisplayName(found),
-          body,
-          found.conversationId,
-        );
+        await pushToUser(ctx.db, ctx.push, counterparty, creatorDisplayName(found), body, {
+          conversationId: found.conversationId,
+        });
       }
 
       return toSourcingRequestDto({ ...updated, placeName: found.placeName, storeName: found.storeName });

@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   emptyEmoji: {
-    fontSize: 32,
+    fontSize: 40,
     marginBottom: spacing.xs,
   },
   stateText: {
@@ -330,14 +330,14 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   growerLogo: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     borderRadius: radii.pill,
     backgroundColor: colors.surface,
   },
   growerLogoPlaceholder: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 40,
     borderRadius: radii.pill,
     backgroundColor: colors.primarySoft,
     alignItems: "center",

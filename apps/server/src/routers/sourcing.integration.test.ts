@@ -20,10 +20,12 @@
  * Covers:
  *   - createRequest: happy path (conversation created, message carries
  *     sourcingRequestId + summary body, DTO shape); NOT_FOUND for a
- *     non-linked caller; BAD_REQUEST targeting the caller's own store.
+ *     non-linked caller; BAD_REQUEST targeting the caller's own store;
+ *     FORBIDDEN for a blocked pair (generic message, mirrors chat.start).
  *   - createOffer: happy path (rides the SAME conversation as createRequest,
  *     since both resolve to (buyer=placeUser, store=growerStore)); NOT_FOUND
- *     for an unlinked place and for a pending place.
+ *     for an unlinked place and for a pending place; FORBIDDEN for a blocked
+ *     pair.
  *   - respond: counterparty flips status + appends a plain follow-up
  *     message; creator gets NOT_FOUND; responding to a non-pending request
  *     gets BAD_REQUEST.
@@ -42,7 +44,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { migrateForTest } from "../db/migrate-for-test";
 import * as schema from "../db/schema";
 import { appRouter } from "../router";
@@ -340,6 +342,26 @@ describeWithDb("sourcing router — Postgres integration", () => {
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
   });
 
+  it("createRequest: a blocked pair (place buyer <-> store owner) gets FORBIDDEN", async () => {
+    await db.insert(schema.userBlocks).values({
+      blockerUserId: growerUserId,
+      blockedUserId: placeUserId,
+    });
+
+    const caller = createCaller(ctxFor(placeUserId));
+    await expect(
+      caller.sourcing.createRequest({ storeId: growerStoreId, produce: "Kale", quantity: "5 lb" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
+
+    // Clean up so the shared placeUser/growerStore conversation used by the
+    // rest of this suite still works.
+    await db
+      .delete(schema.userBlocks)
+      .where(
+        and(eq(schema.userBlocks.blockerUserId, growerUserId), eq(schema.userBlocks.blockedUserId, placeUserId)),
+      );
+  });
+
   // -------------------------------------------------------------------------
   // createOffer
   // -------------------------------------------------------------------------
@@ -383,6 +405,26 @@ describeWithDb("sourcing router — Postgres integration", () => {
     await expect(
       caller.sourcing.createOffer({ placeId: pendingPlaceId, produce: "Eggs", quantity: "10 dozen" }),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  });
+
+  it("createOffer: a blocked pair (place buyer <-> store owner) gets FORBIDDEN", async () => {
+    await db.insert(schema.userBlocks).values({
+      blockerUserId: placeUserId,
+      blockedUserId: growerUserId,
+    });
+
+    const caller = createCaller(ctxFor(growerUserId));
+    await expect(
+      caller.sourcing.createOffer({ placeId: coopPlaceId, produce: "Kale", quantity: "5 lb" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
+
+    // Clean up so the shared placeUser/growerStore conversation used by the
+    // rest of this suite still works.
+    await db
+      .delete(schema.userBlocks)
+      .where(
+        and(eq(schema.userBlocks.blockerUserId, placeUserId), eq(schema.userBlocks.blockedUserId, growerUserId)),
+      );
   });
 
   // -------------------------------------------------------------------------
