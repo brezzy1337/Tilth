@@ -60,6 +60,23 @@ export type AuthedStackParamList = {
     buyerId?: string;
     buyerName?: string;
   };
+  /**
+   * Sourcing home (F-049) — nearby growers to request produce from, and the
+   * caller's own requests/offers. Only reachable when `places.mine` is
+   * non-null (the signed-in user is a linked place buyer) — gated at the
+   * HomeScreen entry point, not by this route itself.
+   */
+  Sourcing: undefined;
+  /**
+   * Shared compose form for both sourcing directions (F-049): a place buyer
+   * requesting produce from a grower, or a grower offering to supply a
+   * place. Exactly one of the two variants is passed depending on which
+   * flow pushed this screen (SourcingScreen's grower row vs PlaceInfoCard's
+   * "Offer to supply" button).
+   */
+  SourcingCompose:
+    | { mode: "request"; storeId: string; storeName: string }
+    | { mode: "offer"; placeId: string; placeName: string };
 };
 
 // Convenience aliases

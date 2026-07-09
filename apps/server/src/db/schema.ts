@@ -31,6 +31,7 @@ import {
   boolean,
   uniqueIndex,
   primaryKey,
+  date,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -377,6 +378,15 @@ export const messages = pgTable(
       .notNull()
       .references(() => users.id),
     body: text("body").notNull(),
+    /**
+     * F-049 — set only on the ORIGINATING message of a sourcing request/offer
+     * (the message that carries the request "card"); null for ordinary
+     * messages AND for the accept/decline/withdraw follow-up messages
+     * (those stay plain text — one card per request). References
+     * `sourcingRequests`, declared further down this file; the callback form
+     * defers resolution past declaration order.
+     */
+    sourcingRequestId: uuid("sourcing_request_id").references(() => sourcingRequests.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -471,6 +481,14 @@ export const communityPlaces = pgTable(
     sourceRef: text("source_ref").notNull(),
     /** 'pending' | 'approved' | 'rejected'. Only 'approved' rows are served. */
     status: text("status").notNull().default("pending"),
+    /**
+     * F-049 — the operator-invited user account (see
+     * `scripts/link-place-buyer.ts`) authorized to act as this place's buyer
+     * for sourcing requests/offers. Nullable — most places have no linked
+     * account. Unique — one place per user account. Set/cleared only by the
+     * operator CLI, never by a tRPC procedure.
+     */
+    linkedUserId: uuid("linked_user_id").references(() => users.id).unique(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -479,5 +497,54 @@ export const communityPlaces = pgTable(
     // Idempotent re-imports: same (source, source_ref) upserts instead of duplicating.
     uniqueIndex("community_places_source_source_ref_key").on(t.source, t.sourceRef),
     index("community_places_status_idx").on(t.status),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Sourcing requests — F-049 structured produce requests/offers between
+// community places (co-ops/markets) and growers (stores). Rides the existing
+// chat: the originating message carries `sourcingRequestId`; accept/decline/
+// withdraw append plain-text follow-up messages (no id) so there is exactly
+// one card per request. `direction`/`status` are plain text (not pgEnum) —
+// same rationale as `communityPlaces.type`/`.status` above: validated against
+// the shared `sourcingRequestDirection`/`sourcingRequestStatus` zod enums at
+// the tRPC boundary.
+// ---------------------------------------------------------------------------
+
+export const sourcingRequests = pgTable(
+  "sourcing_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** 'place_to_grower' | 'grower_to_place' — mirrors shared `sourcingRequestDirection`. */
+    direction: text("direction").notNull(),
+    placeId: uuid("place_id")
+      .notNull()
+      .references(() => communityPlaces.id),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id),
+    /** The conversation (see Messaging, above) this request rides on. */
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id),
+    produce: text("produce").notNull(),
+    quantity: text("quantity").notNull(),
+    /** Date-only (no time component); nullable — "needed by" is optional. */
+    neededBy: date("needed_by", { mode: "string" }),
+    note: text("note"),
+    /** 'pending' | 'accepted' | 'declined' | 'withdrawn' — mirrors shared `sourcingRequestStatus`. */
+    status: text("status").notNull().default("pending"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    /** Set when the counterparty accepts/declines; null while pending. */
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("sourcing_requests_store_id_created_at_idx").on(t.storeId, t.createdAt.desc()),
+    index("sourcing_requests_place_id_created_at_idx").on(t.placeId, t.createdAt.desc()),
+    index("sourcing_requests_conversation_id_idx").on(t.conversationId),
   ],
 );

@@ -23,7 +23,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",
-    "import-places": "tsx scripts/import-places.ts"
+    "import-places": "tsx scripts/import-places.ts",
+    "link-place-buyer": "tsx scripts/link-place-buyer.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "7.21.0",

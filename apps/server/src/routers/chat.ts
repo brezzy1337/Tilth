@@ -1,7 +1,8 @@
 /**
  * Chat router — F-037/F-038 1:1 buyer<->store messaging (DIY, polling clients).
  *
- * `start`             — buyer-authed; idempotent upsert on (buyer_id, store_id).
+ * `start`             — buyer-authed; idempotent upsert on (buyer_id, store_id)
+ *                        (helpers.ts's `upsertConversation`, shared with sourcing.ts).
  * `list`              — authed; the caller's inbox (as buyer OR as store owner),
  *                        most-recent-activity first, keyset cursor-paginated.
  * `messages`          — authed, participant-only; newest-first keyset pages.
@@ -22,9 +23,10 @@
  *   - Block checks that fail must surface a generic FORBIDDEN message — never
  *     reveal WHO blocked whom.
  *   - Push failures must never fail the mutation — `ctx.push.send` already
- *     swallows its own errors (see push.ts), and the call site in `send`
- *     wraps the whole push step in its own try/catch. The push IS awaited,
- *     though: on Cloud Run (minScale 0, CPU throttled outside requests) a
+ *     swallows its own errors (see push.ts), and `send` delegates to
+ *     helpers.ts's `pushToUser` (also used by sourcing.ts), which wraps the
+ *     whole push step in its own try/catch. The push IS awaited, though: on
+ *     Cloud Run (minScale 0, CPU throttled outside requests) a
  *     fire-and-forget promise can be starved or reclaimed after the response
  *     flushes, silently dropping notifications.
  *   - Write endpoints are rate-limited per user (pilot-appropriate, DB-count
@@ -67,13 +69,14 @@ import {
   decodeKeysetCursor,
   encodeKeysetCursorParts,
   decodeKeysetCursorParts,
+  loadSourcingRequestsByIds,
+  upsertConversation,
+  pushToUser,
 } from "./helpers";
 import type { Db } from "../context";
 
 /** Preview text on `conversations.list` rows is truncated server-side to this length. */
 const PREVIEW_MAX_CHARS = 120;
-/** Push notification body is truncated to this length. */
-const PUSH_BODY_MAX_CHARS = 100;
 
 /** Exported for unit testing — see chat.test.ts. */
 export function truncate(text: string, max: number): string {
@@ -328,25 +331,9 @@ export const chatRouter = router({
         });
       }
 
-      const [row] = await ctx.db
-        .insert(conversations)
-        .values({ buyerId: ctx.user.id, storeId: targetStore.id })
-        .onConflictDoUpdate({
-          target: [conversations.buyerId, conversations.storeId],
-          // No-op update (buyer_id = its own excluded value) — required by
-          // Postgres upsert syntax to RETURNING the existing row on conflict.
-          set: { buyerId: sql`excluded.buyer_id` },
-        })
-        .returning({ id: conversations.id });
+      const conversationId = await upsertConversation(ctx.db, ctx.user.id, targetStore.id);
 
-      if (!row) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to start conversation",
-        });
-      }
-
-      return { conversationId: row.id };
+      return { conversationId };
     }),
 
   /**
@@ -472,6 +459,7 @@ export const chatRouter = router({
           conversationId: messages.conversationId,
           senderUserId: messages.senderUserId,
           body: messages.body,
+          sourcingRequestId: messages.sourcingRequestId,
           createdAt: messages.createdAt,
         })
         .from(messages)
@@ -485,11 +473,26 @@ export const chatRouter = router({
         nextCursor = encodeMessagesCursor(lastRow.createdAt ?? new Date(), lastRow.id);
       }
 
-      const items: ChatMessage[] = rows.slice(0, input.limit).map((row) => ({
+      const pageRows = rows.slice(0, input.limit);
+
+      // F-049 — attach the structured request/offer "card" to its originating
+      // message (null for everything else, including the plain-text
+      // accept/decline/withdraw follow-ups). Batch-loaded to avoid an N+1.
+      const sourcingRequestIds = [
+        ...new Set(
+          pageRows
+            .map((row) => row.sourcingRequestId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+      const sourcingMap = await loadSourcingRequestsByIds(ctx.db, sourcingRequestIds);
+
+      const items: ChatMessage[] = pageRows.map((row) => ({
         id: row.id,
         conversationId: row.conversationId,
         senderUserId: row.senderUserId,
         body: row.body,
+        sourcingRequest: row.sourcingRequestId ? (sourcingMap.get(row.sourcingRequestId) ?? null) : null,
         createdAt: (row.createdAt ?? new Date()).toISOString(),
       }));
 
@@ -551,43 +554,23 @@ export const chatRouter = router({
         return row;
       });
 
-      // Push to the OTHER party, AFTER the transaction commits. AWAITED on
-      // purpose: on Cloud Run (minScale 0, CPU throttled outside requests) a
-      // fire-and-forget promise can be starved or reclaimed once the response
-      // flushes, silently dropping the notification. The try/catch preserves
-      // the never-throws guarantee — a push failure (ctx.push.send already
-      // swallows its own errors; this catches everything else, e.g. the token
-      // lookup) must never fail the committed message.
-      try {
-        const tokens = await ctx.db
-          .select({ token: pushTokens.token })
-          .from(pushTokens)
-          .where(eq(pushTokens.userId, otherUserId));
-
-        if (tokens.length > 0) {
-          const senderName = isCallerBuyer ? participant.buyerName : participant.storeName;
-
-          await ctx.push.send({
-            tokens: tokens.map((t) => t.token),
-            title: senderName,
-            body: truncate(input.body, PUSH_BODY_MAX_CHARS),
-            data: { conversationId: input.conversationId },
-          });
-        }
-      } catch (err) {
-        // Never let a push-path failure escape and affect the caller — the
-        // message is already committed.
-        console.error(
-          "[chat.send] push notification failed",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+      // Push to the OTHER party, AFTER the transaction commits — see
+      // pushToUser's doc comment for the Cloud Run "awaited, not
+      // fire-and-forget" rationale. Never throws — the message is already
+      // committed.
+      const senderName = isCallerBuyer ? participant.buyerName : participant.storeName;
+      await pushToUser(ctx.db, ctx.push, otherUserId, senderName, input.body, {
+        conversationId: input.conversationId,
+      });
 
       return {
         id: inserted.id,
         conversationId: inserted.conversationId,
         senderUserId: inserted.senderUserId,
         body: inserted.body,
+        // chat.send never creates a sourcing-request card — those are only
+        // attached via sourcing.createRequest / sourcing.createOffer.
+        sourcingRequest: null,
         createdAt: (inserted.createdAt ?? new Date()).toISOString(),
       };
     }),

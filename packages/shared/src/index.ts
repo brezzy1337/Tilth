@@ -706,6 +706,173 @@ export const gardenFeedOutput = z.object({
 export type GardenFeedOutput = z.infer<typeof gardenFeedOutput>;
 
 // ---------------------------------------------------------------------------
+// Sourcing — structured produce requests between community places and growers
+// (F-049). A "sourcing request" rides the existing chat (see Messaging,
+// below) as a message with an attached request; the counterparty accepts,
+// declines, or the creator withdraws it. Two directions are both first-class:
+// a place buyer asking a grower to supply produce ("place_to_grower"), and a
+// grower offering to supply a place ("grower_to_place"). User-facing copy may
+// say "fulfillment request" — no code identifier here uses that word, since
+// `fulfillmentMethod` / `markFulfilled` above already mean consumer-order
+// pickup/delivery, a different concept.
+// Declared ahead of Messaging so `chatMessage` (below) can attach a nullable
+// `sourcingRequest` to a message.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle status of a sourcing request/offer.
+ * pending → accepted / declined (by the counterparty) or withdrawn (by the
+ * creator). Terminal once accepted, declined, or withdrawn — no further
+ * transitions.
+ */
+export const sourcingRequestStatus = z.enum(["pending", "accepted", "declined", "withdrawn"]);
+
+export type SourcingRequestStatus = z.infer<typeof sourcingRequestStatus>;
+
+/**
+ * Which party initiated the sourcing exchange.
+ * `place_to_grower` — a community place (co-op/market) asks a grower to
+ * supply produce (a "request"). `grower_to_place` — a grower offers to
+ * supply a place (an "offer"). Both directions share the same underlying
+ * shape; only the direction of the ask differs.
+ */
+export const sourcingRequestDirection = z.enum(["place_to_grower", "grower_to_place"]);
+
+export type SourcingRequestDirection = z.infer<typeof sourcingRequestDirection>;
+
+/**
+ * Free-text produce description, e.g. "heirloom tomatoes". Not a
+ * `listingCategory` — a B2B ask may span multiple listings or produce the
+ * grower hasn't listed yet.
+ */
+export const sourcingProduce = z.string().trim().min(1).max(120);
+
+export type SourcingProduce = z.infer<typeof sourcingProduce>;
+
+/**
+ * Free-text quantity, e.g. "20 lb" or "6 flats". Deliberately a string, not a
+ * `listingUnit` + number pair — B2B asks don't fit the consumer listing unit
+ * enum (e.g. "a few cases", "TBD, will confirm by weight").
+ */
+export const sourcingQuantity = z.string().trim().min(1).max(80);
+
+export type SourcingQuantity = z.infer<typeof sourcingQuantity>;
+
+/** Optional free-text note attached to a sourcing request/offer. */
+export const sourcingNote = z.string().trim().max(500);
+
+export type SourcingNote = z.infer<typeof sourcingNote>;
+
+/** Input to `sourcing.createRequest` (protected, place buyer -> grower). */
+export const createSourcingRequestInput = z.object({
+  storeId: z.string().uuid(),
+  produce: sourcingProduce,
+  quantity: sourcingQuantity,
+  /** ISO 8601 date (no time component), e.g. "2026-08-01". Optional. */
+  neededBy: z.string().date().optional(),
+  note: sourcingNote.optional(),
+});
+
+export type CreateSourcingRequestInput = z.infer<typeof createSourcingRequestInput>;
+
+/** Input to `sourcing.createOffer` (protected, grower -> place). */
+export const createSourcingOfferInput = z.object({
+  placeId: z.string().uuid(),
+  produce: sourcingProduce,
+  quantity: sourcingQuantity,
+  /** ISO 8601 date (no time component), e.g. "2026-08-01". Optional. */
+  neededBy: z.string().date().optional(),
+  note: sourcingNote.optional(),
+});
+
+export type CreateSourcingOfferInput = z.infer<typeof createSourcingOfferInput>;
+
+/**
+ * Input to `sourcing.respond` (protected, caller must be the counterparty,
+ * i.e. NOT the creator of the request/offer).
+ */
+export const respondSourcingRequestInput = z.object({
+  requestId: z.string().uuid(),
+  response: z.enum(["accepted", "declined"]),
+});
+
+export type RespondSourcingRequestInput = z.infer<typeof respondSourcingRequestInput>;
+
+/** Input to `sourcing.withdraw` (protected, caller must be the creator). */
+export const withdrawSourcingRequestInput = z.object({
+  requestId: z.string().uuid(),
+});
+
+export type WithdrawSourcingRequestInput = z.infer<typeof withdrawSourcingRequestInput>;
+
+/**
+ * A single sourcing request/offer, as returned by `sourcing.listMine` and
+ * attached to the chat message that carries it (see `chatMessage.sourcingRequest`
+ * below). `placeId`/`placeName` and `storeId`/`storeName` are always both
+ * present regardless of `direction`, so the client doesn't need to branch on
+ * direction to render either party's identity.
+ */
+export const sourcingRequest = z.object({
+  id: z.string().uuid(),
+  direction: sourcingRequestDirection,
+  status: sourcingRequestStatus,
+  placeId: z.string().uuid(),
+  placeName: z.string(),
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+  /** The conversation (see Messaging, below) this request rides on. */
+  conversationId: z.string().uuid(),
+  produce: sourcingProduce,
+  quantity: sourcingQuantity,
+  /** ISO 8601 date (no time component), or null if not specified. */
+  neededBy: z.string().date().nullable(),
+  note: z.string().nullable(),
+  createdByUserId: z.string().uuid(),
+  /** ISO 8601 datetime — set when the counterparty accepts/declines; null while pending. */
+  respondedAt: z.string().datetime().nullable(),
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+});
+
+export type SourcingRequest = z.infer<typeof sourcingRequest>;
+
+/** Response from `sourcing.createRequest` and `sourcing.createOffer`. */
+export const createSourcingRequestOutput = z.object({
+  request: sourcingRequest,
+  conversationId: z.string().uuid(),
+});
+
+export type CreateSourcingRequestOutput = z.infer<typeof createSourcingRequestOutput>;
+
+/** Response from `sourcing.listMine` — capped at 50 requests/offers. */
+export const sourcingListMineOutput = z.array(sourcingRequest).max(50);
+
+export type SourcingListMineOutput = z.infer<typeof sourcingListMineOutput>;
+
+/**
+ * A single grower row returned by `sourcing.growers` — the browse list a
+ * community place uses to pick who to request produce from. Takes
+ * `nearbyInput` (above) as its input; no separate input schema is needed.
+ */
+export const sourcingGrowerSummary = z.object({
+  storeId: z.string().uuid(),
+  name: z.string(),
+  logo: z.string().nullable(),
+  /** Computed by ST_Distance on the server; kilometres. */
+  distanceKm: z.number(),
+  listingCount: z.number().int().nonnegative(),
+  /** Up to 3 sample listing names, for a quick "grows: ..." preview. */
+  sampleListings: z.array(z.string()).max(3),
+});
+
+export type SourcingGrowerSummary = z.infer<typeof sourcingGrowerSummary>;
+
+/** Response from `sourcing.growers` — capped at 30 growers per request. */
+export const sourcingGrowersOutput = z.array(sourcingGrowerSummary).max(30);
+
+export type SourcingGrowersOutput = z.infer<typeof sourcingGrowersOutput>;
+
+// ---------------------------------------------------------------------------
 // Messaging — 1:1 buyer<->store conversations (F-037/F-038)
 // One conversation per (buyerId, storeId) pair. Buyers start a conversation;
 // sellers may only reply within one that already exists. Text-only for the
@@ -718,12 +885,18 @@ export const messageBody = z.string().trim().min(1).max(2000);
 
 export type MessageBody = z.infer<typeof messageBody>;
 
-/** A single chat message, as returned by `messages.list` / sent via `messages.send`. */
+/**
+ * A single chat message, as returned by `messages.list` / sent via `messages.send`.
+ * `sourcingRequest` is non-null when this message carries a structured
+ * produce request/offer (see the Sourcing section, above) — the counterparty
+ * accepts/declines it from within the thread.
+ */
 export const chatMessage = z.object({
   id: z.string().uuid(),
   conversationId: z.string().uuid(),
   senderUserId: z.string().uuid(),
   body: messageBody,
+  sourcingRequest: sourcingRequest.nullable(),
   /** ISO 8601 datetime string. */
   createdAt: z.string().datetime(),
 });
@@ -905,6 +1078,13 @@ export const communityPlace = z.object({
   hoursText: z.string().max(500).nullable(),
   /** Computed by ST_Distance on the server; kilometres. */
   distanceKm: z.number().nonnegative(),
+  /**
+   * True when this place has a linked buyer account (an operator-invited
+   * user tied via `community_places.linked_user_id`) that can receive
+   * sourcing offers. Drives the mobile "Offer to supply" CTA — offering
+   * produce to a place with no linked account would have no one to notify.
+   */
+  acceptsOffers: z.boolean(),
 });
 
 export type CommunityPlace = z.infer<typeof communityPlace>;
@@ -929,3 +1109,20 @@ export type PlacesNearbyInput = z.infer<typeof placesNearbyInput>;
 export const placesNearbyOutput = z.array(communityPlace).max(200);
 
 export type PlacesNearbyOutput = z.infer<typeof placesNearbyOutput>;
+
+/**
+ * Response from `places.mine` — the community place linked to the caller's
+ * account via `community_places.linked_user_id` (operator-invited accounts,
+ * see the Sourcing section above). Null when the caller represents no place
+ * (the common case for ordinary buyer/seller accounts).
+ */
+export const myPlaceOutput = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string(),
+    type: communityPlaceType,
+    address: z.string().nullable(),
+  })
+  .nullable();
+
+export type MyPlaceOutput = z.infer<typeof myPlaceOutput>;

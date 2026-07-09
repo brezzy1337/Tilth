@@ -8,10 +8,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import type { Db } from "../context";
-import { stores } from "../db/schema";
+import type { Db, PushClient } from "../context";
+import type { DbOrTx } from "../db/order-transitions";
+import { stores, sourcingRequests, communityPlaces, conversations, pushTokens } from "../db/schema";
+import type { SourcingRequest, SourcingRequestDirection, SourcingRequestStatus } from "@homegrown/shared";
 
 // ---------------------------------------------------------------------------
 // PostGIS radius idiom — the ONE ST_MakePoint/ST_DWithin/ST_Distance shape
@@ -111,15 +113,16 @@ export function decodeKeysetCursor(raw: string): { createdAt: Date; id: string }
 /**
  * Resolve the store that belongs to `userId`.
  *
- * Returns `{ id: string }` if found, or throws a NOT_FOUND TRPCError
- * with the canonical "You do not have a store. Create one first." message.
+ * Returns `{ id: string, name: string }` if found, or throws a NOT_FOUND
+ * TRPCError with the canonical "You do not have a store. Create one first."
+ * message — the ONE place that message string lives.
  *
  * Delegates to `resolveCallerStoreWithConnect` so the SELECT + NOT_FOUND
  * logic lives in exactly one place.
  */
-export async function resolveCallerStore(db: Db, userId: string): Promise<{ id: string }> {
+export async function resolveCallerStore(db: Db, userId: string): Promise<{ id: string; name: string }> {
   const store = await resolveCallerStoreWithConnect(db, userId);
-  return { id: store.id };
+  return { id: store.id, name: store.name };
 }
 
 /**
@@ -133,6 +136,7 @@ export async function resolveCallerStoreWithConnect(
   userId: string,
 ): Promise<{
   id: string;
+  name: string;
   stripeConnectAccountId: string | null;
   chargesEnabled: boolean;
   payoutsEnabled: boolean;
@@ -141,6 +145,7 @@ export async function resolveCallerStoreWithConnect(
   const [store] = await db
     .select({
       id: stores.id,
+      name: stores.name,
       stripeConnectAccountId: stores.stripeConnectAccountId,
       chargesEnabled: stores.chargesEnabled,
       payoutsEnabled: stores.payoutsEnabled,
@@ -158,4 +163,202 @@ export async function resolveCallerStoreWithConnect(
   }
 
   return store;
+}
+
+// ---------------------------------------------------------------------------
+// Sourcing (F-049) — the ONE `sourcing_requests` row -> `SourcingRequest` DTO
+// mapping, and the ONE batch-load-by-id query, shared by chat.ts (which
+// attaches a nullable `sourcingRequest` to each chat message) and
+// sourcing.ts. Lives here — not in either router — because chat.ts and
+// sourcing.ts each import the other's exported rate-limit/block/truncate
+// helpers would create a cycle; both already depend on this file.
+// ---------------------------------------------------------------------------
+
+/** The shape needed to build a `SourcingRequest` DTO — a superset is fine (structural typing). */
+export interface SourcingRequestFullRow {
+  id: string;
+  direction: string;
+  status: string;
+  placeId: string;
+  placeName: string;
+  storeId: string;
+  storeName: string;
+  conversationId: string;
+  produce: string;
+  quantity: string;
+  neededBy: string | null;
+  note: string | null;
+  createdByUserId: string;
+  respondedAt: Date | null;
+  createdAt: Date | null;
+}
+
+/** Map a joined `sourcing_requests` row (+ place/store names) to the shared `SourcingRequest` DTO. */
+export function toSourcingRequestDto(row: SourcingRequestFullRow): SourcingRequest {
+  return {
+    id: row.id,
+    direction: row.direction as SourcingRequestDirection,
+    status: row.status as SourcingRequestStatus,
+    placeId: row.placeId,
+    placeName: row.placeName,
+    storeId: row.storeId,
+    storeName: row.storeName,
+    conversationId: row.conversationId,
+    produce: row.produce,
+    quantity: row.quantity,
+    neededBy: row.neededBy,
+    note: row.note,
+    createdByUserId: row.createdByUserId,
+    respondedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+    createdAt: (row.createdAt ?? new Date()).toISOString(),
+  };
+}
+
+/**
+ * Batch-load sourcing requests by id (joined to place/store names) as a
+ * `Map<id, SourcingRequest>` — used by `chat.messages` to attach the request
+ * card to its originating message without an N+1 query per page.
+ */
+export async function loadSourcingRequestsByIds(
+  db: Db,
+  ids: string[],
+): Promise<Map<string, SourcingRequest>> {
+  const map = new Map<string, SourcingRequest>();
+  if (ids.length === 0) return map;
+
+  const rows = await db
+    .select({
+      id: sourcingRequests.id,
+      direction: sourcingRequests.direction,
+      status: sourcingRequests.status,
+      placeId: sourcingRequests.placeId,
+      placeName: communityPlaces.name,
+      storeId: sourcingRequests.storeId,
+      storeName: stores.name,
+      conversationId: sourcingRequests.conversationId,
+      produce: sourcingRequests.produce,
+      quantity: sourcingRequests.quantity,
+      neededBy: sourcingRequests.neededBy,
+      note: sourcingRequests.note,
+      createdByUserId: sourcingRequests.createdByUserId,
+      respondedAt: sourcingRequests.respondedAt,
+      createdAt: sourcingRequests.createdAt,
+    })
+    .from(sourcingRequests)
+    .innerJoin(communityPlaces, eq(communityPlaces.id, sourcingRequests.placeId))
+    .innerJoin(stores, eq(stores.id, sourcingRequests.storeId))
+    .where(inArray(sourcingRequests.id, ids));
+
+  for (const row of rows) map.set(row.id, toSourcingRequestDto(row));
+  return map;
+}
+
+/**
+ * Resolve the approved community place linked to `userId` — the superset row
+ * shape (`{id, name, type, address}`) needed by both `places.mine` and
+ * sourcing's `resolveCallerPlace`. Returns `null` (never throws) when the
+ * caller has no linked approved place; callers that need a thrown NOT_FOUND
+ * (sourcing) wrap this, callers that treat "no place" as a valid null result
+ * (places.mine) call it directly.
+ */
+export async function findLinkedApprovedPlace(
+  db: Db,
+  userId: string,
+): Promise<{ id: string; name: string; type: string; address: string | null } | null> {
+  const [place] = await db
+    .select({
+      id: communityPlaces.id,
+      name: communityPlaces.name,
+      type: communityPlaces.type,
+      address: communityPlaces.address,
+    })
+    .from(communityPlaces)
+    .where(and(eq(communityPlaces.linkedUserId, userId), eq(communityPlaces.status, "approved")))
+    .limit(1);
+
+  return place ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Conversation upsert — the ONE (buyer_id, store_id) insert…onConflictDoUpdate
+// idiom shared by chat.start and both sourcing create mutations.
+// ---------------------------------------------------------------------------
+
+/**
+ * Upsert the (buyer, store) conversation and return its id — idempotent per
+ * (buyer_id, store_id): if one is already open, its existing id comes back
+ * unchanged. Accepts a `Db` or an open transaction handle (`DbOrTx`) so
+ * callers that need the insert to participate in a larger transaction (the
+ * sourcing create mutations) and callers that don't (chat.start) share the
+ * same helper.
+ *
+ * Throws INTERNAL_SERVER_ERROR ("Failed to start conversation") if the
+ * upsert unexpectedly returns no row.
+ */
+export async function upsertConversation(dbOrTx: DbOrTx, buyerId: string, storeId: string): Promise<string> {
+  const [row] = await dbOrTx
+    .insert(conversations)
+    .values({ buyerId, storeId })
+    .onConflictDoUpdate({
+      target: [conversations.buyerId, conversations.storeId],
+      // No-op update (buyer_id = its own excluded value) — required by
+      // Postgres upsert syntax to RETURNING the existing row on conflict.
+      set: { buyerId: sql`excluded.buyer_id` },
+    })
+    .returning({ id: conversations.id });
+
+  if (!row) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to start conversation",
+    });
+  }
+
+  return row.id;
+}
+
+// ---------------------------------------------------------------------------
+// Push-after-commit — the ONE "look up tokens, truncate, send, swallow errors"
+// idiom shared by chat.send and the sourcing router's create/respond/withdraw
+// mutations.
+// ---------------------------------------------------------------------------
+
+/** Push notification body is truncated to this length (mirrors chat.ts's PUSH_BODY_MAX_CHARS). */
+const PUSH_BODY_MAX_CHARS = 100;
+
+/**
+ * Best-effort push to `userId`'s registered devices, AFTER the caller's
+ * transaction has committed. Never throws — mirrors chat.send's push step
+ * (AWAITED on purpose: on Cloud Run, minScale 0 + CPU throttled outside
+ * requests means a fire-and-forget promise can be starved or reclaimed once
+ * the response flushes, silently dropping the notification). `body` is
+ * truncated to PUSH_BODY_MAX_CHARS before sending.
+ */
+export async function pushToUser(
+  db: Db,
+  push: PushClient,
+  userId: string,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const tokens = await db
+      .select({ token: pushTokens.token })
+      .from(pushTokens)
+      .where(eq(pushTokens.userId, userId));
+
+    if (tokens.length > 0) {
+      await push.send({
+        tokens: tokens.map((t) => t.token),
+        title,
+        body: body.length > PUSH_BODY_MAX_CHARS ? `${body.slice(0, PUSH_BODY_MAX_CHARS)}…` : body,
+        data,
+      });
+    }
+  } catch (err) {
+    // Never let a push-path failure escape and affect the caller — the
+    // triggering write is already committed.
+    console.error("[push] notification failed", err instanceof Error ? err.message : String(err));
+  }
 }

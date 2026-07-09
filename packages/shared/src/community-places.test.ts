@@ -33,10 +33,22 @@ describe("communityPlace schema", () => {
     website: "https://riversidecoop.example",
     hoursText: "Mon-Sat 8am-8pm, Sun 10am-6pm",
     distanceKm: 3.2,
+    acceptsOffers: true,
   };
 
   it("parses a valid full object", () => {
     const result = communityPlace.safeParse(valid);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an object missing acceptsOffers", () => {
+    const { acceptsOffers: _omitted, ...withoutAcceptsOffers } = valid;
+    const result = communityPlace.safeParse(withoutAcceptsOffers);
+    expect(result.success).toBe(false);
+  });
+
+  it("parses a place with acceptsOffers false", () => {
+    const result = communityPlace.safeParse({ ...valid, acceptsOffers: false });
     expect(result.success).toBe(true);
   });
 
@@ -233,6 +245,7 @@ describe("placesNearbyOutput schema", () => {
     website: null,
     hoursText: "Sat 8am-1pm, May-Oct",
     distanceKm: 1.1,
+    acceptsOffers: false,
   };
 
   it("parses an empty array", () => {

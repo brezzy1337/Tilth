@@ -559,13 +559,15 @@ async function closeDb(): Promise<void> {
  * in the gitignored candidates file — not shaped by `osmElementToCandidate`
  * or `mapUsdaRecord`'s truncation/validation at all. Validated against the
  * SAME shared `communityPlace` schema that `places.nearby` output must
- * satisfy (minus the server-computed `id`/`distanceKm` fields): a candidate
+ * satisfy (minus the server-computed `id`/`distanceKm`/`acceptsOffers`
+ * fields — `acceptsOffers` is derived from `linked_user_id`, which this CLI
+ * never sets; that's `scripts/link-place-buyer.ts`'s job, F-049): a candidate
  * that inserts fine (plain text columns accept anything) but violates those
  * bounds — address > 300 chars, an unparseable `website`, hoursText > 500
  * chars — would fail `placesNearbyOutput`'s zod parse for the WHOLE response
  * once approved, not just that row.
  */
-const commitableCandidateSchema = communityPlace.omit({ id: true, distanceKm: true });
+const commitableCandidateSchema = communityPlace.omit({ id: true, distanceKm: true, acceptsOffers: true });
 
 export function validateCommitableCandidate(
   c: PlaceCandidate,

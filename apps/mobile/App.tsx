@@ -64,6 +64,8 @@ import { OrderDetailScreen } from "./src/screens/OrderDetailScreen";
 import { StoreOrdersScreen } from "./src/screens/StoreOrdersScreen";
 import { StoreProfileScreen } from "./src/screens/StoreProfileScreen";
 import { ConversationScreen } from "./src/screens/ConversationScreen";
+import { SourcingScreen } from "./src/screens/SourcingScreen";
+import { SourcingComposeScreen } from "./src/screens/SourcingComposeScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
@@ -253,6 +255,16 @@ function RootNavigator() {
             name="GardenComposer"
             component={GardenComposerScreen}
             options={{ title: "New Garden Post", presentation: "modal" }}
+          />
+          <AuthedStack.Screen
+            name="Sourcing"
+            component={SourcingScreen}
+            options={{ title: "Sourcing" }}
+          />
+          <AuthedStack.Screen
+            name="SourcingCompose"
+            component={SourcingComposeScreen}
+            options={{ title: "New Request", presentation: "modal" }}
           />
         </AuthedStack.Navigator>
       )}
