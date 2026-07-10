@@ -2,8 +2,10 @@
  * HomeScreen — marketplace browse, Airbnb-style map + draggable sheet (F-013).
  *
  * Layout: once location is "granted", a full-screen MapView fills the body
- * (one Marker per grower, deduped by storeId — a store's listings share the
- * store's lat/lng) with a draggable `BottomSheet` docked over it. The sheet
+ * (one `StallMarker` per grower, aggregated by storeId — a store's listings
+ * share the store's lat/lng, and the pin shows up to 3 produce-category
+ * emoji drawn from that store's current listings, F-042) with a draggable
+ * `BottomSheet` docked over it. The sheet
  * has three snap points (peek / half / full) and contains the "In season
  * now" chips, the category filter bar, and the listings list — all rendered
  * via `BottomSheetFlatList` so drag-to-resize and list-scroll gestures
@@ -17,8 +19,8 @@
  * are a second, independent layer on the same map: a separate
  * `trpc.places.nearby.useQuery` call (own network request; no category
  * filter, so it doesn't need to refetch when the listings filter changes)
- * rendered as `PlaceMarker` badges. Place pins are deliberately NOT the
- * default teardrop grower pins — tapping one opens a `PlaceInfoCard`
+ * rendered as `PlaceMarker` badges. Place pins are deliberately distinct
+ * from the `StallMarker` grower pills — tapping one opens a `PlaceInfoCard`
  * overlaid above the sheet's peek snap, not a storefront. Tapping the map
  * background (MapView `onPress`) dismisses the card. Attribution
  * ("© OpenStreetMap contributors") is required by ODbL since place data
@@ -54,7 +56,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import MapView, { Marker, type Region } from "react-native-maps";
+import MapView, { type Region } from "react-native-maps";
 import BottomSheet, { BottomSheetFlatList } from "@gorhom/bottom-sheet";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import {
@@ -72,6 +74,7 @@ import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { PlaceMarker } from "../components/PlaceMarker";
 import { PlaceInfoCard } from "../components/PlaceInfoCard";
+import { StallMarker, stallBadgeSignature } from "../components/StallMarker";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 import { colors, radii, spacing, type } from "../theme";
 import { CATEGORY_EMOJI, categoryEmoji, produceEmoji } from "../theme/categoryEmoji";
@@ -183,16 +186,30 @@ function SeasonalModule({ onSelectProduce, onPressSearch }: SeasonalModuleProps)
 
 // ---------------------------------------------------------------------------
 // MapSection — full-screen MapView (fills the body behind the bottom sheet).
-// Shows one Marker per grower (deduped by storeId, since a store's listings
-// all share the store's lat/lng) plus one `PlaceMarker` per community place
-// (F-048) — a second, visually distinct pin layer (rounded-square badges,
-// not teardrops). Tapping a grower Marker navigates to that store's profile,
-// unchanged; tapping a place pin selects it (info card renders in
-// MapWithSheet, above this component). Tapping the map background clears
-// the selection. Takes both queries' `data` as props — HomeScreen owns the
-// `trpc.listings.nearby` and `trpc.places.nearby` calls so the map and the
-// sheet list stay in sync off the same network requests.
+// Shows one `StallMarker` per grower (aggregated by storeId, since a store's
+// listings all share the store's lat/lng — the badge shows up to 3 of that
+// store's produce-category emoji, F-042) plus one `PlaceMarker` per
+// community place (F-048) — a second, visually distinct pin layer
+// (rounded-square badges, not pills). Tapping a stall marker navigates to
+// that store's profile, unchanged; tapping a place pin selects it (info card
+// renders in MapWithSheet, above this component). Tapping the map background
+// clears the selection. Takes both queries' `data` as props — HomeScreen
+// owns the `trpc.listings.nearby` and `trpc.places.nearby` calls so the map
+// and the sheet list stay in sync off the same network requests.
 // ---------------------------------------------------------------------------
+
+type StoreMarker = {
+  storeId: string;
+  storeName: string;
+  lat: number;
+  lng: number;
+  categories: ListingCategory[];
+};
+
+// Canonical category order (matches the shared enum) so a store's emoji set
+// renders in a stable order across refetches, independent of listing
+// insertion order in the `listings.nearby` response.
+const CATEGORY_ORDER = listingCategory.options;
 
 type MapSectionProps = {
   lat: number;
@@ -214,13 +231,29 @@ function MapSection({
   onDismissPlace,
 }: MapSectionProps) {
   const storeMarkers = useMemo(() => {
-    const byStore = new Map<string, NearbyListing>();
+    const byStore = new Map<string, { storeName: string; lat: number; lng: number; categories: Set<ListingCategory> }>();
     for (const listing of data ?? []) {
-      if (!byStore.has(listing.storeId)) {
-        byStore.set(listing.storeId, listing);
+      let entry = byStore.get(listing.storeId);
+      if (!entry) {
+        entry = {
+          storeName: listing.storeName,
+          lat: listing.lat,
+          lng: listing.lng,
+          categories: new Set(),
+        };
+        byStore.set(listing.storeId, entry);
       }
+      entry.categories.add(listing.category);
     }
-    return Array.from(byStore.values());
+    return Array.from(byStore.entries()).map(([storeId, entry]): StoreMarker => ({
+      storeId,
+      storeName: entry.storeName,
+      lat: entry.lat,
+      lng: entry.lng,
+      // Sort by the shared enum's canonical order so the set is stable
+      // across refetches regardless of listing order in the response.
+      categories: CATEGORY_ORDER.filter((cat) => entry.categories.has(cat)),
+    }));
   }, [data]);
 
   const initialRegion = useMemo(
@@ -230,11 +263,21 @@ function MapSection({
 
   return (
     <MapView style={styles.map} initialRegion={initialRegion} onPress={onDismissPlace}>
+      {/* Keyed on storeId + stallBadgeSignature(categories): StallMarker sets
+          tracksViewChanges={false}, so the rendered badge (up to 3 visible
+          emoji + overflow count) must force a remount to re-rasterize
+          exactly when that badge would look different. Using the signature
+          rather than the full joined category list means a category change
+          beyond the visible slice that leaves the badge's pixels unchanged
+          (same overflow count) does NOT force a pointless remount. */}
       {storeMarkers.map((store) => (
-        <Marker
-          key={store.storeId}
-          coordinate={{ latitude: store.lat, longitude: store.lng }}
-          title={store.storeName}
+        <StallMarker
+          key={`${store.storeId}-${stallBadgeSignature(store.categories)}`}
+          storeId={store.storeId}
+          storeName={store.storeName}
+          lat={store.lat}
+          lng={store.lng}
+          categoryEmojis={store.categories.map((cat) => categoryEmoji(cat))}
           onPress={() => onNavigateToStore(store.storeId, store.storeName)}
         />
       ))}
