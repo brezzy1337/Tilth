@@ -1,5 +1,5 @@
 /**
- * Category → emoji mapping for the "Harvest Warm" theme, plus a small unit
+ * Category → emoji mapping for the "Garden Fresh" theme, plus a small unit
  * label helper. Used by YourStand's setup journey/dashboard and its category
  * chips so listings read as warm and human rather than clinical.
  */

@@ -1,10 +1,11 @@
 /**
  * PlaceMarker — Home map pin for a community place (F-048): a farmers
  * market, co-op, or health-food store. Rendered as a rounded-square badge
- * with a type emoji, deliberately NOT the default teardrop pin used for
- * grower stores — a place pin must read as a different kind of tap target
- * at a glance (grower pin → tap through to a store you can buy from; place
- * pin → tap opens an info card, no storefront behind it).
+ * with a type emoji, deliberately distinct from `StallMarker` (F-042) — the
+ * pill badge used for grower stores — a place pin must read as a different
+ * kind of tap target at a glance (grower pin → tap through to a store you
+ * can buy from; place pin → tap opens an info card, no storefront behind
+ * it).
  *
  * `tracksViewChanges={false}` is required for Android perf: react-native-
  * maps re-rasterizes a custom-view Marker's bitmap on every render while
@@ -57,6 +58,8 @@ export function PlaceMarker({ place, onPress }: Props) {
       onPress={handlePress}
       tracksViewChanges={false}
       anchor={{ x: 0.5, y: 0.5 }}
+      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+      accessibilityLabel={place.name}
     >
       <View style={[styles.badge, { borderColor: meta.tint }]}>
         <Text style={styles.emoji}>{meta.emoji}</Text>

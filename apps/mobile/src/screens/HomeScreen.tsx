@@ -19,8 +19,8 @@
  * are a second, independent layer on the same map: a separate
  * `trpc.places.nearby.useQuery` call (own network request; no category
  * filter, so it doesn't need to refetch when the listings filter changes)
- * rendered as `PlaceMarker` badges. Place pins are deliberately NOT the
- * default teardrop grower pins — tapping one opens a `PlaceInfoCard`
+ * rendered as `PlaceMarker` badges. Place pins are deliberately distinct
+ * from the `StallMarker` grower pills — tapping one opens a `PlaceInfoCard`
  * overlaid above the sheet's peek snap, not a storefront. Tapping the map
  * background (MapView `onPress`) dismisses the card. Attribution
  * ("© OpenStreetMap contributors") is required by ODbL since place data
@@ -74,7 +74,7 @@ import { capitalise } from "../utils/text";
 import { ListingCard } from "../components/ListingCard";
 import { PlaceMarker } from "../components/PlaceMarker";
 import { PlaceInfoCard } from "../components/PlaceInfoCard";
-import { StallMarker } from "../components/StallMarker";
+import { StallMarker, stallBadgeSignature } from "../components/StallMarker";
 import { getSeasonalProduce } from "../data/seasonalProduce";
 import { colors, radii, spacing, type } from "../theme";
 import { CATEGORY_EMOJI, categoryEmoji, produceEmoji } from "../theme/categoryEmoji";
@@ -263,13 +263,18 @@ function MapSection({
 
   return (
     <MapView style={styles.map} initialRegion={initialRegion} onPress={onDismissPlace}>
-      {/* Keyed on storeId + joined categories: StallMarker sets
-          tracksViewChanges={false}, so a category-set change (new/removed
-          listing) must force a remount to re-rasterize the badge. */}
+      {/* Keyed on storeId + stallBadgeSignature(categories): StallMarker sets
+          tracksViewChanges={false}, so the rendered badge (up to 3 visible
+          emoji + overflow count) must force a remount to re-rasterize
+          exactly when that badge would look different. Using the signature
+          rather than the full joined category list means a category change
+          beyond the visible slice that leaves the badge's pixels unchanged
+          (same overflow count) does NOT force a pointless remount. */}
       {storeMarkers.map((store) => (
         <StallMarker
-          key={`${store.storeId}-${store.categories.join(",")}`}
+          key={`${store.storeId}-${stallBadgeSignature(store.categories)}`}
           storeId={store.storeId}
+          storeName={store.storeName}
           lat={store.lat}
           lng={store.lng}
           categoryEmojis={store.categories.map((cat) => categoryEmoji(cat))}

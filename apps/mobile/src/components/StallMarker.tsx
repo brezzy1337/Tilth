@@ -16,12 +16,17 @@
  *
  * `tracksViewChanges={false}` for the same Android-perf reason as
  * PlaceMarker: a custom-view Marker re-rasterizes its bitmap on every render
- * while tracking is on. The category set only changes when the underlying
- * `listings.nearby` data changes (new/removed listing), so the caller must
- * key this component on `storeId` + the joined category string — see
- * HomeScreen's `storeMarkers` — to force a remount (and thus a fresh
- * rasterize) whenever that set changes, precedent set by PlaceMarker's
- * `id+type` key.
+ * while tracking is on. The rendered badge (visible emoji + overflow count)
+ * only changes when the underlying `listings.nearby` data changes (new/
+ * removed listing), so the caller must key this component on `storeId` +
+ * `stallBadgeSignature(categories)` — see HomeScreen's `storeMarkers` — to
+ * force a remount (and thus a fresh rasterize) exactly when the rendered
+ * badge changes, precedent set by PlaceMarker's `id+type` key. Using the
+ * signature (not the full joined category list) matters because a category
+ * change beyond the visible slice can leave the badge's pixels identical —
+ * e.g. going from 4 categories to a different 4 categories both render as
+ * "3 emoji + '+1'" — so `stallBadgeSignature` is the single canonical place
+ * that decides what's visible vs. rendered, used both here and by the caller.
  *
  * `onPress` calls `event.stopPropagation()` before invoking the callback —
  * same Android bubbling reason as PlaceMarker (the MapView's own `onPress`
@@ -31,19 +36,34 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Marker, type MapMarkerProps } from "react-native-maps";
-import { colors, radii, shadows, spacing } from "../theme";
+import type { ListingCategory } from "@homegrown/shared";
+import { colors, radii, shadows, spacing, type } from "../theme";
 
 const MAX_VISIBLE_CATEGORIES = 3;
 
+/**
+ * Canonical "what does the badge actually render" signature for a store's
+ * category set — shared by StallMarker (to render) and HomeScreen (to key
+ * the marker for remount). Two category arrays that differ only beyond the
+ * visible slice, and produce the same overflow count, are equivalent for
+ * this purpose and must yield the same signature.
+ */
+export function stallBadgeSignature(categories: ListingCategory[]): string {
+  const visible = categories.slice(0, MAX_VISIBLE_CATEGORIES);
+  const overflow = categories.length - visible.length;
+  return `${visible.join(",")}+${overflow}`;
+}
+
 type Props = {
   storeId: string;
+  storeName: string;
   lat: number;
   lng: number;
   categoryEmojis: string[];
   onPress: () => void;
 };
 
-export function StallMarker({ lat, lng, categoryEmojis, onPress }: Props) {
+export function StallMarker({ storeName, lat, lng, categoryEmojis, onPress }: Props) {
   const visible = categoryEmojis.slice(0, MAX_VISIBLE_CATEGORIES);
   const overflow = categoryEmojis.length - visible.length;
 
@@ -58,6 +78,8 @@ export function StallMarker({ lat, lng, categoryEmojis, onPress }: Props) {
       onPress={handlePress}
       tracksViewChanges={false}
       anchor={{ x: 0.5, y: 0.5 }}
+      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+      accessibilityLabel={storeName}
     >
       <View style={styles.badge}>
         {visible.map((emoji, index) => (
@@ -86,16 +108,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 2,
     borderColor: colors.primary,
-    gap: 2,
+    gap: spacing.xs,
     ...shadows.soft,
   },
   emoji: {
-    fontSize: 16,
+    fontSize: 18,
   },
   overflow: {
-    fontSize: 11,
-    fontWeight: "700",
+    fontSize: type.label.fontSize,
+    fontWeight: type.label.fontWeight,
     color: colors.primary,
-    marginLeft: 1,
   },
 });
