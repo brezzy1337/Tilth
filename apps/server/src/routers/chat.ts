@@ -51,6 +51,9 @@ import {
   blockUserInput,
   reportMessageInput,
   registerPushTokenInput,
+  listBlockedOutput,
+  unblockUserInput,
+  unregisterPushTokenInput,
   type ChatMessage,
   type ConversationSummary,
 } from "@homegrown/shared";
@@ -72,6 +75,7 @@ import {
   loadSourcingRequestsByIds,
   upsertConversation,
   pushToUser,
+  isUserDeactivated,
 } from "./helpers";
 import type { Db } from "../context";
 
@@ -308,12 +312,19 @@ export const chatRouter = router({
     .output(startConversationOutput)
     .mutation(async ({ input, ctx }) => {
       const [targetStore] = await ctx.db
-        .select({ id: stores.id, userId: stores.userId })
+        .select({
+          id: stores.id,
+          userId: stores.userId,
+          // F-051 — not returned; used only to hide a deactivated seller
+          // behind the same NOT_FOUND as a nonexistent store.
+          ownerDeactivatedAt: users.deactivatedAt,
+        })
         .from(stores)
+        .innerJoin(users, eq(users.id, stores.userId))
         .where(eq(stores.id, input.storeId))
         .limit(1);
 
-      if (!targetStore) {
+      if (!targetStore || targetStore.ownerDeactivatedAt) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Store not found" });
       }
 
@@ -514,6 +525,13 @@ export const chatRouter = router({
       const isCallerBuyer = participant.buyerId === callerId;
       const otherUserId = isCallerBuyer ? participant.storeUserId : participant.buyerId;
 
+      // F-051 — no new messages to a deactivated party. The existing thread
+      // stays readable (`messages`/`markRead`/`list` are unaffected); only
+      // sending a NEW message is blocked.
+      if (await isUserDeactivated(ctx.db, otherUserId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "This conversation is no longer available" });
+      }
+
       if (await isBlockedEitherDirection(ctx.db, callerId, otherUserId)) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -660,6 +678,66 @@ export const chatRouter = router({
           target: pushTokens.token,
           set: { userId: ctx.user.id, platform: input.platform, updatedAt: new Date() },
         });
+
+      return { success: true };
+    }),
+
+  /**
+   * F-051 — the caller's blocked users, newest-block-first. Username is
+   * denormalized onto `blockedUser` (shared contract), so this joins to
+   * `users` rather than requiring a second round-trip on the client.
+   */
+  listBlocked: protectedProcedure.output(listBlockedOutput).query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        userId: userBlocks.blockedUserId,
+        username: users.username,
+        blockedAt: userBlocks.createdAt,
+      })
+      .from(userBlocks)
+      .innerJoin(users, eq(users.id, userBlocks.blockedUserId))
+      .where(eq(userBlocks.blockerUserId, ctx.user.id))
+      .orderBy(desc(userBlocks.createdAt))
+      .limit(200);
+
+    return rows.map((row) => ({
+      userId: row.userId,
+      username: row.username,
+      blockedAt: (row.blockedAt ?? new Date()).toISOString(),
+    }));
+  }),
+
+  /**
+   * F-051 — inverse of `blockUser`. Idempotent: deleting a block row that
+   * doesn't exist is a silent no-op, same convention as `blockUser`'s
+   * idempotent insert.
+   */
+  unblockUser: protectedProcedure
+    .input(unblockUserInput)
+    .output(z.object({ success: z.literal(true) }))
+    .mutation(async ({ input, ctx }) => {
+      await ctx.db
+        .delete(userBlocks)
+        .where(
+          and(eq(userBlocks.blockerUserId, ctx.user.id), eq(userBlocks.blockedUserId, input.userId)),
+        );
+
+      return { success: true };
+    }),
+
+  /**
+   * F-051 — deletes a push token row, but ONLY if it belongs to the caller
+   * (WHERE token AND user_id = caller). A token that doesn't exist, or
+   * belongs to someone else (e.g. `registerPushToken` already moved it to a
+   * different account), is a silent no-op — never leaks which case occurred.
+   */
+  unregisterPushToken: protectedProcedure
+    .input(unregisterPushTokenInput)
+    .output(z.object({ success: z.literal(true) }))
+    .mutation(async ({ input, ctx }) => {
+      await ctx.db
+        .delete(pushTokens)
+        .where(and(eq(pushTokens.token, input.token), eq(pushTokens.userId, ctx.user.id)));
 
       return { success: true };
     }),

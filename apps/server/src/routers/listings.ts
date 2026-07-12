@@ -24,7 +24,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
 import { stores, listings } from "../db/schema";
-import { geoRadius, resolveCallerStore } from "./helpers";
+import { geoRadius, resolveCallerStore, activeUserClause } from "./helpers";
 
 /** Columns returned by all listing queries. */
 const listingCols = {
@@ -255,7 +255,9 @@ export const listingsRouter = router({
         FROM listings l
         JOIN stores s ON s.id = l.store_id
         JOIN locations loc ON loc.store_id = s.id
+        JOIN users u ON u.id = s.user_id
         WHERE ${geo.withinClause(geogColumn)}
+        AND ${activeUserClause(sql`u`)}
         ${categoryFilter}
         ${nameFilter}
         ORDER BY ${geo.distanceExpr(geogColumn)} ASC

@@ -12,7 +12,7 @@ import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, PushClient } from "../context";
 import type { DbOrTx } from "../db/order-transitions";
-import { stores, sourcingRequests, communityPlaces, conversations, pushTokens } from "../db/schema";
+import { stores, sourcingRequests, communityPlaces, conversations, pushTokens, users } from "../db/schema";
 import type { SourcingRequest, SourcingRequestDirection, SourcingRequestStatus } from "@homegrown/shared";
 
 // ---------------------------------------------------------------------------
@@ -361,4 +361,41 @@ export async function pushToUser(
     // triggering write is already committed.
     console.error("[push] notification failed", err instanceof Error ? err.message : String(err));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Deactivation (F-051) — the ONE predicate hiding a deactivated seller/place
+// owner from public discovery (`listings.nearby`, `sourcing.growers`,
+// `garden.feed`, `places.nearby`'s `acceptsOffers`) and gating writes that
+// would notify them (`stores.get`, `chat.start`/`send`,
+// `sourcing.createRequest`/`createOffer`/`respond`). `users.deactivatedAt` is
+// set by `auth.deleteAccount` (soft-delete, 30-day grace) and cleared by a
+// self-restoring `auth.login` within the grace window.
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw-SQL predicate: "the joined `users` alias is not deactivated". For
+ * hand-written `db.execute(sql\`…\`)` queries that already JOIN (or LEFT
+ * JOIN) a `users` row for the seller/store-owner/linked-buyer in question.
+ * `usersAlias` names that alias in the query's FROM/JOIN clauses (e.g.
+ * `sql\`u\``) — never interpolate anything but a fixed alias fragment here.
+ */
+export function activeUserClause(usersAlias: SQL): SQL {
+  return sql`${usersAlias}.deactivated_at IS NULL`;
+}
+
+/**
+ * Query-builder check: is `userId` currently deactivated? For procedures
+ * that resolve a single target user id via the query builder rather than a
+ * raw-SQL join (`chat.start`/`send`, `sourcing.createRequest`/`createOffer`/
+ * `respond`) — one lookup instead of six hand-rolled `deactivatedAt IS NOT
+ * NULL` checks.
+ */
+export async function isUserDeactivated(db: Db, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ deactivatedAt: users.deactivatedAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.deactivatedAt != null;
 }

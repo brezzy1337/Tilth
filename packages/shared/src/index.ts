@@ -35,6 +35,16 @@ export type HealthResponse = z.infer<typeof healthResponse>;
 // public principal returned in tokens and stored in client state.
 // ---------------------------------------------------------------------------
 
+/**
+ * The password constraint shared by every auth/account-settings input that
+ * accepts a raw password (register, change-password, delete-account
+ * confirmation). Defined once so all call sites parse identically — never
+ * redeclare `z.string().min(8).max(100)` inline elsewhere.
+ */
+export const passwordSchema = z.string().min(8).max(100);
+
+export type Password = z.infer<typeof passwordSchema>;
+
 /** Input to `auth.register`. Username restricted to letters, digits, underscore. */
 export const registerInput = z.object({
   email: z.string().email(),
@@ -43,7 +53,7 @@ export const registerInput = z.object({
     .min(3)
     .max(30)
     .regex(/^[a-zA-Z0-9_]+$/, "Username may only contain letters, digits, and underscores"),
-  password: z.string().min(8).max(100),
+  password: passwordSchema,
 });
 
 export type RegisterInput = z.infer<typeof registerInput>;
@@ -79,6 +89,80 @@ export const authResponse = z.object({
 });
 
 export type AuthResponse = z.infer<typeof authResponse>;
+
+// ---------------------------------------------------------------------------
+// Account settings (F-051) — change password, soft-delete account (30-day
+// grace period), blocked-users management, push-token unregister.
+// `passwordSchema` (above, in Auth) is reused here so password strength rules
+// stay identical across registration, password change, and delete confirmation.
+// ---------------------------------------------------------------------------
+
+/** Input to `auth.changePassword` (protected). */
+export const changePasswordInput = z.object({
+  currentPassword: passwordSchema,
+  newPassword: passwordSchema,
+});
+
+export type ChangePasswordInput = z.infer<typeof changePasswordInput>;
+
+/**
+ * Input to `auth.deleteAccount` (protected). Password re-confirmation guards
+ * against a hijacked/unattended session triggering a destructive action.
+ */
+export const deleteAccountInput = z.object({
+  password: passwordSchema,
+});
+
+export type DeleteAccountInput = z.infer<typeof deleteAccountInput>;
+
+/**
+ * Response from `auth.deleteAccount`. The account is soft-deleted with a
+ * 30-day grace period; `deleteAfter` is the ISO 8601 datetime the server will
+ * hard-delete the account, surfaced so the client can display a "you can
+ * still undo this until ..." message.
+ */
+export const deleteAccountOutput = z.object({
+  deleteAfter: z.string().datetime(),
+});
+
+export type DeleteAccountOutput = z.infer<typeof deleteAccountOutput>;
+
+/**
+ * A single blocked user, as returned by `moderation.listBlocked`.
+ * Mirrors `blockUserInput`'s `userId` (below, in Messaging) — moderation acts
+ * on USER ids, not store ids.
+ */
+export const blockedUser = z.object({
+  userId: z.string().uuid(),
+  username: z.string(),
+  /** ISO 8601 datetime — when the caller blocked this user. */
+  blockedAt: z.string().datetime(),
+});
+
+export type BlockedUser = z.infer<typeof blockedUser>;
+
+/** Response from `moderation.listBlocked` — capped at 200 blocked users. */
+export const listBlockedOutput = z.array(blockedUser).max(200);
+
+export type ListBlockedOutput = z.infer<typeof listBlockedOutput>;
+
+/** Input to `moderation.unblockUser` (protected). Inverse of `blockUserInput`. */
+export const unblockUserInput = z.object({
+  userId: z.string().uuid(),
+});
+
+export type UnblockUserInput = z.infer<typeof unblockUserInput>;
+
+/**
+ * Input to `push.unregisterToken` (protected). Mirrors `registerPushTokenInput`
+ * (below, in Messaging) but takes only the token — unregistering doesn't need
+ * `platform`, since the server looks the row up by token value alone.
+ */
+export const unregisterPushTokenInput = z.object({
+  token: z.string().min(1).max(200),
+});
+
+export type UnregisterPushTokenInput = z.infer<typeof unregisterPushTokenInput>;
 
 // ---------------------------------------------------------------------------
 // Trust tier — seller reliability badge (F-016)

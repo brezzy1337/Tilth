@@ -20,6 +20,18 @@ export const publicProcedure = t.procedure;
  * Procedure that requires an authenticated user.
  * Throws UNAUTHORIZED when `ctx.user` is null and narrows the user type to
  * non-null for downstream resolvers.
+ *
+ * F-051 gap (documented, not fixed here): auth is stateless — `ctx.user` is
+ * populated purely from a verified JWT (`context.ts`'s `createContext`),
+ * with NO per-request DB row lookup. That means a deactivated account's
+ * (`auth.deleteAccount`) already-issued JWTs remain valid for their full
+ * lifetime — deletion does NOT log the account out everywhere. Adding a
+ * per-request DB hit here would fix that but costs a query on every
+ * authenticated call; out of scope for v1. Deactivation is instead enforced
+ * at the router surfaces that matter (see `helpers.ts`'s `activeUserClause`
+ * / `isUserDeactivated`): a deactivated seller disappears from discovery and
+ * can't be newly messaged, and `auth.login` itself rejects (or, within the
+ * grace window, self-restores) a deactivated account.
  */
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.user) {

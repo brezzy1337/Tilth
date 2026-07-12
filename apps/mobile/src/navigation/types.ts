@@ -77,6 +77,17 @@ export type AuthedStackParamList = {
   SourcingCompose:
     | { mode: "request"; storeId: string; storeName: string }
     | { mode: "offer"; placeId: string; placeName: string };
+  /**
+   * Account settings (F-051) — replaces HomeScreen's former header sign-out
+   * icon as the entry point; sign-out now lives inside this screen.
+   */
+  Settings: undefined;
+  /** Change-password sub-screen, pushed from Settings > Account. */
+  ChangePassword: undefined;
+  /** Soft-delete-with-grace-period sub-screen, pushed from Settings > Danger zone. */
+  DeleteAccount: undefined;
+  /** Blocked-users list sub-screen, pushed from Settings > Privacy. */
+  BlockedUsers: undefined;
 };
 
 // Convenience aliases

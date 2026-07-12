@@ -18,7 +18,7 @@ import {
 } from "@homegrown/shared";
 import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
-import { stores, orders } from "../db/schema";
+import { stores, orders, users } from "../db/schema";
 
 export const storesRouter = router({
   /**
@@ -155,12 +155,17 @@ export const storesRouter = router({
           name: stores.name,
           logo: stores.logo,
           about: stores.about,
+          // F-051 — not selected into the response; used only to hide a
+          // deactivated seller's public profile behind the same NOT_FOUND
+          // as a nonexistent store.
+          ownerDeactivatedAt: users.deactivatedAt,
         })
         .from(stores)
+        .innerJoin(users, eq(users.id, stores.userId))
         .where(eq(stores.id, input.storeId))
         .limit(1);
 
-      if (!found) {
+      if (!found || found.ownerDeactivatedAt) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Store not found",

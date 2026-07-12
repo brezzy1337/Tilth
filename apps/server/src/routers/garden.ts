@@ -38,7 +38,13 @@ import {
 } from "@homegrown/shared";
 import { protectedProcedure, publicProcedure, router } from "../trpc";
 import { gardenPosts } from "../db/schema";
-import { resolveCallerStore, encodeKeysetCursor, decodeKeysetCursor, geoRadius } from "./helpers";
+import {
+  resolveCallerStore,
+  encodeKeysetCursor,
+  decodeKeysetCursor,
+  geoRadius,
+  activeUserClause,
+} from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Local output schemas — composed from shared primitives.
@@ -203,8 +209,10 @@ export const gardenRouter = router({
         FROM garden_posts p
         JOIN stores s ON s.id = p.store_id
         JOIN locations loc ON loc.store_id = s.id
+        JOIN users u ON u.id = s.user_id
         WHERE p.status = 'ready'
         AND ${geo.withinClause(geogColumn)}
+        AND ${activeUserClause(sql`u`)}
         ${keysetFilter}
         ORDER BY p.created_at DESC, p.id DESC
         LIMIT ${limit + 1}

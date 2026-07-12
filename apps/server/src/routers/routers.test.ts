@@ -643,12 +643,15 @@ describe("stores.get", () => {
 
   it("returns public profile (id, name, logo, about) for an existing store", async () => {
     const db = fakeDb({
-      selectRows: [
+      // stores.get now innerJoins `users` (F-051 deactivation check) —
+      // routed through joinRows, not selectRows.
+      joinRows: [
         {
           id: PUBLIC_STORE_ID,
           name: "Green Acres Farm",
           logo: "https://example.com/logo.png",
           about: "Fresh produce daily.",
+          ownerDeactivatedAt: null,
         },
       ],
     });
@@ -680,12 +683,13 @@ describe("stores.get", () => {
 
   it("coerces null logo and about correctly", async () => {
     const db = fakeDb({
-      selectRows: [
+      joinRows: [
         {
           id: PUBLIC_STORE_ID,
           name: "Bare Minimum Farm",
           logo: null,
           about: null,
+          ownerDeactivatedAt: null,
         },
       ],
     });
