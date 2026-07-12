@@ -1,19 +1,27 @@
 /**
  * HomeScreen — marketplace browse, Airbnb-style map + draggable sheet (F-013).
+ * Stall-first (F-050): both the map and the sheet list *stalls* (growers), not
+ * individual produce — produce is browsed and added to cart from the stall's
+ * store profile, not from Home.
  *
  * Layout: once location is "granted", a full-screen MapView fills the body
  * (one `StallMarker` per grower, aggregated by storeId — a store's listings
  * share the store's lat/lng, and the pin shows up to 3 produce-category
  * emoji drawn from that store's current listings, F-042) with a draggable
- * `BottomSheet` docked over it. The sheet
- * has three snap points (peek / half / full) and contains the "In season
- * now" chips, the category filter bar, and the listings list — all rendered
- * via `BottomSheetFlatList` so drag-to-resize and list-scroll gestures
- * compose correctly.
+ * `BottomSheet` docked over it. The sheet has three snap points
+ * (peek / half / full) and contains the "In season now" chips, the category
+ * filter bar, and a list of `StallCard` rows (name, up to 6 produce-category
+ * emoji, listing count, distance) — all rendered via `BottomSheetFlatList` so
+ * drag-to-resize and list-scroll gestures compose correctly. Tapping a
+ * `StallCard` (or a map marker) navigates to that stall's store profile,
+ * where produce is actually added to the cart.
  *
- * Both the map markers and the sheet list read from a single, shared
+ * Both the map markers and the sheet list are derived, by one shared
+ * `stallMarkers` useMemo (see MapWithSheet), from a single
  * `trpc.listings.nearby.useQuery` call (one network request; category filter
- * lives in HomeScreen and flows down, so pins update live with the filter).
+ * lives in HomeScreen and flows down, so both views update live with the
+ * filter — a chip narrows which *stalls* show, and each stall's icon set
+ * reflects only its matching produce).
  *
  * Community places (F-048) — farmers markets, co-ops, health-food stores —
  * are a second, independent layer on the same map: a separate
@@ -71,7 +79,7 @@ import { useCart } from "../cart/CartContext";
 import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { HomeTabNavigationProp, TabParamList } from "../navigation/types";
 import { capitalise } from "../utils/text";
-import { ListingCard } from "../components/ListingCard";
+import { StallCard } from "../components/StallCard";
 import { PlaceMarker } from "../components/PlaceMarker";
 import { PlaceInfoCard } from "../components/PlaceInfoCard";
 import { StallMarker, stallBadgeSignature } from "../components/StallMarker";
@@ -87,7 +95,7 @@ import { FlatList as GestureFlatList } from "react-native-gesture-handler";
 // Map region fallback — used only when the device coords aren't usable for a
 // region (defensive; HomeScreen only mounts the map once location is
 // "granted", but MapSection keeps its own fallback chain in case that ever
-// changes upstream: user coords -> first listing's coords -> pilot-region
+// changes upstream: user coords -> first stall's coords -> pilot-region
 // default, so the map never crashes on missing input).
 // ---------------------------------------------------------------------------
 
@@ -104,12 +112,12 @@ const REGION_DELTA = {
 
 function computeInitialRegion(
   userCoords: { lat: number; lng: number } | undefined,
-  listings: NearbyListing[] | undefined,
+  points: { lat: number; lng: number }[] | undefined,
 ): Region {
   const point: { lat: number; lng: number } =
     userCoords ??
-    (listings && listings.length > 0
-      ? { lat: listings[0].lat, lng: listings[0].lng }
+    (points && points.length > 0
+      ? { lat: points[0].lat, lng: points[0].lng }
       : { lat: FALLBACK_REGION.latitude, lng: FALLBACK_REGION.longitude });
 
   return {
@@ -185,17 +193,19 @@ function SeasonalModule({ onSelectProduce, onPressSearch }: SeasonalModuleProps)
 }
 
 // ---------------------------------------------------------------------------
-// MapSection — full-screen MapView (fills the body behind the bottom sheet).
-// Shows one `StallMarker` per grower (aggregated by storeId, since a store's
-// listings all share the store's lat/lng — the badge shows up to 3 of that
-// store's produce-category emoji, F-042) plus one `PlaceMarker` per
-// community place (F-048) — a second, visually distinct pin layer
-// (rounded-square badges, not pills). Tapping a stall marker navigates to
-// that store's profile, unchanged; tapping a place pin selects it (info card
-// renders in MapWithSheet, above this component). Tapping the map background
-// clears the selection. Takes both queries' `data` as props — HomeScreen
-// owns the `trpc.listings.nearby` and `trpc.places.nearby` calls so the map
-// and the sheet list stay in sync off the same network requests.
+// Stall aggregation — single source of truth for both the map markers and the
+// sheet's `StallCard` rows (F-050). A store's listings share the store's
+// lat/lng, so listings are grouped by storeId into one row per stall: an
+// ordered (canonical-enum-order) category set for the icon badge/row, a
+// listing count, and the stall's minimum per-listing `distanceKm` (computed
+// server-side via ST_Distance — every NearbyListing carries one).
+//
+// Callers are expected to filter out sold-out listings (`quantity === 0` —
+// the same predicate ListingCard uses to render its "Sold out" state) before
+// calling `buildStallMarkers`, so a stall whose entire inventory is sold out
+// drops off both the map and the sheet, and a partially sold-out stall's
+// icon row/count reflect only what's actually available. Kept out of this
+// function so the aggregation itself stays a simple, filter-free grouping.
 // ---------------------------------------------------------------------------
 
 type StoreMarker = {
@@ -204,6 +214,8 @@ type StoreMarker = {
   lat: number;
   lng: number;
   categories: ListingCategory[];
+  listingCount: number;
+  distanceKm: number;
 };
 
 // Canonical category order (matches the shared enum) so a store's emoji set
@@ -211,10 +223,66 @@ type StoreMarker = {
 // insertion order in the `listings.nearby` response.
 const CATEGORY_ORDER = listingCategory.options;
 
+function buildStallMarkers(listings: NearbyListing[]): StoreMarker[] {
+  const byStore = new Map<
+    string,
+    {
+      storeName: string;
+      lat: number;
+      lng: number;
+      categories: Set<ListingCategory>;
+      listingCount: number;
+      distanceKm: number;
+    }
+  >();
+  for (const listing of listings) {
+    let entry = byStore.get(listing.storeId);
+    if (!entry) {
+      entry = {
+        storeName: listing.storeName,
+        lat: listing.lat,
+        lng: listing.lng,
+        categories: new Set(),
+        listingCount: 0,
+        distanceKm: listing.distanceKm,
+      };
+      byStore.set(listing.storeId, entry);
+    }
+    entry.categories.add(listing.category);
+    entry.listingCount += 1;
+    entry.distanceKm = Math.min(entry.distanceKm, listing.distanceKm);
+  }
+  return Array.from(byStore.entries()).map(([storeId, entry]): StoreMarker => ({
+    storeId,
+    storeName: entry.storeName,
+    lat: entry.lat,
+    lng: entry.lng,
+    // Sort by the shared enum's canonical order so the set is stable
+    // across refetches regardless of listing order in the response.
+    categories: CATEGORY_ORDER.filter((cat) => entry.categories.has(cat)),
+    listingCount: entry.listingCount,
+    distanceKm: entry.distanceKm,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// MapSection — full-screen MapView (fills the body behind the bottom sheet).
+// Shows one `StallMarker` per grower (aggregated by storeId, since a store's
+// listings all share the store's lat/lng — the badge shows up to 3 of that
+// store's produce-category emoji, F-042) plus one `PlaceMarker` per
+// community place (F-048) — a second, visually distinct pin layer
+// (rounded-square badges, not pills). Tapping a stall marker navigates to
+// that store's profile, unchanged; tapping a place pin selects it (info card
+// renders in MapWithSheet, above this component). Tapping the map background
+// clears the selection. Takes the already-aggregated `stalls` (see
+// `buildStallMarkers`, computed once in MapWithSheet and shared with the
+// sheet list) plus the places query's `data` as props.
+// ---------------------------------------------------------------------------
+
 type MapSectionProps = {
   lat: number;
   lng: number;
-  data: NearbyListing[] | undefined;
+  stalls: StoreMarker[];
   places: CommunityPlace[] | undefined;
   onNavigateToStore: (storeId: string, storeName: string) => void;
   onSelectPlace: (place: CommunityPlace) => void;
@@ -224,41 +292,15 @@ type MapSectionProps = {
 function MapSection({
   lat,
   lng,
-  data,
+  stalls,
   places,
   onNavigateToStore,
   onSelectPlace,
   onDismissPlace,
 }: MapSectionProps) {
-  const storeMarkers = useMemo(() => {
-    const byStore = new Map<string, { storeName: string; lat: number; lng: number; categories: Set<ListingCategory> }>();
-    for (const listing of data ?? []) {
-      let entry = byStore.get(listing.storeId);
-      if (!entry) {
-        entry = {
-          storeName: listing.storeName,
-          lat: listing.lat,
-          lng: listing.lng,
-          categories: new Set(),
-        };
-        byStore.set(listing.storeId, entry);
-      }
-      entry.categories.add(listing.category);
-    }
-    return Array.from(byStore.entries()).map(([storeId, entry]): StoreMarker => ({
-      storeId,
-      storeName: entry.storeName,
-      lat: entry.lat,
-      lng: entry.lng,
-      // Sort by the shared enum's canonical order so the set is stable
-      // across refetches regardless of listing order in the response.
-      categories: CATEGORY_ORDER.filter((cat) => entry.categories.has(cat)),
-    }));
-  }, [data]);
-
   const initialRegion = useMemo(
-    () => computeInitialRegion({ lat, lng }, data),
-    [lat, lng, data],
+    () => computeInitialRegion({ lat, lng }, stalls),
+    [lat, lng, stalls],
   );
 
   return (
@@ -270,7 +312,7 @@ function MapSection({
           rather than the full joined category list means a category change
           beyond the visible slice that leaves the badge's pixels unchanged
           (same overflow count) does NOT force a pointless remount. */}
-      {storeMarkers.map((store) => (
+      {stalls.map((store) => (
         <StallMarker
           key={`${store.storeId}-${stallBadgeSignature(store.categories)}`}
           storeId={store.storeId}
@@ -331,11 +373,17 @@ function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterB
 }
 
 // ---------------------------------------------------------------------------
-// ListingsSheet — the draggable bottom sheet. Uses BottomSheetFlatList (not a
-// plain FlatList) so drag-to-resize and list-scroll gestures compose: a plain
-// FlatList inside a BottomSheet breaks that gesture handoff. SeasonalModule
-// and the category filter bar are the list's ListHeaderComponent so they
-// scroll away with the list rather than eating fixed sheet height.
+// StallsSheet — the draggable bottom sheet. Lists `StallCard` rows (F-050:
+// stall-first Home — a stall shows its produce as an icon row rather than
+// listing each item, and produce is added to cart from the stall's store
+// profile, not here). Uses BottomSheetFlatList (not a plain FlatList) so
+// drag-to-resize and list-scroll gestures compose: a plain FlatList inside a
+// BottomSheet breaks that gesture handoff. SeasonalModule and the category
+// filter bar are the list's ListHeaderComponent so they scroll away with the
+// list rather than eating fixed sheet height. `stalls` is the same
+// `buildStallMarkers` aggregation the map renders (see MapWithSheet) — one
+// source of truth, so the sheet and the pins never disagree; `data` (the raw
+// query result) is only consulted here for loading/error/empty state.
 // ---------------------------------------------------------------------------
 
 // Peek height is shared with mapOverlayStack.bottom so the place info card /
@@ -343,8 +391,9 @@ function CategoryFilterBar({ activeCategory, onSelectCategory }: CategoryFilterB
 const SHEET_PEEK_SNAP = "14%" as const;
 const SHEET_SNAP_POINTS = [SHEET_PEEK_SNAP, "48%", "90%"];
 
-type ListingsSheetProps = {
+type StallsSheetProps = {
   data: NearbyListing[] | undefined;
+  stalls: StoreMarker[];
   isLoading: boolean;
   error: { message: string } | null | undefined;
   onRetry: () => void;
@@ -355,8 +404,9 @@ type ListingsSheetProps = {
   onNavigateToStore: (storeId: string, storeName: string) => void;
 };
 
-function ListingsSheet({
+function StallsSheet({
   data,
+  stalls,
   isLoading,
   error,
   onRetry,
@@ -365,7 +415,7 @@ function ListingsSheet({
   onSelectProduce,
   onPressSearch,
   onNavigateToStore,
-}: ListingsSheetProps) {
+}: StallsSheetProps) {
   const header = useMemo(
     () => (
       <View>
@@ -378,22 +428,27 @@ function ListingsSheet({
 
         {error ? (
           <View style={styles.sheetCenteredState}>
-            <Text style={styles.stateText}>Could not load listings: {error.message}</Text>
+            <Text style={styles.stateText}>Could not load stalls: {error.message}</Text>
             <Pressable style={styles.retryButton} onPress={onRetry}>
               <Text style={styles.retryText}>Retry</Text>
             </Pressable>
           </View>
         ) : null}
 
-        {!isLoading && !error && data && data.length === 0 ? (
+        {/* Empty-state check drives off the derived `stalls` (post sold-out
+            filter), not raw `data` — an area where everything is sold out
+            must show the empty message, not a silent blank list. `data &&`
+            still gates on the query having resolved at least once. */}
+        {!isLoading && !error && data && stalls.length === 0 ? (
           <View style={styles.sheetCenteredState}>
-            <Text style={styles.stateText}>No produce nearby.</Text>
+            <Text style={styles.emptyEmoji}>{"\u{1F9FA}"}</Text>
+            <Text style={styles.stateText}>No stalls nearby.</Text>
             <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
           </View>
         ) : null}
       </View>
     ),
-    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce, onPressSearch],
+    [activeCategory, data, stalls, error, isLoading, onRetry, onSelectCategory, onSelectProduce, onPressSearch],
   );
 
   return (
@@ -404,14 +459,14 @@ function ListingsSheet({
       backgroundStyle={styles.sheetBackground}
     >
       <BottomSheetFlatList
-        data={data ?? []}
-        keyExtractor={(item) => item.id}
+        data={stalls}
+        keyExtractor={(item) => item.storeId}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={header}
         renderItem={({ item }) => (
-          <ListingCard
+          <StallCard
             item={item}
-            onPressStore={() => onNavigateToStore(item.storeId, item.storeName)}
+            onPress={() => onNavigateToStore(item.storeId, item.storeName)}
           />
         )}
       />
@@ -420,10 +475,12 @@ function ListingsSheet({
 }
 
 // ---------------------------------------------------------------------------
-// MapWithSheet — the granted-location body. Owns `activeCategory` and the
-// single shared `trpc.listings.nearby.useQuery` call so the full-screen map
-// markers and the sheet's listing list read from the same network request
-// and stay in sync when the category filter changes.
+// MapWithSheet — the granted-location body. Owns `activeCategory`, the single
+// shared `trpc.listings.nearby.useQuery` call, and the `stallMarkers`
+// aggregation (`buildStallMarkers`, F-050) derived from it — the full-screen
+// map markers and the sheet's stall list both render off this one aggregated
+// array, so they stay in sync when the category filter changes and never
+// duplicate the grouping logic.
 // ---------------------------------------------------------------------------
 
 type MapWithSheetProps = {
@@ -471,6 +528,17 @@ function MapWithSheet({
     { placeholderData: (prev) => prev },
   );
 
+  // Sold-out produce (quantity === 0 — same predicate ListingCard uses for
+  // its "Sold out" state) is excluded before aggregation so a fully sold-out
+  // stall drops off the map/sheet entirely, and a partially sold-out stall's
+  // icon row/count reflect only what's actually available.
+  const available = useMemo(() => (data ?? []).filter((listing) => listing.quantity > 0), [data]);
+
+  // Single source of truth for both the map pins and the sheet's StallCard
+  // rows — see buildStallMarkers. Recomputed only when the filtered listings
+  // change (i.e. on a real refetch, not on every render).
+  const stallMarkers = useMemo(() => buildStallMarkers(available), [available]);
+
   const handleRetry = useCallback(() => {
     void refetch();
   }, [refetch]);
@@ -482,7 +550,7 @@ function MapWithSheet({
       <MapSection
         lat={lat}
         lng={lng}
-        data={data}
+        stalls={stallMarkers}
         places={placesData}
         onNavigateToStore={onNavigateToStore}
         onSelectPlace={setSelectedPlace}
@@ -507,8 +575,9 @@ function MapWithSheet({
         <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
       </View>
 
-      <ListingsSheet
+      <StallsSheet
         data={data}
+        stalls={stallMarkers}
         isLoading={isLoading}
         error={error}
         onRetry={handleRetry}
@@ -840,6 +909,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxxl,
     paddingVertical: 48,
     gap: spacing.sm,
+  },
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: spacing.xs,
   },
   stateText: {
     fontSize: 16,
