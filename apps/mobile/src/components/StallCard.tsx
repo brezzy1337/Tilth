@@ -18,7 +18,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { ListingCategory } from "@homegrown/shared";
 import { Card } from "./Card";
 import { colors, spacing, type } from "../theme";
-import { CATEGORY_EMOJI } from "../theme/categoryEmoji";
+import { categoryEmoji } from "../theme/categoryEmoji";
 
 const MAX_VISIBLE_CATEGORIES = 6;
 
@@ -49,21 +49,23 @@ export function StallCard({ item, onPress }: Props) {
       accessibilityRole="button"
       accessibilityLabel={`${item.storeName}, ${itemsLabel}`}
     >
-      <Card style={styles.card}>
-        <View style={styles.row}>
-          <Text style={styles.name}>{item.storeName}</Text>
-          <Text style={styles.distance}>{item.distanceKm.toFixed(1)} km</Text>
-        </View>
-        <View style={styles.categoryRow}>
-          {visible.map((cat) => (
-            <Text key={cat} style={styles.categoryEmoji}>
-              {CATEGORY_EMOJI[cat]}
-            </Text>
-          ))}
-          {overflow > 0 ? <Text style={styles.overflow}>{`+${overflow}`}</Text> : null}
-        </View>
-        <Text style={styles.meta}>{itemsLabel}</Text>
-      </Card>
+      {({ pressed }) => (
+        <Card style={[styles.card, pressed ? styles.cardPressed : null]}>
+          <View style={styles.row}>
+            <Text style={styles.name}>{item.storeName}</Text>
+            <Text style={styles.distance}>{item.distanceKm.toFixed(1)} km</Text>
+          </View>
+          <View style={styles.categoryRow}>
+            {visible.map((cat) => (
+              <Text key={cat} style={styles.categoryEmoji}>
+                {categoryEmoji(cat)}
+              </Text>
+            ))}
+            {overflow > 0 ? <Text style={styles.overflow}>{`+${overflow}`}</Text> : null}
+          </View>
+          <Text style={styles.meta}>{itemsLabel}</Text>
+        </Card>
+      )}
     </Pressable>
   );
 }
@@ -71,6 +73,9 @@ export function StallCard({ item, onPress }: Props) {
 const styles = StyleSheet.create({
   card: {
     marginBottom: spacing.sm,
+  },
+  cardPressed: {
+    backgroundColor: colors.surfaceAlt,
   },
   row: {
     flexDirection: "row",
@@ -102,7 +107,6 @@ const styles = StyleSheet.create({
     fontSize: type.label.fontSize,
     fontWeight: type.label.fontWeight,
     color: colors.primary,
-    marginLeft: 2,
   },
   meta: {
     fontSize: 12,

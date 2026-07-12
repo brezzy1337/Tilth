@@ -95,7 +95,7 @@ import { FlatList as GestureFlatList } from "react-native-gesture-handler";
 // Map region fallback — used only when the device coords aren't usable for a
 // region (defensive; HomeScreen only mounts the map once location is
 // "granted", but MapSection keeps its own fallback chain in case that ever
-// changes upstream: user coords -> first listing's coords -> pilot-region
+// changes upstream: user coords -> first stall's coords -> pilot-region
 // default, so the map never crashes on missing input).
 // ---------------------------------------------------------------------------
 
@@ -199,6 +199,13 @@ function SeasonalModule({ onSelectProduce, onPressSearch }: SeasonalModuleProps)
 // ordered (canonical-enum-order) category set for the icon badge/row, a
 // listing count, and the stall's minimum per-listing `distanceKm` (computed
 // server-side via ST_Distance — every NearbyListing carries one).
+//
+// Callers are expected to filter out sold-out listings (`quantity === 0` —
+// the same predicate ListingCard uses to render its "Sold out" state) before
+// calling `buildStallMarkers`, so a stall whose entire inventory is sold out
+// drops off both the map and the sheet, and a partially sold-out stall's
+// icon row/count reflect only what's actually available. Kept out of this
+// function so the aggregation itself stays a simple, filter-free grouping.
 // ---------------------------------------------------------------------------
 
 type StoreMarker = {
@@ -216,7 +223,7 @@ type StoreMarker = {
 // insertion order in the `listings.nearby` response.
 const CATEGORY_ORDER = listingCategory.options;
 
-function buildStallMarkers(data: NearbyListing[] | undefined): StoreMarker[] {
+function buildStallMarkers(listings: NearbyListing[]): StoreMarker[] {
   const byStore = new Map<
     string,
     {
@@ -228,7 +235,7 @@ function buildStallMarkers(data: NearbyListing[] | undefined): StoreMarker[] {
       distanceKm: number;
     }
   >();
-  for (const listing of data ?? []) {
+  for (const listing of listings) {
     let entry = byStore.get(listing.storeId);
     if (!entry) {
       entry = {
@@ -428,15 +435,20 @@ function StallsSheet({
           </View>
         ) : null}
 
-        {!isLoading && !error && data && data.length === 0 ? (
+        {/* Empty-state check drives off the derived `stalls` (post sold-out
+            filter), not raw `data` — an area where everything is sold out
+            must show the empty message, not a silent blank list. `data &&`
+            still gates on the query having resolved at least once. */}
+        {!isLoading && !error && data && stalls.length === 0 ? (
           <View style={styles.sheetCenteredState}>
+            <Text style={styles.emptyEmoji}>{"\u{1F9FA}"}</Text>
             <Text style={styles.stateText}>No stalls nearby.</Text>
             <Text style={styles.stateSubText}>Check back soon or try a wider search.</Text>
           </View>
         ) : null}
       </View>
     ),
-    [activeCategory, data, error, isLoading, onRetry, onSelectCategory, onSelectProduce, onPressSearch],
+    [activeCategory, data, stalls, error, isLoading, onRetry, onSelectCategory, onSelectProduce, onPressSearch],
   );
 
   return (
@@ -516,10 +528,16 @@ function MapWithSheet({
     { placeholderData: (prev) => prev },
   );
 
+  // Sold-out produce (quantity === 0 — same predicate ListingCard uses for
+  // its "Sold out" state) is excluded before aggregation so a fully sold-out
+  // stall drops off the map/sheet entirely, and a partially sold-out stall's
+  // icon row/count reflect only what's actually available.
+  const available = useMemo(() => (data ?? []).filter((listing) => listing.quantity > 0), [data]);
+
   // Single source of truth for both the map pins and the sheet's StallCard
-  // rows — see buildStallMarkers. Recomputed only when the listings query's
-  // data changes (i.e. on a real refetch, not on every render).
-  const stallMarkers = useMemo(() => buildStallMarkers(data), [data]);
+  // rows — see buildStallMarkers. Recomputed only when the filtered listings
+  // change (i.e. on a real refetch, not on every render).
+  const stallMarkers = useMemo(() => buildStallMarkers(available), [available]);
 
   const handleRetry = useCallback(() => {
     void refetch();
@@ -891,6 +909,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xxxl,
     paddingVertical: 48,
     gap: spacing.sm,
+  },
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: spacing.xs,
   },
   stateText: {
     fontSize: 16,
