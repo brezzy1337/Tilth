@@ -30,6 +30,25 @@ function fakeRes(): ServerResponse {
   return {} as unknown as ServerResponse;
 }
 
+/** A res double that records writeHead/end calls, for routes that respond directly (not via trpcHandler/webhook spies). */
+function recordingRes(): ServerResponse & { statusCode: number; headers: Record<string, unknown>; body: string } {
+  const rec = {
+    statusCode: 0,
+    headers: {} as Record<string, unknown>,
+    body: "",
+    writeHead(status: number, headers?: Record<string, unknown>) {
+      rec.statusCode = status;
+      rec.headers = headers ?? {};
+      return rec;
+    },
+    end(chunk?: string) {
+      rec.body = chunk ?? "";
+      return rec;
+    },
+  };
+  return rec as unknown as ServerResponse & { statusCode: number; headers: Record<string, unknown>; body: string };
+}
+
 // ---------------------------------------------------------------------------
 // Build a listener with spy deps
 // ---------------------------------------------------------------------------
@@ -174,5 +193,79 @@ describe("createRequestListener — webhook routing", () => {
 
     expect(webhookSpy).not.toHaveBeenCalled();
     expect(trpcSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Public legal pages (F-052)
+// ---------------------------------------------------------------------------
+
+describe("createRequestListener — public legal pages", () => {
+  it("GET /legal/terms returns 200 text/html with the ToS title and the 10% platform fee phrase", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("GET", "/legal/terms");
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("text/html; charset=utf-8");
+    expect(res.headers["Cache-Control"]).toBe("public, max-age=3600");
+    expect(res.body).toContain("Terms of Service");
+    expect(res.body).toContain("10%");
+  });
+
+  it("GET /legal/privacy returns 200 text/html with the Privacy Policy title and the 30-day grace phrase", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("GET", "/legal/privacy");
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("text/html; charset=utf-8");
+    expect(res.headers["Cache-Control"]).toBe("public, max-age=3600");
+    expect(res.body).toContain("Privacy Policy");
+    expect(res.body).toContain("30-day grace");
+  });
+
+  it("POST /legal/terms → 405, does not call trpcHandler", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("POST", "/legal/terms");
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(405);
+  });
+
+  it("POST /legal/privacy → 405, does not call trpcHandler", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("POST", "/legal/privacy");
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(405);
+  });
+
+  it("unknown /legal/x is not handled here — falls through to trpcHandler (existing 404 fallback)", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("GET", "/legal/x");
+    listener(req, fakeRes());
+
+    expect(trpcSpy).toHaveBeenCalledTimes(1);
+    // Not rewritten like /trpc paths — passed through as-is for tRPC to 404.
+    expect(req.url).toBe("/legal/x");
+  });
+
+  it("GET /legal/terms?utm_source=app-store still matches (query string ignored for routing)", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("GET", "/legal/terms?utm_source=app-store");
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
   });
 });

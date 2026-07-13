@@ -47,12 +47,7 @@ import { ColorBadge } from "../components/ColorBadge";
 import { SectionHeader } from "../components/SectionHeader";
 import { getDeviceExpoPushToken } from "../push/pushNotifications";
 import { getPushPreference, setPushPreference } from "../push/pushPreference";
-import {
-  PRIVACY_POLICY_URL,
-  SUPPORT_EMAIL,
-  TERMS_OF_SERVICE_URL,
-  OSM_ATTRIBUTION,
-} from "../constants/legal";
+import { SUPPORT_EMAIL, OSM_ATTRIBUTION } from "../constants/legal";
 import type { AuthedNavigationProp } from "../navigation/types";
 import { colors, spacing, type } from "../theme";
 // app.json is the single source of truth for the app version shown in About
@@ -295,12 +290,12 @@ export function SettingsScreen() {
         <Card style={styles.sectionCard} flat>
           <SettingsRow
             label="Terms of Service"
-            onPress={() => void Linking.openURL(TERMS_OF_SERVICE_URL)}
+            onPress={() => navigation.navigate("Legal", { doc: "terms" })}
           />
           <View style={styles.divider} />
           <SettingsRow
             label="Privacy Policy"
-            onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)}
+            onPress={() => navigation.navigate("Legal", { doc: "privacy" })}
           />
           <View style={styles.divider} />
           <SettingsRow

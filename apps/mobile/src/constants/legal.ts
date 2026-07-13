@@ -5,14 +5,17 @@
  * support contact) points at the same place instead of hardcoding a string
  * inline.
  *
- * IMPORTANT: these pages do NOT exist yet as of F-051. `TERMS_OF_SERVICE_URL`
- * and `PRIVACY_POLICY_URL` must resolve to real, published pages before this
- * app is submitted to the App Store / Play Store — both stores require a
- * reachable privacy policy (and, practically, terms) at review time.
+ * As of F-052, Settings > About's "Terms of Service" / "Privacy Policy" rows
+ * push the native `LegalScreen` in-app (see src/screens/LegalScreen.tsx),
+ * not these URLs. `TERMS_OF_SERVICE_URL` and `PRIVACY_POLICY_URL` are the
+ * public web twins of that same `packages/shared` `LegalDocument` content,
+ * server-rendered as HTML at api.tilth.market/legal/{terms,privacy} — kept
+ * here for anything that needs a shareable web link (e.g. App Store Connect /
+ * Play Console metadata's required privacy-policy URL field).
  */
 
-export const TERMS_OF_SERVICE_URL = "https://tilth.market/terms";
-export const PRIVACY_POLICY_URL = "https://tilth.market/privacy";
+export const TERMS_OF_SERVICE_URL = "https://api.tilth.market/legal/terms";
+export const PRIVACY_POLICY_URL = "https://api.tilth.market/legal/privacy";
 
 /** mailto: target for "Contact support" — no support ticketing system yet, just email. */
 export const SUPPORT_EMAIL = "support@tilth.market";

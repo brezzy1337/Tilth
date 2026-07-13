@@ -70,6 +70,7 @@ import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { ChangePasswordScreen } from "./src/screens/ChangePasswordScreen";
 import { DeleteAccountScreen } from "./src/screens/DeleteAccountScreen";
 import { BlockedUsersScreen } from "./src/screens/BlockedUsersScreen";
+import { LegalScreen } from "./src/screens/LegalScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
@@ -289,6 +290,13 @@ function RootNavigator() {
             name="BlockedUsers"
             component={BlockedUsersScreen}
             options={{ title: "Blocked Users" }}
+          />
+          <AuthedStack.Screen
+            name="Legal"
+            component={LegalScreen}
+            options={({ route }) => ({
+              title: route.params.doc === "terms" ? "Terms of Service" : "Privacy Policy",
+            })}
           />
         </AuthedStack.Navigator>
       )}

@@ -88,6 +88,12 @@ export type AuthedStackParamList = {
   DeleteAccount: undefined;
   /** Blocked-users list sub-screen, pushed from Settings > Privacy. */
   BlockedUsers: undefined;
+  /**
+   * Terms of Service / Privacy Policy (F-052) — native render of the shared
+   * `LegalDocument` (`packages/shared`'s `TERMS_OF_SERVICE`/`PRIVACY_POLICY`),
+   * pushed from Settings > About in place of the old external `Linking.openURL`.
+   */
+  Legal: { doc: "terms" | "privacy" };
 };
 
 // Convenience aliases
