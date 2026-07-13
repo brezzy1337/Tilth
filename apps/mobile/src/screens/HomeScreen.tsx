@@ -34,8 +34,9 @@
  * ("© OpenStreetMap contributors") is required by ODbL since place data
  * derives from OSM, and floats bottom-left over the map alongside the card.
  *
- * Header: brand + greeting, plus compact Orders / Cart (badged) / Sign-out
+ * Header: brand + greeting, plus compact Orders / Cart (badged) / Settings
  * icons. Search and Sell live in the bottom tab bar (F-041), not here.
+ * Sign-out moved inside Settings (F-051).
  *
  * Sourcing entry point (F-049) — when `trpc.places.mine` is non-null (the
  * signed-in user is a linked community-place buyer), a "🧺 Sourcing for
@@ -596,7 +597,7 @@ function MapWithSheet({
 // ---------------------------------------------------------------------------
 
 export function HomeScreen({ navigation }: Props) {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const { itemCount } = useCart();
   const location = useDeviceLocation();
 
@@ -641,14 +642,14 @@ export function HomeScreen({ navigation }: Props) {
               </View>
             ) : null}
           </Pressable>
-          {/* Sign out — subtle account control */}
+          {/* Settings — account controls (sign out moved inside, F-051) */}
           <Pressable
             style={styles.iconButton}
-            onPress={() => void signOut()}
+            onPress={() => navigation.navigate("Settings")}
             accessibilityRole="button"
-            accessibilityLabel="Sign out"
+            accessibilityLabel="Settings"
           >
-            <Ionicons name="log-out-outline" size={22} color={colors.textMuted} />
+            <Ionicons name="settings-outline" size={22} color={colors.textMuted} />
           </Pressable>
         </View>
       </View>

@@ -64,12 +64,10 @@ import { parseArgs } from "node:util";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { sql, eq, and, asc } from "drizzle-orm";
 import { communityPlace, communityPlaceType, type CommunityPlaceType } from "@homegrown/shared";
-import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
+import { fail, getDb, closeDb, isMainModule, type OperatorDb } from "./lib.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -524,35 +522,6 @@ function printCandidatesTable(candidates: PlaceCandidate[]): void {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Database — lazy connection so importing this module (e.g. from a unit
-// test) never opens a DB connection or requires DATABASE_URL.
-// ---------------------------------------------------------------------------
-
-let pgClient: ReturnType<typeof postgres> | undefined;
-
-function getDb() {
-  if (!pgClient) {
-    const databaseUrl = process.env["DATABASE_URL"];
-    if (!databaseUrl) {
-      fail(
-        "DATABASE_URL is not set. This CLI talks directly to Postgres (operator tool), " +
-          "not the HTTP API — export DATABASE_URL (e.g. from apps/server/.env) first.",
-      );
-    }
-    const conn = dbConnection(databaseUrl);
-    pgClient =
-      typeof conn === "string"
-        ? postgres(conn, { max: 1 })
-        : postgres({ ...conn, max: 1 } as postgres.Options<Record<string, postgres.PostgresType>>);
-  }
-  return drizzle(pgClient, { schema });
-}
-
-async function closeDb(): Promise<void> {
-  if (pgClient) await pgClient.end();
-}
-
 /**
  * Runtime defense-in-depth: `community_places.type`/`.status` are plain text
  * columns (no DB CHECK), and `source: "manual"` candidates are human-edited
@@ -580,7 +549,7 @@ export function validateCommitableCandidate(
   return { ok: false, errors };
 }
 
-async function getPendingOrdered(db: ReturnType<typeof getDb>) {
+async function getPendingOrdered(db: OperatorDb) {
   return db
     .select({
       id: schema.communityPlaces.id,
@@ -678,7 +647,7 @@ async function cmdFetch(
  * (shouldn't happen for an insert/upsert).
  */
 export async function upsertCandidate(
-  db: ReturnType<typeof getDb>,
+  db: OperatorDb,
   c: PlaceCandidate,
 ): Promise<{ id: string; inserted: boolean } | undefined> {
   const point = sql`ST_SetSRID(ST_MakePoint(${c.lng}, ${c.lat}), 4326)::geography`;
@@ -730,7 +699,7 @@ export async function upsertCandidate(
  * row already covers this place.
  */
 export async function findNearbyDuplicate(
-  db: ReturnType<typeof getDb>,
+  db: OperatorDb,
   c: PlaceCandidate,
 ): Promise<{ id: string; name: string; source: string } | null> {
   const [existing] = await db
@@ -776,7 +745,7 @@ export type CommitOutcome =
  * plumbing. Returns undefined only if the DB driver returns no row.
  */
 export async function commitCandidate(
-  db: ReturnType<typeof getDb>,
+  db: OperatorDb,
   c: PlaceCandidate,
 ): Promise<CommitOutcome | undefined> {
   const duplicate = await findNearbyDuplicate(db, c);
@@ -917,11 +886,6 @@ async function cmdReviewDecision(
 // Entry point
 // ---------------------------------------------------------------------------
 
-function fail(message: string): never {
-  console.error(`\n✗ ${message}`);
-  process.exit(1);
-}
-
 const USAGE = `Community-places import CLI (F-048) — talks directly to Postgres (operator tool).
 
 Commands:
@@ -1036,8 +1000,7 @@ async function main(): Promise<void> {
 
 // Only run the CLI when this file is executed directly (`tsx scripts/import-places.ts …`),
 // never when a test imports it for the pure helper functions above.
-const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
-if (isMainModule) {
+if (isMainModule(import.meta.url)) {
   main().catch((err: unknown) => {
     fail(err instanceof Error ? err.message : String(err));
   });

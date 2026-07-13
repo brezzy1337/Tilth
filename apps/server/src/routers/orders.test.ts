@@ -378,13 +378,16 @@ describe("orders.create", () => {
   function makeOrderCtx(opts: {
     listingRows?: unknown[];
     storeRows?: unknown[];
+    /** F-051 — the `assertCallerActive` select; default = caller is active. */
+    callerActiveRows?: unknown[];
     stripeOverrides?: Partial<Context["stripe"]>;
     insertRows?: unknown[];
     updateRows?: unknown[];
     insertError?: unknown;
   }): Context {
-    // selectSequence: [listings query, store query]
+    // selectSequence: [caller-active query, listings query, store (+owner) query]
     const selectSequence: unknown[][] = [
+      opts.callerActiveRows ?? [{ deactivatedAt: null }],
       opts.listingRows ?? [
         {
           id: UUID_LISTING_1,
@@ -398,6 +401,7 @@ describe("orders.create", () => {
           id: UUID_STORE,
           stripeConnectAccountId: STRIPE_ACCOUNT_ID,
           chargesEnabled: true,
+          ownerDeactivatedAt: null,
         },
       ],
     ];
@@ -445,11 +449,16 @@ describe("orders.create", () => {
           const rows = selectSequence[count++] ?? [];
           const b: {
             from: () => typeof b;
+            innerJoin: () => typeof b;
             where: () => typeof b;
             limit: () => Promise<unknown[]>;
             then: (resolve: (v: unknown[]) => void) => void;
           } = {
             from: () => b,
+            // The store query joins `users` (F-051 ownerDeactivatedAt check) —
+            // innerJoin is a no-op here since `rows` already carries whatever
+            // shape this call slot needs (join fields included, if any).
+            innerJoin: () => b,
             where: () => b,
             limit: () => Promise.resolve(rows),
             then: (resolve: (v: unknown[]) => void) => Promise.resolve(rows).then(resolve),
@@ -634,6 +643,43 @@ describe("orders.create", () => {
         fulfillmentMethod: "pickup",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // F-051 — deactivation guards
+  // ---------------------------------------------------------------------------
+
+  it("rejects with UNAUTHORIZED when the caller's own account is deactivated", async () => {
+    const ctx = makeOrderCtx({ callerActiveRows: [{ deactivatedAt: new Date() }] });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.create({
+        items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "pickup",
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
+  });
+
+  it("treats a store whose owner has deactivated their account as NOT_FOUND (same as a nonexistent store)", async () => {
+    const ctx = makeOrderCtx({
+      storeRows: [
+        {
+          id: UUID_STORE,
+          stripeConnectAccountId: STRIPE_ACCOUNT_ID,
+          chargesEnabled: true,
+          ownerDeactivatedAt: new Date(),
+        },
+      ],
+    });
+    const caller = createCaller(ctx);
+
+    await expect(
+      caller.orders.create({
+        items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "pickup",
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
   it("throws UNAUTHORIZED when unauthenticated", async () => {

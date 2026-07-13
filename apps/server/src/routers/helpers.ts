@@ -12,7 +12,7 @@ import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, PushClient } from "../context";
 import type { DbOrTx } from "../db/order-transitions";
-import { stores, sourcingRequests, communityPlaces, conversations, pushTokens } from "../db/schema";
+import { stores, sourcingRequests, communityPlaces, conversations, pushTokens, users } from "../db/schema";
 import type { SourcingRequest, SourcingRequestDirection, SourcingRequestStatus } from "@homegrown/shared";
 
 // ---------------------------------------------------------------------------
@@ -361,4 +361,98 @@ export async function pushToUser(
     // triggering write is already committed.
     console.error("[push] notification failed", err instanceof Error ? err.message : String(err));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Deactivation (F-051) — TWO directions of coverage around a deactivated
+// account, both driven off the same `users.deactivatedAt` column (set by
+// `auth.deleteAccount`, soft-delete + 30-day grace; cleared by a
+// self-restoring `auth.login` within the grace window):
+//
+//   1. COUNTERPARTY direction — hides a deactivated seller/place owner from
+//      public discovery (`listings.nearby`, `sourcing.growers`, `garden.feed`,
+//      `places.nearby`'s `acceptsOffers`) and gates writes that would notify
+//      them (`stores.get` / `chat.start` via `resolveActiveStore`, `chat.send`,
+//      `sourcing.createRequest`/`createOffer`/`respond`).
+//   2. CALLER direction — refuses a write attempted BY a deactivated account
+//      (`assertCallerActive`, called at the top of: `orders.create`,
+//      `chat.start`/`send`, `sourcing.createRequest`/`createOffer`/`respond`/
+//      `withdraw`, `garden.createPhotoSet`/`createPhotoUploadUrls`/`createVideo`).
+//      A deactivated caller reading/browsing is NOT blocked — only writes are.
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw-SQL predicate: "the joined `users` alias is not deactivated". For
+ * hand-written `db.execute(sql\`…\`)` queries that already JOIN (or LEFT
+ * JOIN) a `users` row for the seller/store-owner/linked-buyer in question.
+ * `usersAlias` names that alias in the query's FROM/JOIN clauses (e.g.
+ * `sql\`u\``) — never interpolate anything but a fixed alias fragment here.
+ */
+export function activeUserClause(usersAlias: SQL): SQL {
+  return sql`${usersAlias}.deactivated_at IS NULL`;
+}
+
+/**
+ * Query-builder check: is `userId` currently deactivated? For procedures
+ * that resolve a single target user id via the query builder rather than a
+ * raw-SQL join (`chat.start`/`send`, `sourcing.createRequest`/`createOffer`/
+ * `respond`) — one lookup instead of six hand-rolled `deactivatedAt IS NOT
+ * NULL` checks.
+ */
+export async function isUserDeactivated(db: Db, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ deactivatedAt: users.deactivatedAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.deactivatedAt != null;
+}
+
+/**
+ * Throw UNAUTHORIZED (generic message — does not reveal WHY) when the CALLER
+ * (`userId`, always `ctx.user.id` — never a counterparty) is deactivated. Thin
+ * wrapper over `isUserDeactivated` for the write endpoints listed in the
+ * module-header comment above; call this FIRST, before any other authz/state
+ * check, so a deactivated caller never observes a different error shape than
+ * an active one for the same otherwise-invalid request.
+ */
+export async function assertCallerActive(db: Db, userId: string): Promise<void> {
+  if (await isUserDeactivated(db, userId)) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "This account is no longer active" });
+  }
+}
+
+/**
+ * Resolve a store by id, hiding a store whose owner has deactivated their
+ * account behind the SAME NOT_FOUND as a nonexistent store — the ONE
+ * stores⋈users + `ownerDeactivatedAt` + NOT_FOUND join previously hand-
+ * assembled identically by `stores.get` and `chat.start`. Single round-trip
+ * (the join lives inside this helper); preserves the exact "Store not found"
+ * message both callers already used.
+ */
+export async function resolveActiveStore(
+  db: Db,
+  storeId: string,
+): Promise<{ id: string; userId: string; name: string; logo: string | null; about: string | null }> {
+  const [row] = await db
+    .select({
+      id: stores.id,
+      userId: stores.userId,
+      name: stores.name,
+      logo: stores.logo,
+      about: stores.about,
+      // Not returned — used only to hide a deactivated owner's store behind
+      // the same NOT_FOUND as a nonexistent one.
+      ownerDeactivatedAt: users.deactivatedAt,
+    })
+    .from(stores)
+    .innerJoin(users, eq(users.id, stores.userId))
+    .where(eq(stores.id, storeId))
+    .limit(1);
+
+  if (!row || row.ownerDeactivatedAt) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Store not found" });
+  }
+
+  return { id: row.id, userId: row.userId, name: row.name, logo: row.logo, about: row.about };
 }

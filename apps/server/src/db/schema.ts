@@ -107,6 +107,19 @@ export const users = pgTable("users", {
   username: text("username").unique().notNull(),
   passwordHash: text("password_hash").notNull(),
   stripeCustomerId: text("stripe_customer_id"),
+  /**
+   * F-051 — soft-delete: set (alongside `deleteAfter`) by `auth.deleteAccount`;
+   * null = active account. A password-verified `auth.login` inside the grace
+   * window (`deleteAfter` still in the future) clears both fields, self-
+   * restoring the account. Once set, this hides the user's selling surfaces
+   * from public discovery (see `helpers.ts`'s `activeUserClause`/`isUserDeactivated`)
+   * but does NOT invalidate already-issued JWTs — auth is stateless (see
+   * `trpc.ts`'s `protectedProcedure` doc comment).
+   */
+  deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+  /** F-051 — the 30-day grace deadline; the operator purge CLI anonymizes
+   *  (never row-deletes) accounts past this timestamp. Null = active account. */
+  deleteAfter: timestamp("delete_after", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 

@@ -35,6 +35,16 @@ export type HealthResponse = z.infer<typeof healthResponse>;
 // public principal returned in tokens and stored in client state.
 // ---------------------------------------------------------------------------
 
+/**
+ * The password constraint shared by every auth/account-settings input that
+ * accepts a raw password (register, change-password, delete-account
+ * confirmation). Defined once so all call sites parse identically — never
+ * redeclare `z.string().min(8).max(100)` inline elsewhere.
+ */
+export const passwordSchema = z.string().min(8).max(100);
+
+export type Password = z.infer<typeof passwordSchema>;
+
 /** Input to `auth.register`. Username restricted to letters, digits, underscore. */
 export const registerInput = z.object({
   email: z.string().email(),
@@ -43,7 +53,7 @@ export const registerInput = z.object({
     .min(3)
     .max(30)
     .regex(/^[a-zA-Z0-9_]+$/, "Username may only contain letters, digits, and underscores"),
-  password: z.string().min(8).max(100),
+  password: passwordSchema,
 });
 
 export type RegisterInput = z.infer<typeof registerInput>;
@@ -81,6 +91,80 @@ export const authResponse = z.object({
 export type AuthResponse = z.infer<typeof authResponse>;
 
 // ---------------------------------------------------------------------------
+// Account settings (F-051) — change password, soft-delete account (30-day
+// grace period), blocked-users management, push-token unregister.
+// `passwordSchema` (above, in Auth) is reused here so password strength rules
+// stay identical across registration, password change, and delete confirmation.
+// ---------------------------------------------------------------------------
+
+/** Input to `auth.changePassword` (protected). */
+export const changePasswordInput = z.object({
+  currentPassword: passwordSchema,
+  newPassword: passwordSchema,
+});
+
+export type ChangePasswordInput = z.infer<typeof changePasswordInput>;
+
+/**
+ * Input to `auth.deleteAccount` (protected). Password re-confirmation guards
+ * against a hijacked/unattended session triggering a destructive action.
+ */
+export const deleteAccountInput = z.object({
+  password: passwordSchema,
+});
+
+export type DeleteAccountInput = z.infer<typeof deleteAccountInput>;
+
+/**
+ * Response from `auth.deleteAccount`. The account is soft-deleted with a
+ * 30-day grace period; `deleteAfter` is the ISO 8601 datetime the server will
+ * hard-delete the account, surfaced so the client can display a "you can
+ * still undo this until ..." message.
+ */
+export const deleteAccountOutput = z.object({
+  deleteAfter: z.string().datetime(),
+});
+
+export type DeleteAccountOutput = z.infer<typeof deleteAccountOutput>;
+
+/**
+ * A single blocked user, as returned by `chat.listBlocked`.
+ * Mirrors `blockUserInput`'s `userId` (below, in Messaging) — moderation acts
+ * on USER ids, not store ids.
+ */
+export const blockedUser = z.object({
+  userId: z.string().uuid(),
+  username: z.string(),
+  /** ISO 8601 datetime — when the caller blocked this user. */
+  blockedAt: z.string().datetime(),
+});
+
+export type BlockedUser = z.infer<typeof blockedUser>;
+
+/** Response from `chat.listBlocked` — capped at 200 blocked users. */
+export const listBlockedOutput = z.array(blockedUser).max(200);
+
+export type ListBlockedOutput = z.infer<typeof listBlockedOutput>;
+
+/** Input to `chat.unblockUser` (protected). Inverse of `blockUserInput`. */
+export const unblockUserInput = z.object({
+  userId: z.string().uuid(),
+});
+
+export type UnblockUserInput = z.infer<typeof unblockUserInput>;
+
+/**
+ * Input to `chat.unregisterPushToken` (protected). Mirrors `registerPushTokenInput`
+ * (below, in Messaging) but takes only the token — unregistering doesn't need
+ * `platform`, since the server looks the row up by token value alone.
+ */
+export const unregisterPushTokenInput = z.object({
+  token: z.string().min(1).max(200),
+});
+
+export type UnregisterPushTokenInput = z.infer<typeof unregisterPushTokenInput>;
+
+// ---------------------------------------------------------------------------
 // Trust tier — seller reliability badge (F-016)
 // Computed from TERMINAL order history only (fulfilled + cancelled + refunded);
 // pending_payment and paid orders are excluded (abandoned or still in-flight).
@@ -108,7 +192,9 @@ export const TRUST_TIER_THRESHOLDS = [
 
 /**
  * Pure function (no I/O) computing a seller's trust tier from terminal order counts.
- * `terminal = fulfilled + cancelled + refunded` (pending_payment/paid excluded).
+ * `terminal = fulfilled + cancelled + refunded` (pending_payment/paid excluded) —
+ * this must stay in sync with `TERMINAL_ORDER_STATUSES` (defined below, near
+ * `orderStatus`); see that constant's doc comment for the full consumer list.
  * Returns null when there is no terminal history, or when no threshold is met
  * (including terminal < 5, the minimum for the lowest tier, bronze).
  */
@@ -370,6 +456,21 @@ export const orderStatus = z.enum([
 ]);
 
 export type OrderStatus = z.infer<typeof orderStatus>;
+
+/**
+ * Order statuses considered terminal — the order lifecycle is complete and no
+ * further status transitions are valid. Single source of truth; consumed by:
+ * - `apps/server/src/db/order-transitions.ts` (`TERMINAL_ORDER_STATUSES`, the
+ *   transition-guard constant — keep both arrays in sync)
+ * - `computeTrustTier` above (sums `fulfilled + cancelled + refunded` terminal counts)
+ * - `stores.get` trust-tier aggregation (server query that builds the counts
+ *   passed into `computeTrustTier`)
+ */
+export const TERMINAL_ORDER_STATUSES = [
+  "fulfilled",
+  "cancelled",
+  "refunded",
+] as const satisfies readonly OrderStatus[];
 
 /** How the buyer receives the order. */
 export const fulfillmentMethod = z.enum(["pickup", "delivery"]);
@@ -1009,7 +1110,7 @@ export const markConversationReadInput = z.object({
 export type MarkConversationReadInput = z.infer<typeof markConversationReadInput>;
 
 /**
- * Input to `moderation.blockUser` (protected).
+ * Input to `chat.blockUser` (protected).
  * Blocking a user prevents further messages between the caller and `userId`;
  * enforcement happens server-side.
  */
@@ -1020,7 +1121,7 @@ export const blockUserInput = z.object({
 export type BlockUserInput = z.infer<typeof blockUserInput>;
 
 /**
- * Input to `moderation.reportMessage` (protected).
+ * Input to `chat.reportMessage` (protected).
  * Satisfies App Store Guideline 1.2 (apps with user-generated content must
  * offer a mechanism to report objectionable content).
  */

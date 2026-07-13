@@ -35,52 +35,15 @@
 
 import { parseArgs } from "node:util";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import postgres from "postgres";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, and, inArray, asc, count } from "drizzle-orm";
 import { registerInput } from "@homegrown/shared";
-import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
 import { hashPassword } from "../src/auth.js";
-
-// ---------------------------------------------------------------------------
-// Database — lazy connection so importing this module (e.g. from a unit
-// test) never opens a DB connection or requires DATABASE_URL.
-// ---------------------------------------------------------------------------
-
-let pgClient: ReturnType<typeof postgres> | undefined;
-
-function getDb() {
-  if (!pgClient) {
-    const databaseUrl = process.env["DATABASE_URL"];
-    if (!databaseUrl) {
-      fail(
-        "DATABASE_URL is not set. This CLI talks directly to Postgres (operator tool), " +
-          "not the HTTP API — export DATABASE_URL (e.g. from apps/server/.env) first.",
-      );
-    }
-    const conn = dbConnection(databaseUrl);
-    pgClient =
-      typeof conn === "string"
-        ? postgres(conn, { max: 1 })
-        : postgres({ ...conn, max: 1 } as postgres.Options<Record<string, postgres.PostgresType>>);
-  }
-  return drizzle(pgClient, { schema });
-}
-
-async function closeDb(): Promise<void> {
-  if (pgClient) await pgClient.end();
-}
+import { fail, getDb, closeDb, isMainModule } from "./lib.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function fail(message: string): never {
-  console.error(`\n✗ ${message}`);
-  process.exit(1);
-}
 
 /** 24 url-safe chars ≈ 144 bits of entropy; within registerInput's 8–100 bounds. */
 function generatePassword(): string {
@@ -386,8 +349,7 @@ async function main(): Promise<void> {
 
 // Only run the CLI when this file is executed directly (`tsx scripts/link-place-buyer.ts …`),
 // never when a test imports it for the pure helper functions above.
-const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
-if (isMainModule) {
+if (isMainModule(import.meta.url)) {
   main().catch((err: unknown) => {
     fail(err instanceof Error ? err.message : String(err));
   });

@@ -39,6 +39,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fail } from "./lib.js";
 import type {
   AuthResponse,
   ConversationsListOutput,
@@ -199,11 +200,6 @@ const mutate = <T>(api: string, proc: string, input?: unknown, token?: string) =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function fail(message: string): never {
-  console.error(`\n✗ ${message}`);
-  process.exit(1);
-}
 
 function generatePassword(): string {
   // 24 url-safe chars ≈ 144 bits of entropy; within registerInput's 8–100 bounds.

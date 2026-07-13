@@ -66,6 +66,10 @@ import { StoreProfileScreen } from "./src/screens/StoreProfileScreen";
 import { ConversationScreen } from "./src/screens/ConversationScreen";
 import { SourcingScreen } from "./src/screens/SourcingScreen";
 import { SourcingComposeScreen } from "./src/screens/SourcingComposeScreen";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
+import { ChangePasswordScreen } from "./src/screens/ChangePasswordScreen";
+import { DeleteAccountScreen } from "./src/screens/DeleteAccountScreen";
+import { BlockedUsersScreen } from "./src/screens/BlockedUsersScreen";
 import type {
   PreAuthStackParamList,
   AuthedStackParamList,
@@ -265,6 +269,26 @@ function RootNavigator() {
             name="SourcingCompose"
             component={SourcingComposeScreen}
             options={{ title: "New Request", presentation: "modal" }}
+          />
+          <AuthedStack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: "Settings" }}
+          />
+          <AuthedStack.Screen
+            name="ChangePassword"
+            component={ChangePasswordScreen}
+            options={{ title: "Change Password" }}
+          />
+          <AuthedStack.Screen
+            name="DeleteAccount"
+            component={DeleteAccountScreen}
+            options={{ title: "Delete Account" }}
+          />
+          <AuthedStack.Screen
+            name="BlockedUsers"
+            component={BlockedUsersScreen}
+            options={{ title: "Blocked Users" }}
           />
         </AuthedStack.Navigator>
       )}

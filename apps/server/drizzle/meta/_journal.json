@@ -113,6 +113,13 @@
       "when": 1783566165977,
       "tag": "0015_ambitious_luckman",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1783896648509,
+      "tag": "0016_account_settings",
+      "breakpoints": true
     }
   ]
 }

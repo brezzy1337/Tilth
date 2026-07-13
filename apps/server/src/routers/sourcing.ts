@@ -36,6 +36,10 @@
  *     chat.ts) — rather than duplicating them. `respond`/`withdraw` also
  *     call `assertSendRateLimit` (defense-in-depth: they insert a follow-up
  *     message + fire a push, same shape as the create mutations).
+ *   - F-051 — `createRequest`/`createOffer`/`respond`/`withdraw` all call
+ *     helpers.ts's `assertCallerActive` FIRST (a deactivated caller can't
+ *     write); each also treats a deactivated COUNTERPARTY as NOT_FOUND via
+ *     `isUserDeactivated` (see the per-procedure comments below).
  *   - Message-body summaries may say "fulfillment request" (user-facing
  *     copy) — no *code identifier* here uses that word.
  */
@@ -64,6 +68,9 @@ import {
   findLinkedApprovedPlace,
   upsertConversation,
   pushToUser,
+  isUserDeactivated,
+  assertCallerActive,
+  activeUserClause,
   type SourcingRequestFullRow,
 } from "./helpers";
 import type { DbOrTx } from "../db/order-transitions";
@@ -279,6 +286,13 @@ async function createSourcingExchange(tx: DbOrTx, args: CreateSourcingExchangeAr
 // respond/withdraw shared core — a guarded `status = 'pending'` UPDATE
 // (race-safe re: a concurrent respond/withdraw), a plain-text follow-up
 // message, and a `last_message_at` bump.
+//
+// F-051 note — `withdraw`'s bulk-teardown counterpart lives in
+// `auth.deleteAccount`: on account deletion, the caller's own PENDING
+// requests are withdrawn directly (a guarded UPDATE, same shape as
+// `applyGuardedTransition` below) WITHOUT going through this helper and
+// WITHOUT the follow-up message it inserts — see auth.ts's doc comment for
+// why (bulk teardown, not a single request + its conversation).
 // ---------------------------------------------------------------------------
 
 interface GuardedTransitionArgs {
@@ -336,6 +350,8 @@ export const sourcingRouter = router({
     .input(createSourcingRequestInput)
     .output(createSourcingRequestOutput)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const place = await resolveCallerPlace(ctx.db, ctx.user.id);
 
       const [targetStore] = await ctx.db
@@ -353,6 +369,13 @@ export const sourcingRouter = router({
           code: "BAD_REQUEST",
           message: "You can't send a sourcing request to your own store",
         });
+      }
+
+      // F-051 — no new sourcing requests to a deactivated grower. Same
+      // NOT_FOUND wording as "store not found" so a prober can't distinguish
+      // "no such store" from "store owner deactivated their account".
+      if (await isUserDeactivated(ctx.db, targetStore.userId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Store not found" });
       }
 
       if (await isBlockedEitherDirection(ctx.db, ctx.user.id, targetStore.userId)) {
@@ -401,6 +424,8 @@ export const sourcingRouter = router({
     .input(createSourcingOfferInput)
     .output(createSourcingRequestOutput)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const callerStore = await resolveCallerStore(ctx.db, ctx.user.id);
 
       const [targetPlace] = await ctx.db
@@ -418,6 +443,13 @@ export const sourcingRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Place not found" });
       }
       const placeLinkedUserId = targetPlace.linkedUserId;
+
+      // F-051 — a place whose linked buyer has deactivated their account is
+      // treated as not-linked (same NOT_FOUND as the `!linkedUserId` check
+      // above — existence not leaked).
+      if (await isUserDeactivated(ctx.db, placeLinkedUserId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Place not found" });
+      }
 
       if (await isBlockedEitherDirection(ctx.db, ctx.user.id, placeLinkedUserId)) {
         throw new TRPCError({
@@ -468,6 +500,8 @@ export const sourcingRouter = router({
     .input(respondSourcingRequestInput)
     .output(sourcingRequestSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const found = await loadSourcingRequestFull(ctx.db, input.requestId);
       if (!found || counterpartyUserId(found) !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Sourcing request not found" });
@@ -475,6 +509,13 @@ export const sourcingRouter = router({
 
       if (found.status !== "pending") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This request is no longer pending" });
+      }
+
+      // F-051 — respond inserts a follow-up message + push to the request's
+      // CREATOR; if that creator has since deactivated their account, treat
+      // the request as gone rather than send them a new message.
+      if (await isUserDeactivated(ctx.db, found.createdByUserId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Sourcing request not found" });
       }
 
       // Defense-in-depth: respond inserts a follow-up message + fires a push,
@@ -508,6 +549,8 @@ export const sourcingRouter = router({
     .input(withdrawSourcingRequestInput)
     .output(sourcingRequestSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const found = await loadSourcingRequestFull(ctx.db, input.requestId);
       if (!found || found.createdByUserId !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Sourcing request not found" });
@@ -613,6 +656,7 @@ export const sourcingRouter = router({
           COALESCE(sl.sample_names, ARRAY[]::text[]) AS sample_listings
         FROM stores s
         JOIN locations loc ON loc.store_id = s.id
+        JOIN users u ON u.id = s.user_id
         LEFT JOIN LATERAL (
           SELECT count(*)::int AS listing_count FROM listings l WHERE l.store_id = s.id
         ) lc ON true
@@ -622,6 +666,7 @@ export const sourcingRouter = router({
           ) t
         ) sl ON true
         WHERE ${geo.withinClause(geogColumn)}
+        AND ${activeUserClause(sql`u`)}
         ORDER BY ${geo.distanceExpr(geogColumn)} ASC
         LIMIT 30
       `);

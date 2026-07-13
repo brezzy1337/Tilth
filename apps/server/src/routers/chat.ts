@@ -16,6 +16,13 @@
  * `registerPushToken` — authed; upsert by token (re-registering moves ownership
  *                        to the new user — device changed accounts).
  *
+ * F-051 — three additions layered on top of the above (see helpers.ts's
+ * deactivation section for the full picture): `listBlocked` (the caller's
+ * blocked users), `unblockUser` (inverse of `blockUser`), and
+ * `unregisterPushToken` (caller-owned-only token delete). `start`/`send` also
+ * call `assertCallerActive` (deactivated caller can't write) and `start` uses
+ * `resolveActiveStore` (deactivated store owner -> NOT_FOUND, same as `stores.get`).
+ *
  * Rules that must hold here:
  *   - No imports of env, db/index, or SDKs — everything via ctx (`ctx.push`).
  *   - Participant checks that fail must surface NOT_FOUND (never leak whether
@@ -51,6 +58,9 @@ import {
   blockUserInput,
   reportMessageInput,
   registerPushTokenInput,
+  listBlockedOutput,
+  unblockUserInput,
+  unregisterPushTokenInput,
   type ChatMessage,
   type ConversationSummary,
 } from "@homegrown/shared";
@@ -72,6 +82,9 @@ import {
   loadSourcingRequestsByIds,
   upsertConversation,
   pushToUser,
+  isUserDeactivated,
+  assertCallerActive,
+  resolveActiveStore,
 } from "./helpers";
 import type { Db } from "../context";
 
@@ -307,15 +320,11 @@ export const chatRouter = router({
     .input(startConversationInput)
     .output(startConversationOutput)
     .mutation(async ({ input, ctx }) => {
-      const [targetStore] = await ctx.db
-        .select({ id: stores.id, userId: stores.userId })
-        .from(stores)
-        .where(eq(stores.id, input.storeId))
-        .limit(1);
+      await assertCallerActive(ctx.db, ctx.user.id);
 
-      if (!targetStore) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Store not found" });
-      }
+      // F-051 — hides a deactivated seller's store behind the same NOT_FOUND
+      // as a nonexistent one (shared with `stores.get`).
+      const targetStore = await resolveActiveStore(ctx.db, input.storeId);
 
       if (targetStore.userId === ctx.user.id) {
         throw new TRPCError({
@@ -509,10 +518,19 @@ export const chatRouter = router({
     .input(sendMessageInput)
     .output(chatMessage)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const participant = await resolveParticipant(ctx.db, input.conversationId, ctx.user.id);
       const callerId = ctx.user.id;
       const isCallerBuyer = participant.buyerId === callerId;
       const otherUserId = isCallerBuyer ? participant.storeUserId : participant.buyerId;
+
+      // F-051 — no new messages to a deactivated party. The existing thread
+      // stays readable (`messages`/`markRead`/`list` are unaffected); only
+      // sending a NEW message is blocked.
+      if (await isUserDeactivated(ctx.db, otherUserId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "This conversation is no longer available" });
+      }
 
       if (await isBlockedEitherDirection(ctx.db, callerId, otherUserId)) {
         throw new TRPCError({
@@ -660,6 +678,66 @@ export const chatRouter = router({
           target: pushTokens.token,
           set: { userId: ctx.user.id, platform: input.platform, updatedAt: new Date() },
         });
+
+      return { success: true };
+    }),
+
+  /**
+   * F-051 — the caller's blocked users, newest-block-first. Username is
+   * denormalized onto `blockedUser` (shared contract), so this joins to
+   * `users` rather than requiring a second round-trip on the client.
+   */
+  listBlocked: protectedProcedure.output(listBlockedOutput).query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        userId: userBlocks.blockedUserId,
+        username: users.username,
+        blockedAt: userBlocks.createdAt,
+      })
+      .from(userBlocks)
+      .innerJoin(users, eq(users.id, userBlocks.blockedUserId))
+      .where(eq(userBlocks.blockerUserId, ctx.user.id))
+      .orderBy(desc(userBlocks.createdAt))
+      .limit(200);
+
+    return rows.map((row) => ({
+      userId: row.userId,
+      username: row.username,
+      blockedAt: (row.blockedAt ?? new Date()).toISOString(),
+    }));
+  }),
+
+  /**
+   * F-051 — inverse of `blockUser`. Idempotent: deleting a block row that
+   * doesn't exist is a silent no-op, same convention as `blockUser`'s
+   * idempotent insert.
+   */
+  unblockUser: protectedProcedure
+    .input(unblockUserInput)
+    .output(z.object({ success: z.literal(true) }))
+    .mutation(async ({ input, ctx }) => {
+      await ctx.db
+        .delete(userBlocks)
+        .where(
+          and(eq(userBlocks.blockerUserId, ctx.user.id), eq(userBlocks.blockedUserId, input.userId)),
+        );
+
+      return { success: true };
+    }),
+
+  /**
+   * F-051 — deletes a push token row, but ONLY if it belongs to the caller
+   * (WHERE token AND user_id = caller). A token that doesn't exist, or
+   * belongs to someone else (e.g. `registerPushToken` already moved it to a
+   * different account), is a silent no-op — never leaks which case occurred.
+   */
+  unregisterPushToken: protectedProcedure
+    .input(unregisterPushTokenInput)
+    .output(z.object({ success: z.literal(true) }))
+    .mutation(async ({ input, ctx }) => {
+      await ctx.db
+        .delete(pushTokens)
+        .where(and(eq(pushTokens.token, input.token), eq(pushTokens.userId, ctx.user.id)));
 
       return { success: true };
     }),

@@ -4,10 +4,26 @@
  * `usePushNotifications(enabled)` is mounted once in RootNavigator and armed
  * when auth resolves to signedIn. It:
  *   1. Requests notification permission (non-blocking if denied), fetches the
- *      Expo push token, and registers it via `chat.registerPushToken`.
+ *      Expo push token, and registers it via `chat.registerPushToken` — but
+ *      ONLY when the user hasn't explicitly turned push off in Settings
+ *      (F-051's `getPushPreference`, persisted via SecureStore; defaults to
+ *      on, matching pre-F-051 behaviour). Symmetrically, when the preference
+ *      IS off, it best-effort unregisters the device token instead (no
+ *      permission prompt — only if permission was already granted). This
+ *      self-heals either direction every launch: a registration that failed
+ *      to reach the server previously gets retried here, and — the mirror
+ *      case — an unregistration that failed in Settings (see
+ *      SettingsScreen's `handleTogglePush`, which itself reverts on failure,
+ *      but can't self-heal a case where the app was killed mid-request)
+ *      doesn't leave the server pushing to a device the user turned off.
  *   2. Listens for notification taps and deep-links pushes carrying a
  *      `data.conversationId` into the Conversation screen (including the
  *      cold-start tap, via getLastNotificationResponseAsync).
+ *
+ * `getDeviceExpoPushToken` is exported separately (F-051) so SettingsScreen's
+ * master push toggle can resolve the SAME device token this hook would, for
+ * both directions: turning ON re-registers it, turning OFF unregisters it
+ * (`chat.unregisterPushToken` needs the token value, not just an intent).
  *
  * Every step is wrapped so a failure (simulator, denied permission, no
  * network, missing projectId) can never break app start — push is strictly
@@ -23,6 +39,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { trpc } from "../api/trpc";
 import { navigateToConversation } from "../navigation/rootNavigation";
+import { getPushPreference } from "./pushPreference";
 
 // Show chat pushes as banners while the app is foregrounded (quiet: no sound
 // or badge mutation — the inbox's unread badges are the source of truth).
@@ -43,47 +60,98 @@ function conversationIdFromResponse(
   return typeof raw === "string" && raw.length > 0 ? raw : null;
 }
 
+/**
+ * Resolve the current device's Expo push token — the same steps `register()`
+ * below performs, factored out for F-051's Settings toggle to reuse.
+ *
+ * `requestPermission` defaults to true (prompts if not yet decided — the
+ * "turn push ON" path). Pass `false` for the "turn push OFF" path: we only
+ * need the token IF permission was already granted; there's no reason to
+ * pop a permission prompt just to unregister.
+ *
+ * Returns null on any failure (simulator, unsupported platform, denied/
+ * undecided permission, or an expo-notifications error) — every caller
+ * treats push as strictly best-effort.
+ */
+export async function getDeviceExpoPushToken(
+  options: { requestPermission?: boolean } = {},
+): Promise<string | null> {
+  const { requestPermission = true } = options;
+  try {
+    // Push tokens only exist on physical devices.
+    if (!Device.isDevice) return null;
+    if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
+
+    if (Platform.OS === "android") {
+      // A channel must exist before Android 8+ shows anything.
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "Messages",
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+
+    const current = await Notifications.getPermissionsAsync();
+    let granted = current.granted;
+    if (!granted && requestPermission && current.canAskAgain) {
+      granted = (await Notifications.requestPermissionsAsync()).granted;
+    }
+    if (!granted) return null; // Denied is fine — the app works without push.
+
+    const { data: token } = await Notifications.getExpoPushTokenAsync();
+    return token ?? null;
+  } catch (err) {
+    // Best-effort only — log and move on, never surface to the user.
+    console.warn(
+      "[push] token resolution failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
 export function usePushNotifications(enabled: boolean): void {
   const registerPushToken = trpc.chat.registerPushToken.useMutation();
-  // Keep the latest mutation object in a ref so the effect doesn't re-run
-  // (and re-register) every render.
+  const unregisterPushToken = trpc.chat.unregisterPushToken.useMutation();
+  // Keep the latest mutation objects in refs so the effect doesn't re-run
+  // (and re-register/re-unregister) every render.
   const registerRef = useRef(registerPushToken);
   registerRef.current = registerPushToken;
+  const unregisterRef = useRef(unregisterPushToken);
+  unregisterRef.current = unregisterPushToken;
 
-  // --- Token registration -------------------------------------------------
+  // --- Token registration (ON) / unregistration (OFF) reconciliation ------
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
 
     async function register() {
       try {
-        // Push tokens only exist on physical devices.
-        if (!Device.isDevice) return;
-        if (Platform.OS !== "ios" && Platform.OS !== "android") return;
+        // F-051 — respect the Settings master toggle before touching
+        // permissions/tokens at all; defaults to on for pre-F-051 installs.
+        const preferenceEnabled = await getPushPreference();
 
-        if (Platform.OS === "android") {
-          // A channel must exist before Android 8+ shows anything.
-          await Notifications.setNotificationChannelAsync("default", {
-            name: "Messages",
-            importance: Notifications.AndroidImportance.DEFAULT,
-          });
+        if (!preferenceEnabled) {
+          // OFF-direction self-heal, symmetric with the ON-direction
+          // registration below: best-effort fetch the device token WITHOUT
+          // prompting for permission (`requestPermission: false` — no reason
+          // to ask just to turn something off), and unregister it. Swallows
+          // failure same as everything else here — this is a reconciliation
+          // pass, not a user-facing action.
+          const token = await getDeviceExpoPushToken({ requestPermission: false });
+          if (cancelled || !token) return;
+
+          unregisterRef.current.mutate({ token });
+          return;
         }
 
-        const current = await Notifications.getPermissionsAsync();
-        let granted = current.granted;
-        if (!granted && current.canAskAgain) {
-          granted = (await Notifications.requestPermissionsAsync()).granted;
-        }
-        if (!granted) return; // Denied is fine — the app works without push.
-
-        const { data: token } = await Notifications.getExpoPushTokenAsync();
+        const token = await getDeviceExpoPushToken();
         if (cancelled || !token) return;
 
-        registerRef.current.mutate({ token, platform: Platform.OS });
+        registerRef.current.mutate({ token, platform: Platform.OS as "ios" | "android" });
       } catch (err) {
         // Best-effort only — log and move on, never surface to the user.
         console.warn(
-          "[push] registration skipped:",
+          "[push] registration reconciliation skipped:",
           err instanceof Error ? err.message : String(err),
         );
       }

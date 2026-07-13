@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTrustTier } from "./index.js";
+import { computeTrustTier, TERMINAL_ORDER_STATUSES } from "./index.js";
 
 describe("computeTrustTier", () => {
   it("returns null when there is no terminal order history", () => {
@@ -66,5 +66,45 @@ describe("computeTrustTier", () => {
 
   it("stays null for a perfect rate on volume below the bronze minimum (4/4)", () => {
     expect(computeTrustTier({ fulfilled: 4, cancelled: 0, refunded: 0 })).toBeNull();
+  });
+
+  // DRIFT-TRIPWIRE: computeTrustTier sums `fulfilled + cancelled + refunded` by
+  // hand rather than iterating TERMINAL_ORDER_STATUSES. If a future order status
+  // is added to that terminal set (or the set is reordered/renamed), these two
+  // assertions catch the drift in this package instead of silently under/over-
+  // counting terminal orders — see the doc comments on TERMINAL_ORDER_STATUSES
+  // and computeTrustTier in ./index.ts for the full consumer list.
+  describe("drift tripwire: TERMINAL_ORDER_STATUSES vs computeTrustTier's summed fields", () => {
+    it("TERMINAL_ORDER_STATUSES is exactly [fulfilled, cancelled, refunded]", () => {
+      // Guards against silent edits to the exported constant itself.
+      expect(TERMINAL_ORDER_STATUSES).toEqual(["fulfilled", "cancelled", "refunded"]);
+    });
+
+    it("the count fields computeTrustTier sums match TERMINAL_ORDER_STATUSES exactly", () => {
+      // Build a `counts` object purely from TERMINAL_ORDER_STATUSES (no hardcoded
+      // field names) and confirm it still produces the expected tier. If a status
+      // is added to TERMINAL_ORDER_STATUSES without a matching field in
+      // computeTrustTier's `counts` param, this either fails to type-check or the
+      // extra status is silently dropped from the sum — either way, a maintainer
+      // must update computeTrustTier (and this test) in lockstep.
+      const perStatusCount = 10; // 3 statuses * 10 = 30 terminal orders, all "fulfilled" → gold boundary
+      const counts = Object.fromEntries(
+        TERMINAL_ORDER_STATUSES.map((status) => [status, perStatusCount]),
+      ) as Record<(typeof TERMINAL_ORDER_STATUSES)[number], number>;
+
+      expect(Object.keys(counts).sort()).toEqual(
+        [...TERMINAL_ORDER_STATUSES].sort(),
+      );
+
+      // fulfilled 10 / terminal 30 → rate 0.333, below every threshold → null.
+      expect(computeTrustTier(counts)).toBeNull();
+
+      // Skew all volume onto "fulfilled" (rate 1.0, terminal 30) → gold boundary.
+      const allFulfilled = { fulfilled: 30, cancelled: 0, refunded: 0 };
+      expect(Object.keys(allFulfilled).sort()).toEqual(
+        [...TERMINAL_ORDER_STATUSES].sort(),
+      );
+      expect(computeTrustTier(allFulfilled)).toBe("gold");
+    });
   });
 });

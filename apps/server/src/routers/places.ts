@@ -29,7 +29,7 @@ import {
 } from "@homegrown/shared";
 import { sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
-import { geoRadius, findLinkedApprovedPlace } from "./helpers";
+import { geoRadius, findLinkedApprovedPlace, activeUserClause } from "./helpers";
 
 export const placesRouter = router({
   /**
@@ -76,8 +76,13 @@ export const placesRouter = router({
           ${geo.distanceExpr(geogColumn)} AS distance_m,
           ST_Y(cp.location::geometry) AS lat,
           ST_X(cp.location::geometry) AS lng,
-          (cp.linked_user_id IS NOT NULL) AS accepts_offers
+          -- F-051: a place "accepts offers" only if it has a linked buyer AND
+          -- that buyer's account isn't deactivated. LEFT JOIN so places with
+          -- no linked user still return a row (lu.deactivated_at is then NULL,
+          -- but the linked_user_id IS NOT NULL half of the AND already fails).
+          (cp.linked_user_id IS NOT NULL AND ${activeUserClause(sql`lu`)}) AS accepts_offers
         FROM community_places cp
+        LEFT JOIN users lu ON lu.id = cp.linked_user_id
         WHERE cp.status = 'approved'
         AND ${geo.withinClause(geogColumn)}
         ${typeFilter}

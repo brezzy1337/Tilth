@@ -5,6 +5,8 @@
  *   primary   — solid fresh green, white label (default)
  *   secondary — outlined green, green label
  *   ghost     — no border/fill, green label (for low-emphasis actions)
+ *   danger    — solid warm red, white label (destructive actions, e.g.
+ *               delete account, report message)
  *
  * Full-width by default (matches the legacy button rows in YourStandScreen);
  * pass `fullWidth={false}` for inline/auto-sized buttons.
@@ -23,7 +25,7 @@ import {
 } from "react-native";
 import { colors, radii, spacing, type } from "../theme";
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 type Props = {
   title: string;
@@ -46,7 +48,7 @@ export function Button({
 }: Props) {
   const isDisabled = disabled || loading;
   const spinnerColor =
-    variant === "primary" ? colors.onPrimary : colors.primary;
+    variant === "primary" || variant === "danger" ? colors.onPrimary : colors.primary;
 
   return (
     <Pressable
@@ -102,6 +104,9 @@ const variantStyles = StyleSheet.create({
   ghost: {
     backgroundColor: "transparent",
   },
+  danger: {
+    backgroundColor: colors.danger,
+  },
 });
 
 const pressedVariantStyles = StyleSheet.create({
@@ -114,6 +119,9 @@ const pressedVariantStyles = StyleSheet.create({
   ghost: {
     backgroundColor: colors.primarySoft,
   },
+  danger: {
+    backgroundColor: colors.dangerPressed,
+  },
 });
 
 const variantLabelStyles = StyleSheet.create({
@@ -125,5 +133,8 @@ const variantLabelStyles = StyleSheet.create({
   },
   ghost: {
     color: colors.primary,
+  },
+  danger: {
+    color: colors.onPrimary,
   },
 });

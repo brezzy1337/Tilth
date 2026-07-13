@@ -24,7 +24,8 @@
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",
     "import-places": "tsx scripts/import-places.ts",
-    "link-place-buyer": "tsx scripts/link-place-buyer.ts"
+    "link-place-buyer": "tsx scripts/link-place-buyer.ts",
+    "purge-deleted-accounts": "tsx scripts/purge-deleted-accounts.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "7.21.0",

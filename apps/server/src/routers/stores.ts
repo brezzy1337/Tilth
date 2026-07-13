@@ -19,6 +19,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
 import { stores, orders } from "../db/schema";
+import { resolveActiveStore } from "./helpers";
 
 export const storesRouter = router({
   /**
@@ -141,31 +142,20 @@ export const storesRouter = router({
    * Only exposes the buyer-safe subset: id, name, logo, about, trustTier.
    * userId and stripeConnectAccountId are intentionally omitted.
    *
-   * F-016 — trustTier is computed from TERMINAL order counts only
-   * (fulfilled/cancelled/refunded); pending_payment/paid/disputed are excluded
+   * F-016 — trustTier is computed from TERMINAL order counts only (the SAME
+   * set as `TERMINAL_ORDER_STATUSES`, packages/shared — currently
+   * fulfilled/cancelled/refunded); pending_payment/paid/disputed are excluded
    * via the FILTER clauses below. computeTrustTier (shared) owns the thresholds.
+   *
+   * F-051 — hides a deactivated seller's public profile behind the same
+   * NOT_FOUND as a nonexistent store, via helpers.ts's `resolveActiveStore`
+   * (shared with `chat.start`).
    */
   get: publicProcedure
     .input(getStoreInput)
     .output(storeProfile)
     .query(async ({ input, ctx }) => {
-      const [found] = await ctx.db
-        .select({
-          id: stores.id,
-          name: stores.name,
-          logo: stores.logo,
-          about: stores.about,
-        })
-        .from(stores)
-        .where(eq(stores.id, input.storeId))
-        .limit(1);
-
-      if (!found) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Store not found",
-        });
-      }
+      const found = await resolveActiveStore(ctx.db, input.storeId);
 
       // Single conditional-aggregation query over orders_store_id_idx.
       // No GROUP BY, so this always returns exactly one row (all zeros when the
