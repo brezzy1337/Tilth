@@ -71,7 +71,7 @@ export const TERMS_OF_SERVICE: LegalDocument = {
     {
       heading: "Deleting your account",
       paragraphs: [
-        "You can delete your account in Settings. Deletion is blocked while you have orders in progress. After you confirm, your account is deactivated immediately and permanently anonymized after a 30-day grace period — logging back in within those 30 days restores it. Records we're required to keep (like transaction history) are retained in anonymized form.",
+        "You can delete your account in Settings. Deletion is blocked while you have orders in progress. After you confirm, your account is deactivated immediately — logging back in within the 30-day grace period restores it. Once the grace period ends, your account is permanently anonymized in periodic maintenance runs. Records we're required to keep (like transaction history) are retained in anonymized form.",
       ],
     },
     {
@@ -104,7 +104,7 @@ export const PRIVACY_POLICY: LegalDocument = {
       paragraphs: [],
       bullets: [
         "Account: your email, username, and password. Passwords are stored only as a cryptographic hash — we can't read them.",
-        "Your stand (sellers): store name, description, photos, listings, and the stand's address and location, which are shown to nearby buyers.",
+        "Your stand (sellers): store name, description, photos, listings, and the address you enter for your stand. Buyers see your stand as a map pin with a distance — the exact address text is used to place that pin and is not otherwise displayed.",
         "Location: the app uses your device's location to show nearby stalls, places, and produce. Your device location is used for those searches and is not stored on our servers. (Seller stand addresses, which sellers enter themselves, are stored.)",
         "Orders and payments: order details, amounts, tips, and fulfillment status. Payments are processed by Stripe — your card details go directly to Stripe and are never stored on our servers. Sellers' payout and identity-verification information is collected by Stripe Connect under Stripe's privacy policy.",
         "Messages: conversations between buyers and sellers (including structured fulfillment requests) are stored so your inbox works. If a message is reported, our team reviews it.",
@@ -130,7 +130,7 @@ export const PRIVACY_POLICY: LegalDocument = {
       bullets: [
         "Notifications: toggle push notifications off in Settings (or in your device's system settings).",
         "Blocking: block or unblock users in Messages and Settings; blocked users can't message you.",
-        "Delete your account: Settings → Delete account. Your account deactivates immediately, disappears from the marketplace, and is permanently anonymized after a 30-day grace period (log back in within 30 days to restore it). Transaction records we must retain are kept in anonymized form; your email, username, and password hash are scrubbed.",
+        "Delete your account: Settings → Delete account. Your account deactivates immediately, disappears from the marketplace, and can be restored by logging back in within the 30-day grace period. After the grace period ends, your account is permanently anonymized in periodic maintenance runs: your email, username, and password hash are scrubbed, and transaction records we must retain are kept in anonymized form.",
       ],
     },
     {

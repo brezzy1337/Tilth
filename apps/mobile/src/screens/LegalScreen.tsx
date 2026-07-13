@@ -40,6 +40,12 @@ export function LegalScreen({ route }: Props) {
   const { doc } = route.params;
   const document = DOCUMENTS[doc];
 
+  // Both internal call sites pass a literal, but a future deep link could
+  // hand this screen an arbitrary string — render nothing instead of crashing.
+  if (!document) {
+    return null;
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
