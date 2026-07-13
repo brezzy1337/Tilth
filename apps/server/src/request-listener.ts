@@ -11,6 +11,11 @@
  *                              first — optional dep, only wired when the caller
  *                              supplies `webhookMux`, so existing callers/tests
  *                              that omit it are unaffected)
+ *   GET  /legal/terms      →  public Terms of Service HTML page (F-052, no auth)
+ *   GET  /legal/privacy    →  public Privacy Policy HTML page (F-052, no auth)
+ *                              Non-GET on either path → 405. These are static,
+ *                              server-rendered pages so App Store Connect /
+ *                              Play Console metadata has real URLs to link to.
  *   /trpc/**               →  tRPC handler after stripping the /trpc prefix
  *                              (canonical path; matches mobile client's httpBatchLink base)
  *   /**                    →  tRPC handler, path unchanged
@@ -31,6 +36,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { handleStripeWebhookRequest } from "./webhook";
 import type { handleMuxWebhookRequest } from "./webhook-mux";
+import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "@homegrown/shared";
+import { renderLegalHtml } from "./legal-html";
+
+const LEGAL_PAGES: Record<string, string> = {
+  "/legal/terms": renderLegalHtml(TERMS_OF_SERVICE),
+  "/legal/privacy": renderLegalHtml(PRIVACY_POLICY),
+};
 
 export type TrpcHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -67,6 +79,26 @@ export function createRequestListener(deps: {
 
     if (req.method === "POST" && req.url === "/webhooks/mux" && deps.webhookMux) {
       return deps.webhookMux.handle(req, res, deps.webhookMux.opts);
+    }
+
+    // Public legal pages (F-052) — no auth, static server-rendered HTML.
+    // Only exact matches on /legal/terms and /legal/privacy are handled here;
+    // anything else under /legal/** (e.g. /legal/x) falls through to the tRPC
+    // handler, which 404s it like any other unrecognized path.
+    const legalPath = req.url?.split("?")[0];
+    if (legalPath !== undefined && Object.prototype.hasOwnProperty.call(LEGAL_PAGES, legalPath)) {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", Allow: "GET" });
+        res.end("Method Not Allowed");
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "public, max-age=3600",
+      });
+      res.end(LEGAL_PAGES[legalPath]);
+      return;
     }
 
     // Strip the canonical `/trpc` path prefix when present so that the tRPC

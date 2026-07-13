@@ -1227,3 +1227,13 @@ export const myPlaceOutput = z
   .nullable();
 
 export type MyPlaceOutput = z.infer<typeof myPlaceOutput>;
+
+// ---------------------------------------------------------------------------
+// Legal — Terms of Service and Privacy Policy (F-052)
+// Single source of truth rendered by the server (HTML pages) and mobile
+// (native screen). See `legal.ts` for the drafting note and NOT-LEGAL-ADVICE
+// disclaimer.
+// ---------------------------------------------------------------------------
+
+export type { LegalSection, LegalDocument } from "./legal.js";
+export { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal.js";
