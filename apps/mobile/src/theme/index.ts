@@ -47,8 +47,12 @@ export const colors = {
   textMuted: "#7C8377",
   border: "#E5E0D3",
 
-  // Danger — warm red
+  // Danger — warm red. `dangerPressed` follows the same ~20%-darken-per-
+  // channel derivation as `primaryPressed` above (192,57,43 * 0.8 ≈ 154,46,34)
+  // so solid-danger buttons (delete account, report message) get the same
+  // pressed-state feedback solid-primary buttons do.
   danger: "#C0392B",
+  dangerPressed: "#9A2E22",
   dangerSoft: "#F9E4E1",
 
   // Fixed white for text on solid-color buttons/badges

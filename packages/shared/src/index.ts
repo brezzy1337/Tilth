@@ -128,7 +128,7 @@ export const deleteAccountOutput = z.object({
 export type DeleteAccountOutput = z.infer<typeof deleteAccountOutput>;
 
 /**
- * A single blocked user, as returned by `moderation.listBlocked`.
+ * A single blocked user, as returned by `chat.listBlocked`.
  * Mirrors `blockUserInput`'s `userId` (below, in Messaging) — moderation acts
  * on USER ids, not store ids.
  */
@@ -141,12 +141,12 @@ export const blockedUser = z.object({
 
 export type BlockedUser = z.infer<typeof blockedUser>;
 
-/** Response from `moderation.listBlocked` — capped at 200 blocked users. */
+/** Response from `chat.listBlocked` — capped at 200 blocked users. */
 export const listBlockedOutput = z.array(blockedUser).max(200);
 
 export type ListBlockedOutput = z.infer<typeof listBlockedOutput>;
 
-/** Input to `moderation.unblockUser` (protected). Inverse of `blockUserInput`. */
+/** Input to `chat.unblockUser` (protected). Inverse of `blockUserInput`. */
 export const unblockUserInput = z.object({
   userId: z.string().uuid(),
 });
@@ -154,7 +154,7 @@ export const unblockUserInput = z.object({
 export type UnblockUserInput = z.infer<typeof unblockUserInput>;
 
 /**
- * Input to `push.unregisterToken` (protected). Mirrors `registerPushTokenInput`
+ * Input to `chat.unregisterPushToken` (protected). Mirrors `registerPushTokenInput`
  * (below, in Messaging) but takes only the token — unregistering doesn't need
  * `platform`, since the server looks the row up by token value alone.
  */
@@ -192,7 +192,9 @@ export const TRUST_TIER_THRESHOLDS = [
 
 /**
  * Pure function (no I/O) computing a seller's trust tier from terminal order counts.
- * `terminal = fulfilled + cancelled + refunded` (pending_payment/paid excluded).
+ * `terminal = fulfilled + cancelled + refunded` (pending_payment/paid excluded) —
+ * this must stay in sync with `TERMINAL_ORDER_STATUSES` (defined below, near
+ * `orderStatus`); see that constant's doc comment for the full consumer list.
  * Returns null when there is no terminal history, or when no threshold is met
  * (including terminal < 5, the minimum for the lowest tier, bronze).
  */
@@ -454,6 +456,21 @@ export const orderStatus = z.enum([
 ]);
 
 export type OrderStatus = z.infer<typeof orderStatus>;
+
+/**
+ * Order statuses considered terminal — the order lifecycle is complete and no
+ * further status transitions are valid. Single source of truth; consumed by:
+ * - `apps/server/src/db/order-transitions.ts` (`TERMINAL_ORDER_STATUSES`, the
+ *   transition-guard constant — keep both arrays in sync)
+ * - `computeTrustTier` above (sums `fulfilled + cancelled + refunded` terminal counts)
+ * - `stores.get` trust-tier aggregation (server query that builds the counts
+ *   passed into `computeTrustTier`)
+ */
+export const TERMINAL_ORDER_STATUSES = [
+  "fulfilled",
+  "cancelled",
+  "refunded",
+] as const satisfies readonly OrderStatus[];
 
 /** How the buyer receives the order. */
 export const fulfillmentMethod = z.enum(["pickup", "delivery"]);
@@ -1093,7 +1110,7 @@ export const markConversationReadInput = z.object({
 export type MarkConversationReadInput = z.infer<typeof markConversationReadInput>;
 
 /**
- * Input to `moderation.blockUser` (protected).
+ * Input to `chat.blockUser` (protected).
  * Blocking a user prevents further messages between the caller and `userId`;
  * enforcement happens server-side.
  */
@@ -1104,7 +1121,7 @@ export const blockUserInput = z.object({
 export type BlockUserInput = z.infer<typeof blockUserInput>;
 
 /**
- * Input to `moderation.reportMessage` (protected).
+ * Input to `chat.reportMessage` (protected).
  * Satisfies App Store Guideline 1.2 (apps with user-generated content must
  * offer a mechanism to report objectionable content).
  */

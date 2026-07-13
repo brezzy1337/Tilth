@@ -10,6 +10,7 @@
  */
 
 import { and, eq } from "drizzle-orm";
+import { TERMINAL_ORDER_STATUSES } from "@homegrown/shared";
 import type { Db } from "../context";
 import { orders } from "./schema";
 
@@ -26,13 +27,15 @@ export type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
  * Terminal order statuses — money is finally settled one way or another and
  * no further status transition ever occurs. `pending_payment`, `paid`, and
  * `disputed` are NON-terminal ("in flight": awaiting payment, awaiting
- * fulfillment/capture, or an open Stripe dispute, respectively). Mirrors
- * `computeTrustTier`'s terminal set (`packages/shared`) and `stores.ts`'s
- * trust-tier query — this is the single source of truth other callers should
- * derive from rather than re-guessing the set (e.g. `auth.deleteAccount`'s
- * F-051 open-order refusal).
+ * fulfillment/capture, or an open Stripe dispute, respectively).
+ *
+ * Re-exported from `packages/shared` (the single source of truth — see its
+ * doc comment there) under this same local name so every existing import of
+ * `TERMINAL_ORDER_STATUSES` from THIS module keeps compiling unchanged.
+ * Consumed by `stores.ts`'s trust-tier query and `auth.deleteAccount`'s
+ * F-051 open-order refusal, among others.
  */
-export const TERMINAL_ORDER_STATUSES = ["fulfilled", "cancelled", "refunded"] as const;
+export { TERMINAL_ORDER_STATUSES };
 
 /** Whether `status` is one of `TERMINAL_ORDER_STATUSES`. */
 export function isTerminalOrderStatus(status: string): boolean {

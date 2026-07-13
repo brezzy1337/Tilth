@@ -16,6 +16,13 @@
  * `registerPushToken` — authed; upsert by token (re-registering moves ownership
  *                        to the new user — device changed accounts).
  *
+ * F-051 — three additions layered on top of the above (see helpers.ts's
+ * deactivation section for the full picture): `listBlocked` (the caller's
+ * blocked users), `unblockUser` (inverse of `blockUser`), and
+ * `unregisterPushToken` (caller-owned-only token delete). `start`/`send` also
+ * call `assertCallerActive` (deactivated caller can't write) and `start` uses
+ * `resolveActiveStore` (deactivated store owner -> NOT_FOUND, same as `stores.get`).
+ *
  * Rules that must hold here:
  *   - No imports of env, db/index, or SDKs — everything via ctx (`ctx.push`).
  *   - Participant checks that fail must surface NOT_FOUND (never leak whether
@@ -76,6 +83,8 @@ import {
   upsertConversation,
   pushToUser,
   isUserDeactivated,
+  assertCallerActive,
+  resolveActiveStore,
 } from "./helpers";
 import type { Db } from "../context";
 
@@ -311,22 +320,11 @@ export const chatRouter = router({
     .input(startConversationInput)
     .output(startConversationOutput)
     .mutation(async ({ input, ctx }) => {
-      const [targetStore] = await ctx.db
-        .select({
-          id: stores.id,
-          userId: stores.userId,
-          // F-051 — not returned; used only to hide a deactivated seller
-          // behind the same NOT_FOUND as a nonexistent store.
-          ownerDeactivatedAt: users.deactivatedAt,
-        })
-        .from(stores)
-        .innerJoin(users, eq(users.id, stores.userId))
-        .where(eq(stores.id, input.storeId))
-        .limit(1);
+      await assertCallerActive(ctx.db, ctx.user.id);
 
-      if (!targetStore || targetStore.ownerDeactivatedAt) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Store not found" });
-      }
+      // F-051 — hides a deactivated seller's store behind the same NOT_FOUND
+      // as a nonexistent one (shared with `stores.get`).
+      const targetStore = await resolveActiveStore(ctx.db, input.storeId);
 
       if (targetStore.userId === ctx.user.id) {
         throw new TRPCError({
@@ -520,6 +518,8 @@ export const chatRouter = router({
     .input(sendMessageInput)
     .output(chatMessage)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const participant = await resolveParticipant(ctx.db, input.conversationId, ctx.user.id);
       const callerId = ctx.user.id;
       const isCallerBuyer = participant.buyerId === callerId;

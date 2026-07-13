@@ -36,6 +36,10 @@
  *     chat.ts) — rather than duplicating them. `respond`/`withdraw` also
  *     call `assertSendRateLimit` (defense-in-depth: they insert a follow-up
  *     message + fire a push, same shape as the create mutations).
+ *   - F-051 — `createRequest`/`createOffer`/`respond`/`withdraw` all call
+ *     helpers.ts's `assertCallerActive` FIRST (a deactivated caller can't
+ *     write); each also treats a deactivated COUNTERPARTY as NOT_FOUND via
+ *     `isUserDeactivated` (see the per-procedure comments below).
  *   - Message-body summaries may say "fulfillment request" (user-facing
  *     copy) — no *code identifier* here uses that word.
  */
@@ -65,6 +69,7 @@ import {
   upsertConversation,
   pushToUser,
   isUserDeactivated,
+  assertCallerActive,
   activeUserClause,
   type SourcingRequestFullRow,
 } from "./helpers";
@@ -281,6 +286,13 @@ async function createSourcingExchange(tx: DbOrTx, args: CreateSourcingExchangeAr
 // respond/withdraw shared core — a guarded `status = 'pending'` UPDATE
 // (race-safe re: a concurrent respond/withdraw), a plain-text follow-up
 // message, and a `last_message_at` bump.
+//
+// F-051 note — `withdraw`'s bulk-teardown counterpart lives in
+// `auth.deleteAccount`: on account deletion, the caller's own PENDING
+// requests are withdrawn directly (a guarded UPDATE, same shape as
+// `applyGuardedTransition` below) WITHOUT going through this helper and
+// WITHOUT the follow-up message it inserts — see auth.ts's doc comment for
+// why (bulk teardown, not a single request + its conversation).
 // ---------------------------------------------------------------------------
 
 interface GuardedTransitionArgs {
@@ -338,6 +350,8 @@ export const sourcingRouter = router({
     .input(createSourcingRequestInput)
     .output(createSourcingRequestOutput)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const place = await resolveCallerPlace(ctx.db, ctx.user.id);
 
       const [targetStore] = await ctx.db
@@ -410,6 +424,8 @@ export const sourcingRouter = router({
     .input(createSourcingOfferInput)
     .output(createSourcingRequestOutput)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const callerStore = await resolveCallerStore(ctx.db, ctx.user.id);
 
       const [targetPlace] = await ctx.db
@@ -484,6 +500,8 @@ export const sourcingRouter = router({
     .input(respondSourcingRequestInput)
     .output(sourcingRequestSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const found = await loadSourcingRequestFull(ctx.db, input.requestId);
       if (!found || counterpartyUserId(found) !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Sourcing request not found" });
@@ -531,6 +549,8 @@ export const sourcingRouter = router({
     .input(withdrawSourcingRequestInput)
     .output(sourcingRequestSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const found = await loadSourcingRequestFull(ctx.db, input.requestId);
       if (!found || found.createdByUserId !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Sourcing request not found" });

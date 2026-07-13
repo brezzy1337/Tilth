@@ -45,13 +45,10 @@
 
 import { parseArgs } from "node:util";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import postgres from "postgres";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, and, or, isNotNull, lte, asc } from "drizzle-orm";
-import { dbConnection } from "../src/db/parse-database-url.js";
 import * as schema from "../src/db/schema.js";
 import { hashPassword } from "../src/auth.js";
+import { fail, getDb, closeDb, isMainModule, type OperatorDb } from "./lib.js";
 
 /** The name a purged user's store is renamed to — never leave a store's own name PII-bearing. */
 export const DELETED_STORE_NAME = "Deleted stand";
@@ -66,6 +63,25 @@ export function anonymizedEmail(userId: string): string {
   return `deleted-${userId}@deleted.invalid`;
 }
 
+/**
+ * Mask an email for stdout: keeps the first char of the local part and the
+ * first char of the domain, replaces the rest with `*`s (e.g.
+ * "jane@example.com" -> "j***@e***.com" — the TLD is kept as-is since it
+ * carries no PII on its own). Never used for anything but display — the raw
+ * email is still what's written to the DB (pre-anonymization) or read from
+ * it; this only governs what this CLI prints.
+ */
+export function maskEmail(email: string): string {
+  const at = email.indexOf("@");
+  if (at <= 0) return "***"; // malformed — never print it verbatim
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  const domainHead = dot > 0 ? domain.slice(0, dot) : domain;
+  const domainTail = dot > 0 ? domain.slice(dot) : "";
+  return `${local[0]}***@${domainHead[0] ?? "*"}***${domainTail}`;
+}
+
 /** Anonymized username for a purged user, given an 8-hex-char random suffix. */
 export function anonymizedUsername(randomSuffix: string): string {
   return `deleted-${randomSuffix}`;
@@ -76,49 +92,23 @@ function randomUsernameSuffix(): string {
   return randomBytes(4).toString("hex");
 }
 
-// ---------------------------------------------------------------------------
-// Database — lazy connection so importing this module (e.g. from a unit
-// test) never opens a DB connection or requires DATABASE_URL.
-// ---------------------------------------------------------------------------
-
-let pgClient: ReturnType<typeof postgres> | undefined;
-
-function getDb() {
-  if (!pgClient) {
-    const databaseUrl = process.env["DATABASE_URL"];
-    if (!databaseUrl) {
-      fail(
-        "DATABASE_URL is not set. This CLI talks directly to Postgres (operator tool), " +
-          "not the HTTP API — export DATABASE_URL (e.g. from apps/server/.env) first.",
-      );
-    }
-    const conn = dbConnection(databaseUrl);
-    pgClient =
-      typeof conn === "string"
-        ? postgres(conn, { max: 1 })
-        : postgres({ ...conn, max: 1 } as postgres.Options<Record<string, postgres.PostgresType>>);
-  }
-  return drizzle(pgClient, { schema });
-}
-
-type Database = ReturnType<typeof getDb>;
-
-async function closeDb(): Promise<void> {
-  if (pgClient) await pgClient.end();
-}
-
-function fail(message: string): never {
-  console.error(`\n✗ ${message}`);
-  process.exit(1);
-}
+/** Local alias — `purgeOneUser`/`loadAccountsPastGrace` below were written against this name. */
+type Database = OperatorDb;
 
 // ---------------------------------------------------------------------------
 // Shared query — accounts past their grace period
 // ---------------------------------------------------------------------------
 
 async function loadAccountsPastGrace(db: Database) {
+  // No `username` here — this row set only ever reaches stdout (`list`/`purge`
+  // plans), which redacts to userId + a masked email; the raw username isn't
+  // needed for that and shouldn't be pulled just to sit unused in memory.
   return db
-    .select({ id: schema.users.id, email: schema.users.email, username: schema.users.username, deleteAfter: schema.users.deleteAfter })
+    .select({
+      id: schema.users.id,
+      email: schema.users.email,
+      deleteAfter: schema.users.deleteAfter,
+    })
     .from(schema.users)
     .where(and(isNotNull(schema.users.deleteAfter), lte(schema.users.deleteAfter, new Date())))
     .orderBy(asc(schema.users.deleteAfter));
@@ -140,7 +130,10 @@ async function cmdList(): Promise<void> {
 
   console.log(`${rows.length} account(s) past grace — \`purge\` would anonymize:\n`);
   for (const r of rows) {
-    console.log(`  ${r.id}  ${r.email} / @${r.username}  (deleteAfter: ${r.deleteAfter?.toISOString()})`);
+    // PII redaction — userId + a masked email only; never print the raw
+    // email/username to stdout (this CLI's output can end up in shell
+    // history, CI logs, etc.).
+    console.log(`  ${r.id}  ${maskEmail(r.email)}  (deleteAfter: ${r.deleteAfter?.toISOString()})`);
   }
 }
 
@@ -150,51 +143,73 @@ async function cmdList(): Promise<void> {
  * their store (if any) renamed with logo/about cleared. `deactivatedAt` /
  * `deleteAfter` are left untouched (already set, past grace) — see the file
  * doc comment for why they must stay set.
+ *
+ * All four writes (users scrub, push_tokens delete, user_blocks delete, store
+ * rename) run inside ONE `db.transaction` — a failure partway through (e.g.
+ * the username-collision retry loop exhausting its attempts) must not leave
+ * the row half-scrubbed (e.g. push tokens gone but the email still real).
  */
-async function purgeOneUser(db: Database, userId: string): Promise<{ hadStore: boolean }> {
+export async function purgeOneUser(db: Database, userId: string): Promise<{ hadStore: boolean }> {
   const randomSecret = randomBytes(32).toString("hex");
   const passwordHash = await hashPassword(randomSecret);
   const email = anonymizedEmail(userId);
 
-  // Username collisions are vanishingly unlikely (8 random hex chars) but not
-  // impossible — retry with a fresh suffix on a unique-violation (SQLSTATE
-  // 23505), same pattern as auth.register's concurrent-duplicate handling.
-  const MAX_ATTEMPTS = 5;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const username = anonymizedUsername(randomUsernameSuffix());
-    try {
-      await db
-        .update(schema.users)
-        .set({ email, username, passwordHash, stripeCustomerId: null })
-        .where(eq(schema.users.id, userId));
-      break;
-    } catch (err) {
-      const isUniqueViolation =
-        typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "23505";
-      if (isUniqueViolation && attempt < MAX_ATTEMPTS) continue;
-      throw err;
+  return db.transaction(async (tx) => {
+    // Username collisions are vanishingly unlikely (8 random hex chars) but
+    // not impossible — retry with a fresh suffix on a unique-violation
+    // (SQLSTATE 23505), same pattern as auth.register's concurrent-duplicate
+    // handling. Each attempt runs in its OWN nested transaction (SAVEPOINT,
+    // via drizzle's `tx.transaction()`) — a plain UPDATE here would instead
+    // abort the WHOLE outer transaction on a unique-violation, poisoning
+    // every subsequent statement (push_tokens/user_blocks deletes, store
+    // rename) with "current transaction is aborted".
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const username = anonymizedUsername(randomUsernameSuffix());
+      try {
+        await tx.transaction(async (tx2) => {
+          await tx2
+            .update(schema.users)
+            .set({ email, username, passwordHash, stripeCustomerId: null })
+            .where(eq(schema.users.id, userId));
+        });
+        break;
+      } catch (err) {
+        const isUniqueViolation =
+          typeof err === "object" &&
+          err !== null &&
+          "code" in err &&
+          (err as { code: unknown }).code === "23505";
+        if (isUniqueViolation && attempt < MAX_ATTEMPTS) continue;
+        throw err;
+      }
     }
-  }
 
-  await db.delete(schema.pushTokens).where(eq(schema.pushTokens.userId, userId));
-  await db
-    .delete(schema.userBlocks)
-    .where(or(eq(schema.userBlocks.blockerUserId, userId), eq(schema.userBlocks.blockedUserId, userId)));
+    await tx.delete(schema.pushTokens).where(eq(schema.pushTokens.userId, userId));
+    await tx
+      .delete(schema.userBlocks)
+      .where(
+        or(
+          eq(schema.userBlocks.blockerUserId, userId),
+          eq(schema.userBlocks.blockedUserId, userId),
+        ),
+      );
 
-  const [store] = await db
-    .select({ id: schema.stores.id })
-    .from(schema.stores)
-    .where(eq(schema.stores.userId, userId))
-    .limit(1);
+    const [store] = await tx
+      .select({ id: schema.stores.id })
+      .from(schema.stores)
+      .where(eq(schema.stores.userId, userId))
+      .limit(1);
 
-  if (store) {
-    await db
-      .update(schema.stores)
-      .set({ name: DELETED_STORE_NAME, logo: null, about: null })
-      .where(eq(schema.stores.id, store.id));
-  }
+    if (store) {
+      await tx
+        .update(schema.stores)
+        .set({ name: DELETED_STORE_NAME, logo: null, about: null })
+        .where(eq(schema.stores.id, store.id));
+    }
 
-  return { hadStore: !!store };
+    return { hadStore: !!store };
+  });
 }
 
 async function cmdPurge(confirmed: boolean): Promise<void> {
@@ -209,7 +224,8 @@ async function cmdPurge(confirmed: boolean): Promise<void> {
 
   console.log(`Plan: anonymize ${rows.length} account(s) past grace:`);
   for (const r of rows) {
-    console.log(`  ${r.id}  ${r.email} / @${r.username}`);
+    // PII redaction — same convention as `list` above.
+    console.log(`  ${r.id}  ${maskEmail(r.email)}`);
   }
 
   if (!confirmed) {
@@ -221,7 +237,9 @@ async function cmdPurge(confirmed: boolean): Promise<void> {
   console.log("");
   for (const r of rows) {
     const { hadStore } = await purgeOneUser(db, r.id);
-    console.log(`  ✓ ${r.id} anonymized${hadStore ? ` (store renamed to "${DELETED_STORE_NAME}")` : ""}`);
+    console.log(
+      `  ✓ ${r.id} anonymized${hadStore ? ` (store renamed to "${DELETED_STORE_NAME}")` : ""}`,
+    );
   }
 
   await closeDb();
@@ -279,8 +297,7 @@ async function main(): Promise<void> {
 
 // Only run the CLI when this file is executed directly (`tsx scripts/purge-deleted-accounts.ts …`),
 // never when a test imports it for the pure helper functions above.
-const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
-if (isMainModule) {
+if (isMainModule(import.meta.url)) {
   main().catch((err: unknown) => {
     fail(err instanceof Error ? err.message : String(err));
   });

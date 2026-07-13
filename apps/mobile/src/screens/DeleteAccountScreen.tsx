@@ -11,17 +11,20 @@
  * my account") is unambiguous — matches the product-scope note that a typed
  * password alone is an acceptable confirm step here.
  *
- * On success, the account is already deleted server-side — this screen only
- * needs to clear LOCAL session state, so it reuses the exact same path
- * `useAuth().signOut()` takes (clear token, clear user, clear query cache),
- * landing the user back on Hero/login. It does NOT call signOut() as an API
- * action — deleteAccount already did the server-side work.
+ * On success, the server's returned `deleteAfter` is surfaced in a
+ * confirmation Alert (the "undo window" promised by the warning copy below
+ * would otherwise go unstated) before this screen clears LOCAL session
+ * state, reusing the exact same path `useAuth().signOut()` takes (clear
+ * token, clear user, clear query cache), landing the user back on
+ * Hero/login. It does NOT call signOut() as an API action — deleteAccount
+ * already did the server-side work.
  *
  * React Native only — no DOM elements.
  */
 
 import React, { useState } from "react";
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -34,7 +37,8 @@ import { useAuth } from "../auth/AuthContext";
 import { Card } from "../components/Card";
 import { Button } from "../components/Button";
 import { FormField } from "../components/FormField";
-import { colors, radii, spacing, type } from "../theme";
+import { formatIsoDateShort, toIsoDate } from "../utils/time";
+import { colors, spacing, type } from "../theme";
 
 export function DeleteAccountScreen() {
   const { signOut } = useAuth();
@@ -43,9 +47,18 @@ export function DeleteAccountScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const mutation = trpc.auth.deleteAccount.useMutation({
-    onSuccess: async () => {
-      // Deletion already happened server-side — clear LOCAL session state
-      // the same way sign-out does, no further API call needed.
+    onSuccess: async (data) => {
+      // Surface the undo window promised by the warning card above, then
+      // clear LOCAL session state — deletion already happened server-side,
+      // no further API call needed.
+      const restoreBy = formatIsoDateShort(toIsoDate(new Date(data.deleteAfter)));
+      await new Promise<void>((resolve) => {
+        Alert.alert(
+          "Account scheduled for deletion",
+          `Log back in before ${restoreBy} to restore it.`,
+          [{ text: "OK", onPress: () => resolve() }],
+        );
+      });
       await signOut();
     },
     onError: (err) => {
@@ -97,10 +110,10 @@ export function DeleteAccountScreen() {
 
             <Button
               title="Delete my account"
+              variant="danger"
               onPress={handleSubmit}
               loading={mutation.isPending}
               disabled={password.length === 0}
-              style={styles.deleteButton}
             />
           </Card>
         </ScrollView>
@@ -141,9 +154,5 @@ const styles = StyleSheet.create({
   },
   formCard: {
     marginBottom: spacing.md,
-  },
-  deleteButton: {
-    backgroundColor: colors.danger,
-    borderRadius: radii.md,
   },
 });

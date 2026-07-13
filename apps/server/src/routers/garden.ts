@@ -19,6 +19,10 @@
  *   - `ctx.media` / `ctx.mux` are `null` when the corresponding env vars are
  *     unset (Mux/GCS credentials do not exist yet for this pilot) — the
  *     affected procedures throw a clear PRECONDITION_FAILED rather than crash.
+ *   - F-051 — all three post-creation procedures call helpers.ts's
+ *     `assertCallerActive` (a deactivated caller can't create new posts). It
+ *     runs AFTER the media/mux-configured check on `createPhotoUploadUrls` /
+ *     `createVideo` so the "unconfigured" path still never touches the DB.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -44,6 +48,7 @@ import {
   decodeKeysetCursor,
   geoRadius,
   activeUserClause,
+  assertCallerActive,
 } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -246,6 +251,8 @@ export const gardenRouter = router({
     .input(createGardenPostPhotoSetInput)
     .output(createGardenPostPhotoSetOutput)
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const store = await resolveCallerStore(ctx.db, ctx.user.id);
 
       if (ctx.media) {
@@ -314,6 +321,8 @@ export const gardenRouter = router({
       }
       const media = ctx.media;
 
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const store = await resolveCallerStore(ctx.db, ctx.user.id);
       const ext = CONTENT_TYPE_EXT[input.contentType];
 
@@ -349,6 +358,8 @@ export const gardenRouter = router({
         });
       }
       const mux = ctx.mux;
+
+      await assertCallerActive(ctx.db, ctx.user.id);
 
       const store = await resolveCallerStore(ctx.db, ctx.user.id);
 

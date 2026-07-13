@@ -699,22 +699,15 @@ export function ConversationScreen({ route, navigation }: Props) {
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
-              <Pressable
-                style={[
-                  styles.modalSubmitButton,
-                  reportReason.trim().length === 0 || reportMessage.isPending
-                    ? styles.sendButtonDisabled
-                    : null,
-                ]}
+              <Button
+                title="Report"
+                variant="danger"
+                fullWidth={false}
                 onPress={submitReport}
-                disabled={reportReason.trim().length === 0 || reportMessage.isPending}
-              >
-                {reportMessage.isPending ? (
-                  <ActivityIndicator size="small" color={colors.onPrimary} />
-                ) : (
-                  <Text style={styles.modalSubmitText}>Report</Text>
-                )}
-              </Pressable>
+                loading={reportMessage.isPending}
+                disabled={reportReason.trim().length === 0}
+                style={styles.modalSubmitButton}
+              />
             </View>
           </View>
         </View>
@@ -944,18 +937,14 @@ const styles = StyleSheet.create({
     fontSize: type.body.fontSize,
     fontWeight: "600",
   },
+  // Sizing-only override — deliberately no backgroundColor here (Button's
+  // `danger` variant supplies it) so the pressed-state color swap still
+  // applies; a color set in this style prop would paint over it every
+  // render, same bug the delete-account button had before it moved to
+  // `variant="danger"` too.
   modalSubmitButton: {
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xl,
     borderRadius: radii.md,
-    backgroundColor: colors.danger,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalSubmitText: {
-    color: colors.onPrimary,
-    fontSize: type.body.fontSize,
-    fontWeight: "700",
   },
   // Sourcing request/offer card (F-049) — replaces the plain bubble for
   // messages carrying a structured request. Sized like a bubble (maxWidth

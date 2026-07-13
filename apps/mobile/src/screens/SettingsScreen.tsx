@@ -78,10 +78,7 @@ function SettingsRow({ label, value, onPress, labelColor, right, disabled }: Row
   const interactive = !!onPress && !disabled;
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.row,
-        pressed && interactive ? styles.rowPressed : null,
-      ]}
+      style={({ pressed }) => [styles.row, pressed && interactive ? styles.rowPressed : null]}
       onPress={interactive ? onPress : undefined}
       accessibilityRole={interactive ? "button" : undefined}
       disabled={!interactive}
@@ -127,6 +124,12 @@ export function SettingsScreen() {
   }, []);
 
   async function handleTogglePush(next: boolean) {
+    // The toggle is only rendered once `pushEnabled` has loaded, so this is
+    // always a real value here — captured up front so both branches below
+    // can revert to it on failure.
+    const previous = pushEnabled;
+    if (previous === null) return;
+
     setPushBusy(true);
     try {
       await setPushPreference(next);
@@ -134,20 +137,48 @@ export function SettingsScreen() {
 
       if (next) {
         const token = await getDeviceExpoPushToken();
-        if (token) {
-          registerPushToken.mutate({ token, platform: Platform.OS as "ios" | "android" });
-        } else {
+        if (!token) {
           Alert.alert(
             "Notifications are off",
             "Enable notifications for Tilth in your device Settings to receive them.",
+          );
+          return;
+        }
+        try {
+          await registerPushToken.mutateAsync({
+            token,
+            platform: Platform.OS as "ios" | "android",
+          });
+        } catch (err) {
+          // Registration failed server-side — revert the local flag and the
+          // toggle so we don't show "on" while the server never learned
+          // about this device. Mirrors the OFF-direction revert below.
+          await setPushPreference(previous);
+          setPushEnabled(previous);
+          Alert.alert(
+            "Could not turn on notifications",
+            err instanceof Error ? err.message : "Please try again.",
           );
         }
       } else {
         // Only fetch the token if permission was already granted — no reason
         // to trigger a permission prompt just to turn something off.
         const token = await getDeviceExpoPushToken({ requestPermission: false });
-        if (token) {
-          unregisterPushToken.mutate({ token });
+        if (!token) return;
+        try {
+          await unregisterPushToken.mutateAsync({ token });
+        } catch (err) {
+          // Unregistration failed — the server still holds this token and
+          // will keep pushing, so leaving the toggle showing OFF would be a
+          // silent lie about the account's notification state. Revert
+          // (mirrors the ON-direction revert above); `usePushNotifications`
+          // also self-heals this on next launch if the user just quits here.
+          await setPushPreference(previous);
+          setPushEnabled(previous);
+          Alert.alert(
+            "Could not turn off notifications",
+            err instanceof Error ? err.message : "Please try again.",
+          );
         }
       }
     } finally {
@@ -201,6 +232,16 @@ export function SettingsScreen() {
                   onValueChange={(next) => void handleTogglePush(next)}
                   disabled={pushBusy}
                   trackColor={{ true: colors.primary, false: colors.border }}
+                  // First themed Switch in the app — sets the token
+                  // precedent. Both states resolve to white in this palette
+                  // (`onPrimary` === `surface` === #FFFFFF), matching the
+                  // platform-standard white-thumb look, but each is the
+                  // semantically correct token for its state: `onPrimary`
+                  // (text-on-solid-color) against the solid `colors.primary`
+                  // track when on, `surface` (base surface) against the pale
+                  // `colors.border` track when off — either reads with
+                  // plenty of contrast against its track.
+                  thumbColor={pushEnabled ? colors.onPrimary : colors.surface}
                 />
               )
             }
@@ -244,9 +285,7 @@ export function SettingsScreen() {
                 />
               ) : null}
               {myStore && myPlace ? <View style={styles.divider} /> : null}
-              {myPlace ? (
-                <SettingsRow label={`You represent \u{1F9FA} ${myPlace.name}`} />
-              ) : null}
+              {myPlace ? <SettingsRow label={`You represent \u{1F9FA} ${myPlace.name}`} /> : null}
             </Card>
           </>
         ) : null}
@@ -275,7 +314,12 @@ export function SettingsScreen() {
         </Card>
 
         {/* Danger zone */}
-        <SectionHeader icon="warning-outline" title="Danger zone" tint={colors.popSoft} iconColor={colors.pop} />
+        <SectionHeader
+          icon="warning-outline"
+          title="Danger zone"
+          tint={colors.popSoft}
+          iconColor={colors.pop}
+        />
         <Card style={styles.sectionCard} flat>
           <SettingsRow
             label="Delete account"

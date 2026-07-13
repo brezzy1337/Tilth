@@ -19,6 +19,10 @@
  *   - Money is ALWAYS integer cents; never floats.
  *   - Price is read from the LISTING server-side (never trust client-supplied prices).
  *   - Payment state truth comes from Stripe webhooks, not client-reported success.
+ *   - F-051 — `create` calls helpers.ts's `assertCallerActive` FIRST (a
+ *     deactivated buyer can't place new orders — UNAUTHORIZED) and treats a
+ *     store whose owner has since deactivated their account as NOT_FOUND
+ *     (alongside the existing stripeConnectAccountId/chargesEnabled checks).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -38,8 +42,8 @@ import {
 } from "@homegrown/shared";
 import { eq, inArray, desc, and, isNull, isNotNull, lt, or } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc";
-import { orders, orderItems, listings, stores } from "../db/schema";
-import { encodeKeysetCursor, decodeKeysetCursor } from "./helpers";
+import { orders, orderItems, listings, stores, users } from "../db/schema";
+import { encodeKeysetCursor, decodeKeysetCursor, assertCallerActive } from "./helpers";
 import type { Db } from "../context";
 
 /**
@@ -225,6 +229,10 @@ export const ordersRouter = router({
     .input(createOrderInput)
     .output(createOrderResponse)
     .mutation(async ({ input, ctx }) => {
+      // F-051 — a deactivated buyer can't place new orders. Checked first,
+      // before any other input/DB work.
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       // Server-side re-validation of the delivery address requirement.
       // The shared zod schema already enforces this via .refine(), but we guard
       // again here so the check happens BEFORE any DB insert or Stripe call —
@@ -278,12 +286,19 @@ export const ordersRouter = router({
           id: stores.id,
           stripeConnectAccountId: stores.stripeConnectAccountId,
           chargesEnabled: stores.chargesEnabled,
+          // F-051 — not returned; used only to hide a deactivated seller's
+          // store behind the same NOT_FOUND as a nonexistent one (same
+          // convention as `stores.get` / `chat.start`'s `resolveActiveStore`;
+          // not reused directly here since this query already carries the
+          // Connect fields those callers don't need).
+          ownerDeactivatedAt: users.deactivatedAt,
         })
         .from(stores)
+        .innerJoin(users, eq(users.id, stores.userId))
         .where(eq(stores.id, storeId))
         .limit(1);
 
-      if (!store) {
+      if (!store || store.ownerDeactivatedAt) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Store not found",

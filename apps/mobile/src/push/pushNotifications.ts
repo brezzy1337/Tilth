@@ -7,7 +7,15 @@
  *      Expo push token, and registers it via `chat.registerPushToken` — but
  *      ONLY when the user hasn't explicitly turned push off in Settings
  *      (F-051's `getPushPreference`, persisted via SecureStore; defaults to
- *      on, matching pre-F-051 behaviour).
+ *      on, matching pre-F-051 behaviour). Symmetrically, when the preference
+ *      IS off, it best-effort unregisters the device token instead (no
+ *      permission prompt — only if permission was already granted). This
+ *      self-heals either direction every launch: a registration that failed
+ *      to reach the server previously gets retried here, and — the mirror
+ *      case — an unregistration that failed in Settings (see
+ *      SettingsScreen's `handleTogglePush`, which itself reverts on failure,
+ *      but can't self-heal a case where the app was killed mid-request)
+ *      doesn't leave the server pushing to a device the user turned off.
  *   2. Listens for notification taps and deep-links pushes carrying a
  *      `data.conversationId` into the Conversation screen (including the
  *      cold-start tap, via getLastNotificationResponseAsync).
@@ -103,12 +111,15 @@ export async function getDeviceExpoPushToken(
 
 export function usePushNotifications(enabled: boolean): void {
   const registerPushToken = trpc.chat.registerPushToken.useMutation();
-  // Keep the latest mutation object in a ref so the effect doesn't re-run
-  // (and re-register) every render.
+  const unregisterPushToken = trpc.chat.unregisterPushToken.useMutation();
+  // Keep the latest mutation objects in refs so the effect doesn't re-run
+  // (and re-register/re-unregister) every render.
   const registerRef = useRef(registerPushToken);
   registerRef.current = registerPushToken;
+  const unregisterRef = useRef(unregisterPushToken);
+  unregisterRef.current = unregisterPushToken;
 
-  // --- Token registration -------------------------------------------------
+  // --- Token registration (ON) / unregistration (OFF) reconciliation ------
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -118,7 +129,20 @@ export function usePushNotifications(enabled: boolean): void {
         // F-051 — respect the Settings master toggle before touching
         // permissions/tokens at all; defaults to on for pre-F-051 installs.
         const preferenceEnabled = await getPushPreference();
-        if (!preferenceEnabled) return;
+
+        if (!preferenceEnabled) {
+          // OFF-direction self-heal, symmetric with the ON-direction
+          // registration below: best-effort fetch the device token WITHOUT
+          // prompting for permission (`requestPermission: false` — no reason
+          // to ask just to turn something off), and unregister it. Swallows
+          // failure same as everything else here — this is a reconciliation
+          // pass, not a user-facing action.
+          const token = await getDeviceExpoPushToken({ requestPermission: false });
+          if (cancelled || !token) return;
+
+          unregisterRef.current.mutate({ token });
+          return;
+        }
 
         const token = await getDeviceExpoPushToken();
         if (cancelled || !token) return;
@@ -127,7 +151,7 @@ export function usePushNotifications(enabled: boolean): void {
       } catch (err) {
         // Best-effort only — log and move on, never surface to the user.
         console.warn(
-          "[push] registration skipped:",
+          "[push] registration reconciliation skipped:",
           err instanceof Error ? err.message : String(err),
         );
       }

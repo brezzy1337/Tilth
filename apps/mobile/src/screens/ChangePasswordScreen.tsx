@@ -72,7 +72,8 @@ export function ChangePasswordScreen() {
 
     const newResult = passwordSchema.safeParse(newPassword);
     if (!newResult.success) {
-      nextErrors.newPassword = newResult.error.flatten().formErrors[0] ?? "Must be at least 8 characters";
+      nextErrors.newPassword =
+        newResult.error.flatten().formErrors[0] ?? "Must be at least 8 characters";
     } else if (newPassword !== confirmPassword) {
       nextErrors.confirmPassword = "Passwords don't match";
     }
