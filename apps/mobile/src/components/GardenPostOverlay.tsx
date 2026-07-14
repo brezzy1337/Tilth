@@ -6,6 +6,11 @@
  * types. Store name is tappable when onPressStore is provided (navigates to
  * StoreProfile — the storeId lives on every feed item).
  *
+ * The scrim reserves a fixed right-hand margin (`RAIL_CLEARANCE`) so its
+ * text block never runs under `GardenActionRail` (F-053), which the feed's
+ * per-cell wrapper stacks on top as a sibling, right-aligned over the same
+ * bottom region.
+ *
  * React Native only — no DOM elements.
  */
 
@@ -39,6 +44,10 @@ export function GardenPostOverlay({ storeName, caption, distanceKm, onPressStore
   );
 }
 
+// Clears GardenActionRail's icon column (44pt touch targets + spacing.lg
+// right inset) so the caption text never sits under it.
+const RAIL_CLEARANCE = 64;
+
 const styles = StyleSheet.create({
   // Scrim stays a neutral dark overlay (readability over arbitrary media),
   // independent of the warm palette; only the text colors below are tokened.
@@ -47,7 +56,8 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: spacing.lg,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.lg + RAIL_CLEARANCE,
     paddingTop: 40,
     paddingBottom: spacing.xxl,
     backgroundColor: "rgba(0,0,0,0.35)",

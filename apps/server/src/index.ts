@@ -24,6 +24,7 @@ import { geocodeAddress } from "./geocode";
 import { createStripeClient } from "./stripe";
 import { handleStripeWebhookRequest } from "./webhook";
 import { handleMuxWebhookRequest } from "./webhook-mux";
+import { handleGardenShareRequest } from "./garden-share-html";
 import { createRequestListener } from "./request-listener";
 import { createGcsMediaClient } from "./gcs";
 import { createMuxClient } from "./mux";
@@ -85,6 +86,10 @@ const server = createServer(
         db,
         webhookSecret: env.MUX_WEBHOOK_SECRET,
       },
+    },
+    gardenShare: {
+      handle: handleGardenShareRequest,
+      opts: { db },
     },
   }),
 );

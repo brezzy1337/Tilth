@@ -16,6 +16,12 @@
  *                              Non-GET on either path → 405. These are static,
  *                              server-rendered pages so App Store Connect /
  *                              Play Console metadata has real URLs to link to.
+ *   GET  /garden/{postId}  →  public per-post garden share page (F-053, no auth).
+ *                              UNLIKE /legal/*, this hits the DB per-request
+ *                              (dynamic content keyed by postId) — see
+ *                              garden-share-html.ts. Non-GET → 405. Only
+ *                              wired when the caller supplies `gardenShare`
+ *                              (optional, same pattern as `webhookMux`).
  *   /trpc/**               →  tRPC handler after stripping the /trpc prefix
  *                              (canonical path; matches mobile client's httpBatchLink base)
  *   /**                    →  tRPC handler, path unchanged
@@ -36,8 +42,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { handleStripeWebhookRequest } from "./webhook";
 import type { handleMuxWebhookRequest } from "./webhook-mux";
+import type { handleGardenShareRequest } from "./garden-share-html";
 import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "@homegrown/shared";
 import { renderLegalHtml } from "./legal-html";
+
+/** Matches `/garden/<postId>` exactly — the postId segment itself is validated (as a UUID) downstream. */
+const GARDEN_SHARE_PATH_RE = /^\/garden\/([^/]+)$/;
 
 const LEGAL_PAGES: Record<string, string> = {
   "/legal/terms": renderLegalHtml(TERMS_OF_SERVICE),
@@ -65,11 +75,28 @@ export interface WebhookMuxDeps {
   opts: Parameters<typeof handleMuxWebhookRequest>[2];
 }
 
+/**
+ * Public garden share page wiring (F-053) — analogous to WebhookDeps, but for
+ * GET /garden/{postId}. `opts` carries only the fixed dependency (`db`); the
+ * per-request `postId` is merged in by this listener (see below) from the
+ * matched path segment, mirroring how webhook opts stay fixed across calls.
+ */
+export interface GardenShareDeps {
+  handle: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    opts: Parameters<typeof handleGardenShareRequest>[2],
+  ) => void;
+  opts: Omit<Parameters<typeof handleGardenShareRequest>[2], "postId">;
+}
+
 export function createRequestListener(deps: {
   trpcHandler: TrpcHandler;
   webhook: WebhookDeps;
   /** Optional so existing callers/tests that don't wire Mux keep working unchanged. */
   webhookMux?: WebhookMuxDeps;
+  /** Optional so existing callers/tests that don't wire the garden share page keep working unchanged. */
+  gardenShare?: GardenShareDeps;
 }): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
     // Webhooks must be checked first — they need the raw body before any parsing.
@@ -99,6 +126,23 @@ export function createRequestListener(deps: {
       });
       res.end(LEGAL_PAGES[legalPath]);
       return;
+    }
+
+    // Public per-post garden share page (F-053) — dynamic (DB-backed), unlike
+    // /legal/* above. Only intercepted when the caller wired `gardenShare`;
+    // existing callers/tests that omit it fall through to tRPC unchanged.
+    const gardenShareMatch = legalPath !== undefined ? legalPath.match(GARDEN_SHARE_PATH_RE) : null;
+    if (gardenShareMatch && deps.gardenShare) {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", Allow: "GET" });
+        res.end("Method Not Allowed");
+        return;
+      }
+
+      return deps.gardenShare.handle(req, res, {
+        ...deps.gardenShare.opts,
+        postId: gardenShareMatch[1]!,
+      });
     }
 
     // Strip the canonical `/trpc` path prefix when present so that the tRPC

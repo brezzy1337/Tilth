@@ -752,7 +752,12 @@ export const gardenFeedInput = z.object({
 
 export type GardenFeedInput = z.infer<typeof gardenFeedInput>;
 
-/** Fields common to every `gardenFeedItem` variant, regardless of post type. */
+/**
+ * Fields common to every `gardenFeedItem` variant, regardless of post type.
+ * `likeCount`/`likedByMe`/`commentCount` are the F-053 social counts — see the
+ * "Garden social (F-053)" section below for the schemas that mutate them
+ * (`toggleGardenLikeInput`/Output, comment CRUD).
+ */
 const gardenFeedItemBase = z.object({
   id: z.string().uuid(),
   storeId: z.string().uuid(),
@@ -763,6 +768,12 @@ const gardenFeedItemBase = z.object({
   status: gardenPostStatus,
   /** ISO 8601 datetime string. */
   createdAt: z.string().datetime(),
+  /** Total likes on this post. */
+  likeCount: z.number().int().nonnegative(),
+  /** Whether the requesting caller has liked this post. */
+  likedByMe: z.boolean(),
+  /** Total non-deleted comments on this post. */
+  commentCount: z.number().int().nonnegative(),
 });
 
 /** A photo-set garden post as rendered in the feed. */
@@ -1139,6 +1150,129 @@ export const registerPushTokenInput = z.object({
 });
 
 export type RegisterPushTokenInput = z.infer<typeof registerPushTokenInput>;
+
+// ---------------------------------------------------------------------------
+// Garden social — likes, comments, and per-post share links (F-053)
+// A social layer on top of the F-047 garden feed (see the Garden posts
+// section, above, which now carries `likeCount`/`likedByMe`/`commentCount` on
+// every `gardenFeedItem`). Comments are flat (no replies/threads) and mirror
+// the Messaging section's idioms: `gardenCommentBody` mirrors `messageBody`,
+// `listGardenCommentsInput`/Output mirror `messagesListInput`/Output's
+// cursor-pagination shape, and `reportGardenCommentInput` mirrors
+// `reportMessageInput`. The share page itself has no dedicated schema here —
+// it renders the same `gardenFeedItem`-shaped data the server already
+// serves, just keyed by post id instead of a geo query.
+// ---------------------------------------------------------------------------
+
+/** Input to `gardenPosts.toggleLike` (protected). Toggles the caller's like on a post. */
+export const toggleGardenLikeInput = z.object({
+  postId: z.string().uuid(),
+});
+
+export type ToggleGardenLikeInput = z.infer<typeof toggleGardenLikeInput>;
+
+/**
+ * Response from `gardenPosts.toggleLike`.
+ * `liked` is the caller's new like state after the toggle (not the previous
+ * one); `likeCount` is the post's total count after the change, so the
+ * client can update its UI from this response alone, without refetching.
+ */
+export const toggleGardenLikeOutput = z.object({
+  liked: z.boolean(),
+  likeCount: z.number().int().nonnegative(),
+});
+
+export type ToggleGardenLikeOutput = z.infer<typeof toggleGardenLikeOutput>;
+
+/** A garden comment's text content. Trimmed; 1-500 characters — mirrors `messageBody`'s idiom, shorter cap. */
+export const gardenCommentBody = z.string().trim().min(1).max(500);
+
+export type GardenCommentBody = z.infer<typeof gardenCommentBody>;
+
+/**
+ * A single garden post comment, as returned by `gardenComments.list` / created
+ * via `gardenComments.create`. `username` is denormalized onto the comment
+ * (same pattern as `blockedUser.username`, above) so the feed/share page can
+ * render "who said it" without a join per render. When `deleted` is true the
+ * server sends `body` as `""` and the client renders a "[comment removed]"
+ * placeholder — the row is soft-deleted, not hard-deleted, so moderation and
+ * the author's own delete both resolve to the same client-visible shape.
+ */
+export const gardenComment = z.object({
+  id: z.string().uuid(),
+  postId: z.string().uuid(),
+  userId: z.string().uuid(),
+  username: z.string(),
+  body: z.string(),
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+  /** True when soft-deleted (by the author or moderation); `body` is then `""`. */
+  deleted: z.boolean(),
+});
+
+export type GardenComment = z.infer<typeof gardenComment>;
+
+/** Input to `gardenComments.create` (protected, caller must be authenticated). */
+export const createGardenCommentInput = z.object({
+  postId: z.string().uuid(),
+  body: gardenCommentBody,
+});
+
+export type CreateGardenCommentInput = z.infer<typeof createGardenCommentInput>;
+
+/** Response from `gardenComments.create` — the newly created comment. */
+export const createGardenCommentOutput = gardenComment;
+
+export type CreateGardenCommentOutput = z.infer<typeof createGardenCommentOutput>;
+
+/**
+ * Input to `gardenComments.list` (public — comments are visible to anyone who
+ * can see the post, including the public share page).
+ * Cursor-paginated; limit default/max mirror `messagesListInput` exactly
+ * (default 30, max 100).
+ */
+export const listGardenCommentsInput = z.object({
+  postId: z.string().uuid(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+
+export type ListGardenCommentsInput = z.infer<typeof listGardenCommentsInput>;
+
+/**
+ * Paginated response from `gardenComments.list`.
+ * Mirrors `messagesListOutput`'s shape exactly (an array field plus a
+ * nullable `nextCursor`) — `nextCursor` is null when the caller has reached
+ * the last page.
+ */
+export const listGardenCommentsOutput = z.object({
+  comments: z.array(gardenComment),
+  nextCursor: z.string().nullable(),
+});
+
+export type ListGardenCommentsOutput = z.infer<typeof listGardenCommentsOutput>;
+
+/**
+ * Input to `gardenComments.delete` (protected, caller must be the comment's
+ * author — soft-delete only, matching `gardenComment.deleted`'s semantics).
+ */
+export const deleteGardenCommentInput = z.object({
+  commentId: z.string().uuid(),
+});
+
+export type DeleteGardenCommentInput = z.infer<typeof deleteGardenCommentInput>;
+
+/**
+ * Input to `gardenComments.report` (protected).
+ * Mirrors `reportMessageInput`'s `reason` constraints exactly (trimmed,
+ * 1-500 characters) — same App Store Guideline 1.2 UGC-reporting rationale.
+ */
+export const reportGardenCommentInput = z.object({
+  commentId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(500),
+});
+
+export type ReportGardenCommentInput = z.infer<typeof reportGardenCommentInput>;
 
 // ---------------------------------------------------------------------------
 // Community places — Home map pins (F-048)

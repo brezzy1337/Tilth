@@ -54,6 +54,8 @@ function recordingRes(): ServerResponse & { statusCode: number; headers: Record<
 // ---------------------------------------------------------------------------
 
 type WebhookOpts = Parameters<typeof createRequestListener>[0]["webhook"]["opts"];
+type GardenShareDeps = NonNullable<Parameters<typeof createRequestListener>[0]["gardenShare"]>;
+type GardenShareHandleOpts = Parameters<GardenShareDeps["handle"]>[2];
 
 function makeListener() {
   // Use explicit function signatures to avoid vi.fn generic issues across vitest versions.
@@ -72,6 +74,28 @@ function makeListener() {
   });
 
   return { listener, trpcSpy, webhookSpy };
+}
+
+/** Variant that also wires a `gardenShare` spy — for /garden/{postId} routing tests. */
+function makeListenerWithGardenShare() {
+  const trpcSpy = vi.fn((_req: IncomingMessage, _res: ServerResponse) => {});
+  const webhookSpy = vi.fn(
+    (_req: IncomingMessage, _res: ServerResponse, _opts: WebhookOpts) => {},
+  );
+  const gardenShareSpy = vi.fn(
+    (_req: IncomingMessage, _res: ServerResponse, _opts: GardenShareHandleOpts) => {},
+  );
+
+  const listener = createRequestListener({
+    trpcHandler: trpcSpy,
+    webhook: { handle: webhookSpy, opts: {} as WebhookOpts },
+    gardenShare: {
+      handle: gardenShareSpy,
+      opts: {} as Omit<GardenShareHandleOpts, "postId">,
+    },
+  });
+
+  return { listener, trpcSpy, webhookSpy, gardenShareSpy };
 }
 
 // ---------------------------------------------------------------------------
@@ -267,5 +291,82 @@ describe("createRequestListener — public legal pages", () => {
 
     expect(trpcSpy).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Public garden share page (F-053)
+// ---------------------------------------------------------------------------
+
+describe("createRequestListener — /garden/{postId} share page routing", () => {
+  const UUID_POST = "c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33";
+
+  it("GET /garden/{postId} routes to the gardenShare spy, not trpcHandler", () => {
+    const { listener, trpcSpy, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("GET", `/garden/${UUID_POST}`);
+    listener(req, fakeRes());
+
+    expect(gardenShareSpy).toHaveBeenCalledTimes(1);
+    expect(trpcSpy).not.toHaveBeenCalled();
+    const [, , opts] = gardenShareSpy.mock.calls[0]!;
+    expect(opts.postId).toBe(UUID_POST);
+  });
+
+  it("query strings are ignored for routing: GET /garden/{postId}?utm_source=x still matches", () => {
+    const { listener, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("GET", `/garden/${UUID_POST}?utm_source=x`);
+    listener(req, fakeRes());
+
+    expect(gardenShareSpy).toHaveBeenCalledTimes(1);
+    const [, , opts] = gardenShareSpy.mock.calls[0]!;
+    expect(opts.postId).toBe(UUID_POST);
+  });
+
+  it("POST /garden/{postId} → 405, does not call gardenShare or trpcHandler", () => {
+    const { listener, trpcSpy, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("POST", `/garden/${UUID_POST}`);
+    const res = recordingRes();
+    listener(req, res);
+
+    expect(gardenShareSpy).not.toHaveBeenCalled();
+    expect(trpcSpy).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(405);
+  });
+
+  it("a malformed (non-UUID) postId segment still routes to gardenShare (validation happens downstream)", () => {
+    const { listener, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("GET", "/garden/not-a-uuid");
+    listener(req, fakeRes());
+
+    expect(gardenShareSpy).toHaveBeenCalledTimes(1);
+    const [, , opts] = gardenShareSpy.mock.calls[0]!;
+    expect(opts.postId).toBe("not-a-uuid");
+  });
+
+  it("without a wired gardenShare dep, GET /garden/{postId} falls through to trpcHandler unchanged (existing callers/tests unaffected)", () => {
+    const { listener, trpcSpy } = makeListener();
+    const req = fakeReq("GET", `/garden/${UUID_POST}`);
+    listener(req, fakeRes());
+
+    expect(trpcSpy).toHaveBeenCalledTimes(1);
+    expect(req.url).toBe(`/garden/${UUID_POST}`);
+  });
+
+  it("/garden (no postId segment) is not matched — falls through to trpcHandler", () => {
+    const { listener, trpcSpy, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("GET", "/garden");
+    listener(req, fakeRes());
+
+    expect(gardenShareSpy).not.toHaveBeenCalled();
+    expect(trpcSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("/garden/{postId}/extra (longer path) is not matched — falls through to trpcHandler", () => {
+    const { listener, trpcSpy, gardenShareSpy } = makeListenerWithGardenShare();
+    const req = fakeReq("GET", `/garden/${UUID_POST}/extra`);
+    listener(req, fakeRes());
+
+    expect(gardenShareSpy).not.toHaveBeenCalled();
+    expect(trpcSpy).toHaveBeenCalledTimes(1);
   });
 });

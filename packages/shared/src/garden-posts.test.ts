@@ -141,6 +141,9 @@ describe("gardenFeedItem discriminated union", () => {
     caption: "Fresh basil today",
     status: "ready" as const,
     createdAt: "2026-07-01T12:00:00.000Z",
+    likeCount: 4,
+    likedByMe: false,
+    commentCount: 2,
   };
 
   it("parses a valid photo_set item", () => {
