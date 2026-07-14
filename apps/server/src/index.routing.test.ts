@@ -31,7 +31,11 @@ function fakeRes(): ServerResponse {
 }
 
 /** A res double that records writeHead/end calls, for routes that respond directly (not via trpcHandler/webhook spies). */
-function recordingRes(): ServerResponse & { statusCode: number; headers: Record<string, unknown>; body: string } {
+function recordingRes(): ServerResponse & {
+  statusCode: number;
+  headers: Record<string, unknown>;
+  body: string;
+} {
   const rec = {
     statusCode: 0,
     headers: {} as Record<string, unknown>,
@@ -46,7 +50,11 @@ function recordingRes(): ServerResponse & { statusCode: number; headers: Record<
       return rec;
     },
   };
-  return rec as unknown as ServerResponse & { statusCode: number; headers: Record<string, unknown>; body: string };
+  return rec as unknown as ServerResponse & {
+    statusCode: number;
+    headers: Record<string, unknown>;
+    body: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -60,9 +68,7 @@ type GardenShareHandleOpts = Parameters<GardenShareDeps["handle"]>[2];
 function makeListener() {
   // Use explicit function signatures to avoid vi.fn generic issues across vitest versions.
   const trpcSpy = vi.fn((_req: IncomingMessage, _res: ServerResponse) => {});
-  const webhookSpy = vi.fn(
-    (_req: IncomingMessage, _res: ServerResponse, _opts: WebhookOpts) => {},
-  );
+  const webhookSpy = vi.fn((_req: IncomingMessage, _res: ServerResponse, _opts: WebhookOpts) => {});
 
   const listener = createRequestListener({
     trpcHandler: trpcSpy,
@@ -79,9 +85,7 @@ function makeListener() {
 /** Variant that also wires a `gardenShare` spy — for /garden/{postId} routing tests. */
 function makeListenerWithGardenShare() {
   const trpcSpy = vi.fn((_req: IncomingMessage, _res: ServerResponse) => {});
-  const webhookSpy = vi.fn(
-    (_req: IncomingMessage, _res: ServerResponse, _opts: WebhookOpts) => {},
-  );
+  const webhookSpy = vi.fn((_req: IncomingMessage, _res: ServerResponse, _opts: WebhookOpts) => {});
   const gardenShareSpy = vi.fn(
     (_req: IncomingMessage, _res: ServerResponse, _opts: GardenShareHandleOpts) => {},
   );
@@ -235,6 +239,7 @@ describe("createRequestListener — public legal pages", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("text/html; charset=utf-8");
     expect(res.headers["Cache-Control"]).toBe("public, max-age=3600");
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(res.body).toContain("Terms of Service");
     expect(res.body).toContain("10%");
   });
@@ -249,6 +254,7 @@ describe("createRequestListener — public legal pages", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("text/html; charset=utf-8");
     expect(res.headers["Cache-Control"]).toBe("public, max-age=3600");
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(res.body).toContain("Privacy Policy");
     expect(res.body).toContain("30-day grace");
   });
@@ -261,6 +267,7 @@ describe("createRequestListener — public legal pages", () => {
 
     expect(trpcSpy).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(405);
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
   });
 
   it("POST /legal/privacy → 405, does not call trpcHandler", () => {
@@ -271,6 +278,7 @@ describe("createRequestListener — public legal pages", () => {
 
     expect(trpcSpy).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(405);
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
   });
 
   it("unknown /legal/x is not handled here — falls through to trpcHandler (existing 404 fallback)", () => {
@@ -331,6 +339,7 @@ describe("createRequestListener — /garden/{postId} share page routing", () => 
     expect(gardenShareSpy).not.toHaveBeenCalled();
     expect(trpcSpy).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(405);
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
   });
 
   it("a malformed (non-UUID) postId segment still routes to gardenShare (validation happens downstream)", () => {

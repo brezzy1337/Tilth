@@ -51,17 +51,19 @@ import { BottomSheetModal, BottomSheetModalProvider } from "@gorhom/bottom-sheet
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { GardenFeedInput, GardenFeedItem } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { buildGardenFeedQueryInput } from "../api/gardenFeedCache";
 import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { GardensTabNavigationProp, TabParamList } from "../navigation/types";
 import { GardenPhotoCarousel } from "../components/GardenPhotoCarousel";
 import { GardenVideoCell } from "../components/GardenVideoCell";
 import { GardenActionRail } from "../components/GardenActionRail";
-import { GardenCommentsSheet, type GardenCommentsSheetTarget } from "../components/GardenCommentsSheet";
+import {
+  GardenCommentsSheet,
+  type GardenCommentsSheetTarget,
+} from "../components/GardenCommentsSheet";
 import { colors, radii, spacing, type } from "../theme";
 
-const RADIUS_KM = 25;
-const PAGE_LIMIT = 10;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 type Props = Omit<BottomTabScreenProps<TabParamList, "Gardens">, "navigation"> & {
@@ -91,10 +93,11 @@ function GardenFeedList({
 }: GardenFeedListProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  // Identical shape to the useInfiniteQuery call below — passed to
-  // GardenActionRail so its optimistic like patch targets THIS exact cached
-  // query (react-query keys infinite queries by input, not by reference).
-  const feedQueryInput: GardenFeedInput = { lat, lng, radiusKm: RADIUS_KM, limit: PAGE_LIMIT };
+  // Built via the shared `buildGardenFeedQueryInput` (src/api/gardenFeedCache.ts)
+  // — passed to GardenActionRail so its optimistic like patch targets THIS
+  // exact cached query (react-query keys infinite queries by input, not by
+  // reference).
+  const feedQueryInput: GardenFeedInput = buildGardenFeedQueryInput(lat, lng);
 
   const {
     data,
@@ -235,7 +238,7 @@ export function GardenFeedScreen({ navigation }: Props) {
 
   const feedQueryInput: GardenFeedInput | null =
     location.status === "granted" && location.coords
-      ? { lat: location.coords.lat, lng: location.coords.lng, radiusKm: RADIUS_KM, limit: PAGE_LIMIT }
+      ? buildGardenFeedQueryInput(location.coords.lat, location.coords.lng)
       : null;
 
   const handleOpenComments = (postId: string, storeName: string) => {
@@ -272,7 +275,9 @@ export function GardenFeedScreen({ navigation }: Props) {
         {location.status === "error" ? (
           <View style={styles.centeredState}>
             <Text style={styles.stateText}>Could not determine your location.</Text>
-            <Text style={styles.stateSubText}>Please check your device settings and try again.</Text>
+            <Text style={styles.stateSubText}>
+              Please check your device settings and try again.
+            </Text>
           </View>
         ) : null}
 

@@ -28,7 +28,8 @@
  *   - Participant checks that fail must surface NOT_FOUND (never leak whether
  *     a conversation/message exists to a non-participant).
  *   - Block checks that fail must surface a generic FORBIDDEN message — never
- *     reveal WHO blocked whom.
+ *     reveal WHO blocked whom. Uses helpers.ts's `isBlockedEitherDirection`
+ *     (also reused by sourcing.ts and garden.ts's `createComment`).
  *   - Push failures must never fail the mutation — `ctx.push.send` already
  *     swallows its own errors (see push.ts), and `send` delegates to
  *     helpers.ts's `pushToUser` (also used by sourcing.ts), which wraps the
@@ -85,6 +86,8 @@ import {
   isUserDeactivated,
   assertCallerActive,
   resolveActiveStore,
+  isBlockedEitherDirection,
+  assertRateLimit,
 } from "./helpers";
 import type { Db } from "../context";
 
@@ -188,21 +191,6 @@ async function resolveParticipant(
   return row;
 }
 
-/** Whether `a` and `b` block each other in either direction. Exported for chat.test.ts. */
-export async function isBlockedEitherDirection(db: Db, a: string, b: string): Promise<boolean> {
-  const [row] = await db
-    .select({ blockerUserId: userBlocks.blockerUserId })
-    .from(userBlocks)
-    .where(
-      or(
-        and(eq(userBlocks.blockerUserId, a), eq(userBlocks.blockedUserId, b)),
-        and(eq(userBlocks.blockerUserId, b), eq(userBlocks.blockedUserId, a)),
-      ),
-    )
-    .limit(1);
-  return !!row;
-}
-
 // ---------------------------------------------------------------------------
 // Rate limiting — pilot-appropriate, DB-count based (no Redis / extra infra).
 // Each check counts the caller's recent rows in the relevant table and throws
@@ -220,39 +208,33 @@ const PUSH_TOKEN_RATE_LIMIT = { max: 10, windowMs: 60 * 60_000 };
 /**
  * Throw TOO_MANY_REQUESTS when a sender has hit the `send` window
  * (SEND_RATE_LIMIT). Counts messages by sender across all conversations —
- * served by messages_sender_user_id_created_at_idx. Exported for chat.test.ts.
+ * served by messages_sender_user_id_created_at_idx. Thin wrapper over
+ * helpers.ts's generic `assertRateLimit`. Exported for chat.test.ts /
+ * sourcing.ts (which reuses this for its own message-sending mutations).
  */
 export async function assertSendRateLimit(db: Db, senderUserId: string): Promise<void> {
-  const since = new Date(Date.now() - SEND_RATE_LIMIT.windowMs);
-  const [row] = await db
-    .select({ count: count() })
-    .from(messages)
-    .where(and(eq(messages.senderUserId, senderUserId), gte(messages.createdAt, since)));
-
-  if ((row?.count ?? 0) >= SEND_RATE_LIMIT.max) {
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "You're sending messages too quickly. Please wait a moment.",
-    });
-  }
+  return assertRateLimit(db, {
+    table: messages,
+    userIdColumn: messages.senderUserId,
+    createdAtColumn: messages.createdAt,
+    userId: senderUserId,
+    max: SEND_RATE_LIMIT.max,
+    windowMs: SEND_RATE_LIMIT.windowMs,
+    message: "You're sending messages too quickly. Please wait a moment.",
+  });
 }
 
 /** Throw TOO_MANY_REQUESTS when a reporter has hit the `reportMessage` window. */
 async function assertReportRateLimit(db: Db, reporterUserId: string): Promise<void> {
-  const since = new Date(Date.now() - REPORT_RATE_LIMIT.windowMs);
-  const [row] = await db
-    .select({ count: count() })
-    .from(messageReports)
-    .where(
-      and(eq(messageReports.reporterUserId, reporterUserId), gte(messageReports.createdAt, since)),
-    );
-
-  if ((row?.count ?? 0) >= REPORT_RATE_LIMIT.max) {
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "Too many reports. Please try again later.",
-    });
-  }
+  return assertRateLimit(db, {
+    table: messageReports,
+    userIdColumn: messageReports.reporterUserId,
+    createdAtColumn: messageReports.createdAt,
+    userId: reporterUserId,
+    max: REPORT_RATE_LIMIT.max,
+    windowMs: REPORT_RATE_LIMIT.windowMs,
+    message: "Too many reports. Please try again later.",
+  });
 }
 
 /**

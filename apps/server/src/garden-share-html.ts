@@ -24,12 +24,21 @@
  * `legal-html.ts`'s `escapeHtml` — imported, never duplicated — defensively,
  * even though the fields come from our own DB: this is a public,
  * unauthenticated page, and captions are free-text user-generated content.
+ *
+ * The page shell (doctype/viewport meta/base body+main CSS) is
+ * `html-shell.ts`'s `renderHtmlPageShell`, shared with the legal pages
+ * (`legal-html.ts`) — only the share-page-specific CSS/content live here.
+ *
+ * `handleGardenShareRequest`'s DB hit sits behind a small in-process TTL
+ * cache (`fetchGardenPostForShareCached`, below) — see its doc comment for
+ * the single-instance/pilot-scale rationale.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Db } from "./context";
 import { escapeHtml } from "./legal-html";
+import { renderHtmlPageShell, NOSNIFF_HEADERS } from "./html-shell";
 import { fetchGardenPostForShare, type GardenSharePost } from "./routers/garden";
 
 /** `og:description` / `twitter:description` are truncated to this length. */
@@ -75,31 +84,13 @@ export function renderGardenShareHtml(post: GardenSharePost): string {
 <p class="video-note">🎥 Watch in the Tilth app</p>`
         : "";
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title}</title>
-<meta property="og:type" content="website" />
+  const extraHead = `<meta property="og:type" content="website" />
 <meta property="og:title" content="${title}" />
 <meta property="og:description" content="${description}" />
 ${ogImage ? `<meta property="og:image" content="${escapeHtml(ogImage)}" />\n` : ""}<meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${title}" />
 <meta name="twitter:description" content="${description}" />
 ${ogImage ? `<meta name="twitter:image" content="${escapeHtml(ogImage)}" />\n` : ""}<style>
-  body {
-    margin: 0;
-    padding: 2rem 1.25rem 4rem;
-    background: #fbfaf7;
-    color: #2a2a26;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    line-height: 1.6;
-  }
-  main {
-    max-width: 32rem;
-    margin: 0 auto;
-  }
   h1 {
     font-size: 1.4rem;
     margin-bottom: 0.25rem;
@@ -119,36 +110,73 @@ ${ogImage ? `<meta name="twitter:image" content="${escapeHtml(ogImage)}" />\n` :
     font-size: 0.9rem;
   }
 </style>
-</head>
-<body>
-<main>
-<h1>${storeName}</h1>
+`;
+
+  const bodyHtml = `<h1>${storeName}</h1>
 ${mediaHtml}
 <p class="caption">${caption}</p>
-<p class="footer">🌱 Get Tilth — Coming soon to the App Store</p>
-</main>
-</body>
-</html>
-`;
+<p class="footer">🌱 Get Tilth — Coming soon to the App Store</p>`;
+
+  return renderHtmlPageShell({ title, extraHead, bodyHtml });
 }
 
 /** Renders a minimal 404 page for a missing/invisible post id. */
 export function renderGardenShareNotFoundHtml(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Post not found — Tilth</title>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 2rem 1.25rem; background: #fbfaf7; color: #2a2a26;">
-<main style="max-width: 32rem; margin: 0 auto;">
-<h1>Post not found</h1>
-<p>This garden post doesn't exist, or is no longer available.</p>
-</main>
-</body>
-</html>
-`;
+  return renderHtmlPageShell({
+    title: "Post not found — Tilth",
+    bodyHtml: `<h1>Post not found</h1>
+<p>This garden post doesn't exist, or is no longer available.</p>`,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// In-process TTL cache in front of the share page's DB hit — postId-keyed,
+// bounded, negative-caching. Single-instance/pilot-scale rationale: this
+// service runs a handful of Cloud Run instances at most for the pilot, so a
+// per-instance in-memory cache (no Redis / extra infra) is good enough to
+// absorb an unauthenticated hammering loop on one popular (or one broken/
+// scanning-for-ids) share link — most repeat requests hit memory instead of
+// Postgres. A 404 (missing/invisible post) is cached too: that's exactly the
+// case an abusive loop produces, and it's cheap to negative-cache since the
+// DB round-trip already ran once. Bounded to CACHE_MAX_ENTRIES with FIFO
+// eviction — a `Map` preserves insertion order, so its first key is always
+// the oldest entry.
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 60_000;
+const CACHE_MAX_ENTRIES = 500;
+
+interface ShareCacheEntry {
+  value: GardenSharePost | null;
+  expiresAt: number;
+}
+
+const sharePostCache = new Map<string, ShareCacheEntry>();
+
+/** Clears the module-level share cache. Exported for test isolation only. */
+export function resetGardenShareCacheForTest(): void {
+  sharePostCache.clear();
+}
+
+/** Cache-then-DB fetch wrapping `fetchGardenPostForShare` — see the cache section doc comment above. */
+async function fetchGardenPostForShareCached(
+  db: Db,
+  postId: string,
+): Promise<GardenSharePost | null> {
+  const cached = sharePostCache.get(postId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  const value = await fetchGardenPostForShare(db, postId);
+
+  if (sharePostCache.size >= CACHE_MAX_ENTRIES && !sharePostCache.has(postId)) {
+    const oldestKey = sharePostCache.keys().next().value;
+    if (oldestKey !== undefined) sharePostCache.delete(oldestKey);
+  }
+  sharePostCache.set(postId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +195,8 @@ export interface GardenShareRequestOpts {
  * Handle `GET /garden/{postId}`. Never throws — a malformed postId or a
  * missing/invisible post both resolve to a 404 HTML page; a lookup error
  * resolves to a 500 (so an upstream retry/observability tool sees a proper
- * status rather than a hung connection).
+ * status rather than a hung connection). Every response carries
+ * `X-Content-Type-Options: nosniff` (`html-shell.ts`'s `NOSNIFF_HEADERS`).
  */
 export function handleGardenShareRequest(
   req: IncomingMessage,
@@ -178,14 +207,14 @@ export function handleGardenShareRequest(
     try {
       const parsedId = postIdSchema.safeParse(opts.postId);
       if (!parsedId.success) {
-        res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(404, { "Content-Type": "text/html; charset=utf-8", ...NOSNIFF_HEADERS });
         res.end(renderGardenShareNotFoundHtml());
         return;
       }
 
-      const post = await fetchGardenPostForShare(opts.db, parsedId.data);
+      const post = await fetchGardenPostForShareCached(opts.db, parsedId.data);
       if (!post) {
-        res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(404, { "Content-Type": "text/html; charset=utf-8", ...NOSNIFF_HEADERS });
         res.end(renderGardenShareNotFoundHtml());
         return;
       }
@@ -193,6 +222,7 @@ export function handleGardenShareRequest(
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "public, max-age=300",
+        ...NOSNIFF_HEADERS,
       });
       res.end(renderGardenShareHtml(post));
     } catch (err) {
@@ -200,7 +230,7 @@ export function handleGardenShareRequest(
         "[garden-share] request failed",
         err instanceof Error ? err.message : String(err),
       );
-      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8", ...NOSNIFF_HEADERS });
       res.end("Internal Server Error");
     }
   })();

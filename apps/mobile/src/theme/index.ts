@@ -111,6 +111,17 @@ export const shadows = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Media legibility — the single value for text-legibility-over-media (garden
+// feed cells, F-053): used both as GardenPostOverlay's caption scrim and as
+// GardenActionRail's icon/count text-shadow color, so a caption sitting on a
+// scrim and a rail icon floating with just a shadow read as the same
+// "readable over any photo/video" treatment rather than two independently
+// tuned values that happen to look similar.
+// ---------------------------------------------------------------------------
+
+export const mediaScrim = "rgba(0,0,0,0.35)";
+
+// ---------------------------------------------------------------------------
 // Type presets — font-size/weight pairs. Components apply `color` themselves
 // (usually `colors.text` or `colors.textMuted`) since the right color varies
 // by context.

@@ -34,16 +34,11 @@
 import React from "react";
 import { Platform, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { GardenFeedInput, GardenFeedItem, GardenFeedOutput } from "@homegrown/shared";
+import type { GardenFeedInput, GardenFeedItem } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { patchGardenFeedItem } from "../api/gardenFeedCache";
 import { gardenShareUrl } from "../constants/urls";
-import { colors, spacing, type } from "../theme";
-
-// `pageParams` is typed to match `garden.feed`'s cursor exactly (its
-// `nextCursor` field, which doubles as the next page's param, is
-// `string | null`) — react-query's InfiniteData<T, TPageParam> otherwise
-// rejects a widened `unknown[]` when handed back via setInfiniteData.
-type InfiniteFeedData = { pages: GardenFeedOutput[]; pageParams: (string | null)[] };
+import { colors, mediaScrim, spacing, type } from "../theme";
 
 type Props = {
   item: GardenFeedItem;
@@ -62,22 +57,6 @@ function formatCount(n: number): string {
   return `${m % 1 === 0 ? m.toFixed(0) : m.toFixed(1)}m`;
 }
 
-/** Patch a single feed item across every cached page, leaving everything else untouched. */
-function patchFeedItem(
-  data: InfiniteFeedData | undefined,
-  postId: string,
-  patch: (item: GardenFeedItem) => GardenFeedItem,
-): InfiniteFeedData | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    pages: data.pages.map((page) => ({
-      ...page,
-      items: page.items.map((item) => (item.id === postId ? patch(item) : item)),
-    })),
-  };
-}
-
 export function GardenActionRail({ item, feedQueryInput, onOpenComments }: Props) {
   const utils = trpc.useUtils();
 
@@ -87,7 +66,7 @@ export function GardenActionRail({ item, feedQueryInput, onOpenComments }: Props
       const previous = utils.garden.feed.getInfiniteData(feedQueryInput);
 
       utils.garden.feed.setInfiniteData(feedQueryInput, (old) =>
-        patchFeedItem(old, postId, (feedItem) => ({
+        patchGardenFeedItem(old, postId, (feedItem) => ({
           ...feedItem,
           likedByMe: !feedItem.likedByMe,
           likeCount: feedItem.likedByMe
@@ -105,7 +84,7 @@ export function GardenActionRail({ item, feedQueryInput, onOpenComments }: Props
     },
     onSuccess: (data, { postId }) => {
       utils.garden.feed.setInfiniteData(feedQueryInput, (old) =>
-        patchFeedItem(old, postId, (feedItem) => ({
+        patchGardenFeedItem(old, postId, (feedItem) => ({
           ...feedItem,
           likedByMe: data.liked,
           likeCount: data.likeCount,
@@ -135,7 +114,7 @@ export function GardenActionRail({ item, feedQueryInput, onOpenComments }: Props
   return (
     <View style={styles.rail} pointerEvents="box-none">
       <Pressable
-        style={styles.action}
+        style={({ pressed }) => [styles.action, pressed ? styles.actionPressed : null]}
         onPress={handleToggleLike}
         hitSlop={10}
         accessibilityRole="button"
@@ -144,59 +123,99 @@ export function GardenActionRail({ item, feedQueryInput, onOpenComments }: Props
       >
         <Ionicons
           name={item.likedByMe ? "heart" : "heart-outline"}
-          size={30}
+          size={28}
           color={item.likedByMe ? colors.pop : colors.onPrimary}
-          style={styles.icon}
+          style={[styles.icon, toggleLike.isPending ? styles.iconPending : null]}
         />
         <Text style={styles.count}>{formatCount(item.likeCount)}</Text>
       </Pressable>
 
       <Pressable
-        style={styles.action}
+        style={({ pressed }) => [styles.action, pressed ? styles.actionPressed : null]}
         onPress={() => onOpenComments(item.id, item.storeName)}
         hitSlop={10}
         accessibilityRole="button"
         accessibilityLabel={`View comments (${item.commentCount})`}
       >
-        <Ionicons name="chatbubble-outline" size={28} color={colors.onPrimary} style={styles.icon} />
+        <Ionicons
+          name="chatbubble-outline"
+          size={28}
+          color={colors.onPrimary}
+          style={styles.icon}
+        />
         <Text style={styles.count}>{formatCount(item.commentCount)}</Text>
       </Pressable>
 
       <Pressable
-        style={styles.action}
+        style={({ pressed }) => [styles.action, pressed ? styles.actionPressed : null]}
         onPress={handleShare}
         hitSlop={10}
         accessibilityRole="button"
         accessibilityLabel="Share this post"
       >
-        <Ionicons name="arrow-redo-outline" size={28} color={colors.onPrimary} style={styles.icon} />
+        <Ionicons
+          name="arrow-redo-outline"
+          size={28}
+          color={colors.onPrimary}
+          style={styles.icon}
+        />
       </Pressable>
     </View>
   );
 }
 
+// Rail's own layout constants — `RAIL_WIDTH` below derives from these rather
+// than duplicating a literal, so `GardenPostOverlay`'s caption clearance can
+// never silently drift out of sync with the rail's actual footprint.
+const RAIL_RIGHT_INSET = spacing.lg; // styles.rail.right
+const ACTION_TOUCH_TARGET = 44; // styles.action.minWidth / minHeight (>=44pt tap target)
+const RAIL_EDGE_BUFFER = 4; // breathing room so captions never hug the icons
+
+/**
+ * Total horizontal footprint of the rail from the screen's right edge: the
+ * right inset it sits at, plus one action's touch-target width, plus a small
+ * edge buffer. `GardenPostOverlay` imports this instead of maintaining its
+ * own clearance literal.
+ */
+export const RAIL_WIDTH = RAIL_RIGHT_INSET + ACTION_TOUCH_TARGET + RAIL_EDGE_BUFFER; // 16+44+4=64
+
+// Same dip Button.tsx uses for its `disabled` state (opacity 0.55) — reused
+// here for both a pressed action and an in-flight like, so "this control
+// isn't taking new input right now" always reads the same way.
+const PRESSED_OPACITY = 0.55;
+
 const styles = StyleSheet.create({
   rail: {
     position: "absolute",
-    right: spacing.lg,
+    right: RAIL_RIGHT_INSET,
     bottom: spacing.xxl,
     alignItems: "center",
     gap: spacing.lg,
   },
-  // Each action's touch target is >=44pt (icon ~30 + vertical label + hitSlop
+  // Each action's touch target is >=44pt (icon 28 + vertical label + hitSlop
   // 10 on every edge comfortably clears the floor).
   action: {
     alignItems: "center",
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: ACTION_TOUCH_TARGET,
+    minHeight: ACTION_TOUCH_TARGET,
     justifyContent: "center",
     gap: 2,
   },
+  actionPressed: {
+    opacity: PRESSED_OPACITY,
+  },
+  // Dims the heart while its toggle is in flight (same opacity as a pressed
+  // action) so the in-flight state is visible even though the tap already
+  // released.
+  iconPending: {
+    opacity: PRESSED_OPACITY,
+  },
   // Drop shadow (not a translucent scrim box — the rail floats directly over
   // media with no backing panel) so icons/counts stay readable over bright
-  // photos, matching GardenPostOverlay's "always-legible" white-on-media rule.
+  // photos. Uses the same `mediaScrim` token as GardenPostOverlay's caption
+  // scrim (see theme/index.ts) so both legibility treatments match exactly.
   icon: {
-    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowColor: mediaScrim,
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
@@ -204,7 +223,7 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: type.caption.fontSize - 1,
     fontWeight: "700",
-    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowColor: mediaScrim,
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },

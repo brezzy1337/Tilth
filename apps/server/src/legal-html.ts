@@ -8,9 +8,15 @@
  * document content is static (defined in `packages/shared/src/legal.ts`),
  * but every interpolated string is still escaped defensively: nothing here
  * should ever assume "it's static, so it's safe."
+ *
+ * The page shell (doctype/viewport meta/base body+main CSS) is
+ * `html-shell.ts`'s `renderHtmlPageShell`, shared with the garden share page
+ * (`garden-share-html.ts`) — only the legal-doc-specific CSS (headings,
+ * paragraphs, bullets) and content live here.
  */
 
 import type { LegalDocument } from "@homegrown/shared";
+import { renderHtmlPageShell } from "./html-shell";
 
 /**
  * Escapes the five HTML-significant characters. Order matters — `&` must be
@@ -49,25 +55,7 @@ export function renderLegalHtml(doc: LegalDocument): string {
   const lastUpdated = escapeHtml(doc.lastUpdated);
   const sections = doc.sections.map(renderSection).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title} — Tilth</title>
-<style>
-  body {
-    margin: 0;
-    padding: 2rem 1.25rem 4rem;
-    background: #fbfaf7;
-    color: #2a2a26;
-    font-family: Georgia, "Times New Roman", ui-serif, serif;
-    line-height: 1.6;
-  }
-  main {
-    max-width: 42rem;
-    margin: 0 auto;
-  }
+  const extraHead = `<style>
   h1 {
     font-size: 1.75rem;
     margin-bottom: 0.25rem;
@@ -95,14 +83,17 @@ export function renderLegalHtml(doc: LegalDocument): string {
     margin-bottom: 0.5rem;
   }
 </style>
-</head>
-<body>
-<main>
-<h1>${title}</h1>
-<p class="last-updated">Last updated: ${lastUpdated}</p>
-${sections}
-</main>
-</body>
-</html>
 `;
+
+  const bodyHtml = `<h1>${title}</h1>
+<p class="last-updated">Last updated: ${lastUpdated}</p>
+${sections}`;
+
+  return renderHtmlPageShell({
+    title: `${title} — Tilth`,
+    extraHead,
+    bodyHtml,
+    maxWidth: "42rem",
+    fontFamily: 'Georgia, "Times New Roman", ui-serif, serif',
+  });
 }

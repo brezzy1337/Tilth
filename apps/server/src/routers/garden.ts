@@ -44,17 +44,22 @@
  *     `assertCallerActive` (a deactivated caller can't create new posts). It
  *     runs AFTER the media/mux-configured check on `createPhotoUploadUrls` /
  *     `createVideo` so the "unconfigured" path still never touches the DB.
- *     F-053's `toggleLike`/`createComment`/`deleteComment` also call it.
- *   - F-053 — comment writes reuse chat.ts's `isBlockedEitherDirection` (a
+ *     F-053 — of its five procedures, the four WRITES (`toggleLike`,
+ *     `createComment`, `deleteComment`, `reportComment`) all call it FIRST,
+ *     before any other authz/state check; `listComments` is a public read and
+ *     does not (a deactivated caller can still browse — only writes are
+ *     blocked, per helpers.ts's CALLER-direction note).
+ *   - F-053 — comment writes reuse helpers.ts's `isBlockedEitherDirection` (a
  *     commenter blocked either-direction with the POST OWNER is FORBIDDEN,
- *     same semantics as chat) and helpers.ts's `pushToUser`/`activeUserClause`.
+ *     same semantics as chat.ts, which also uses it — moved to helpers.ts once
+ *     a third router needed it) and helpers.ts's `pushToUser`/`activeUserClause`.
  *     A missing/invisible post or comment is always NOT_FOUND, never FORBIDDEN
  *     (existence isn't leaked — same convention as chat.ts).
  */
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and, or, lt, gte, desc, count, isNull, notInArray, sql } from "drizzle-orm";
+import { eq, and, or, lt, desc, count, isNull, notInArray, sql } from "drizzle-orm";
 import {
   gardenPostType,
   gardenPostStatus,
@@ -94,8 +99,9 @@ import {
   activeUserClause,
   assertCallerActive,
   pushToUser,
+  isBlockedEitherDirection,
+  assertRateLimit,
 } from "./helpers";
-import { isBlockedEitherDirection } from "./chat";
 import type { Db } from "../context";
 
 // ---------------------------------------------------------------------------
@@ -229,13 +235,31 @@ interface VisibleGardenPost {
   ownerUserId: string;
 }
 
+/** The subset of a `garden_posts` ⋈ `users` row needed to decide visibility. */
+interface GardenPostVisibilityRow {
+  status: string;
+  ownerDeactivatedAt: Date | null;
+}
+
 /**
- * Resolve a garden post and enforce the SAME visibility predicate `feed`
- * applies (`status = 'ready'` AND the owning store's user is not
- * deactivated) — throws NOT_FOUND otherwise (existence isn't leaked; a
- * "processing"/"errored" post or one owned by a deactivated seller looks
- * identical to a nonexistent one). Used by `toggleLike`, `createComment`,
- * `listComments`, and the public share page (`garden-share-html.ts`).
+ * THE ONE visibility predicate for a garden post, outside of `feed`'s
+ * necessarily-raw-SQL WHERE clause (which filters at the DB rather than in
+ * application code, and must be kept in sync with this by hand — see the
+ * comment on `feed`'s WHERE clause below): `status = 'ready'` AND the owning
+ * store's user is not deactivated. Used by both `resolveVisibleGardenPost`
+ * (throwing variant, for `toggleLike`/comments) and `fetchGardenPostForShare`
+ * (null-returning variant, for the public share page).
+ */
+function isGardenPostVisible(row: GardenPostVisibilityRow): boolean {
+  return row.status === "ready" && row.ownerDeactivatedAt === null;
+}
+
+/**
+ * Resolve a garden post and enforce `isGardenPostVisible` — throws NOT_FOUND
+ * otherwise (existence isn't leaked; a "processing"/"errored" post or one
+ * owned by a deactivated seller looks identical to a nonexistent one). Used
+ * by `toggleLike`, `createComment`, `listComments`, and the public share page
+ * (`garden-share-html.ts`).
  */
 async function resolveVisibleGardenPost(db: Db, postId: string): Promise<VisibleGardenPost> {
   const [row] = await db
@@ -252,7 +276,7 @@ async function resolveVisibleGardenPost(db: Db, postId: string): Promise<Visible
     .where(eq(gardenPosts.id, postId))
     .limit(1);
 
-  if (!row || row.status !== "ready" || row.ownerDeactivatedAt) {
+  if (!row || !isGardenPostVisible(row)) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Garden post not found" });
   }
 
@@ -273,7 +297,7 @@ export interface GardenSharePost {
 
 /**
  * Fetch a single feed-visible garden post for the public share page
- * (`GET /garden/{postId}`, see `garden-share-html.ts`). Same visibility
+ * (`GET /garden/{postId}`, see `garden-share-html.ts`). Same `isGardenPostVisible`
  * predicate as `feed`/`toggleLike`/comments (status='ready', owner not
  * deactivated). Returns `null` (never throws) when the post doesn't exist or
  * isn't visible — the share-page handler maps that to a 404 HTML page.
@@ -281,7 +305,10 @@ export interface GardenSharePost {
  * arbitrary string bound against the `uuid` column throws a Postgres error
  * rather than resolving to "no row".
  */
-export async function fetchGardenPostForShare(db: Db, postId: string): Promise<GardenSharePost | null> {
+export async function fetchGardenPostForShare(
+  db: Db,
+  postId: string,
+): Promise<GardenSharePost | null> {
   const [row] = await db
     .select({
       id: gardenPosts.id,
@@ -301,7 +328,7 @@ export async function fetchGardenPostForShare(db: Db, postId: string): Promise<G
     .where(eq(gardenPosts.id, postId))
     .limit(1);
 
-  if (!row || row.status !== "ready" || row.ownerDeactivatedAt) return null;
+  if (!row || !isGardenPostVisible(row)) return null;
 
   return {
     id: row.id,
@@ -320,41 +347,33 @@ const GARDEN_COMMENT_RATE_LIMIT = { max: 30, windowMs: 60_000 };
 /** `reportComment`: max reports per reporter per window — mirrors chat.ts's REPORT_RATE_LIMIT. */
 const GARDEN_COMMENT_REPORT_RATE_LIMIT = { max: 10, windowMs: 60 * 60_000 };
 
-/** Throw TOO_MANY_REQUESTS when a commenter has hit the `createComment` window. Exported for garden.test.ts. */
+/**
+ * Throw TOO_MANY_REQUESTS when a commenter has hit the `createComment` window.
+ * Thin wrapper over helpers.ts's generic `assertRateLimit`. Exported for garden.test.ts.
+ */
 export async function assertGardenCommentRateLimit(db: Db, userId: string): Promise<void> {
-  const since = new Date(Date.now() - GARDEN_COMMENT_RATE_LIMIT.windowMs);
-  const [row] = await db
-    .select({ count: count() })
-    .from(gardenPostComments)
-    .where(and(eq(gardenPostComments.userId, userId), gte(gardenPostComments.createdAt, since)));
-
-  if ((row?.count ?? 0) >= GARDEN_COMMENT_RATE_LIMIT.max) {
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "You're commenting too quickly. Please wait a moment.",
-    });
-  }
+  return assertRateLimit(db, {
+    table: gardenPostComments,
+    userIdColumn: gardenPostComments.userId,
+    createdAtColumn: gardenPostComments.createdAt,
+    userId,
+    max: GARDEN_COMMENT_RATE_LIMIT.max,
+    windowMs: GARDEN_COMMENT_RATE_LIMIT.windowMs,
+    message: "You're commenting too quickly. Please wait a moment.",
+  });
 }
 
 /** Throw TOO_MANY_REQUESTS when a reporter has hit the `reportComment` window. */
 async function assertGardenCommentReportRateLimit(db: Db, reporterUserId: string): Promise<void> {
-  const since = new Date(Date.now() - GARDEN_COMMENT_REPORT_RATE_LIMIT.windowMs);
-  const [row] = await db
-    .select({ count: count() })
-    .from(gardenCommentReports)
-    .where(
-      and(
-        eq(gardenCommentReports.reporterUserId, reporterUserId),
-        gte(gardenCommentReports.createdAt, since),
-      ),
-    );
-
-  if ((row?.count ?? 0) >= GARDEN_COMMENT_REPORT_RATE_LIMIT.max) {
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "Too many reports. Please try again later.",
-    });
-  }
+  return assertRateLimit(db, {
+    table: gardenCommentReports,
+    userIdColumn: gardenCommentReports.reporterUserId,
+    createdAtColumn: gardenCommentReports.createdAt,
+    userId: reporterUserId,
+    max: GARDEN_COMMENT_REPORT_RATE_LIMIT.max,
+    windowMs: GARDEN_COMMENT_REPORT_RATE_LIMIT.windowMs,
+    message: "Too many reports. Please try again later.",
+  });
 }
 
 /**
@@ -486,6 +505,11 @@ export const gardenRouter = router({
           JOIN users cu ON cu.id = gc.user_id
           WHERE gc.post_id = p.id AND gc.deleted = false AND ${activeUserClause(sql`cu`)}
         ) cc ON true
+        -- p.status = 'ready' AND activeUserClause(u) together are this raw-SQL
+        -- query's necessarily-hand-written form of isGardenPostVisible (see
+        -- that predicate above) — must stay in sync with it by hand; a "feed
+        -- visible" post here MUST match a "feed visible" post everywhere else
+        -- (toggleLike/comments/the public share page).
         WHERE p.status = 'ready'
         AND ${geo.withinClause(geogColumn)}
         AND ${activeUserClause(sql`u`)}
@@ -686,11 +710,15 @@ export const gardenRouter = router({
    * Toggle the caller's like on a garden post (authed).
    *
    * NOT_FOUND when the post doesn't exist or isn't feed-visible (same
-   * predicate as `feed`). Race-safe delete-then-maybe-insert: the DELETE's
-   * row count is the source of truth for the new `liked` state (not a
-   * preceding SELECT), so two concurrent toggles from the same user can't
-   * both observe "not liked" and both insert — the second insert is a
-   * silent ON CONFLICT DO NOTHING no-op.
+   * predicate as `feed`). Delete-then-maybe-insert, where the DELETE's row
+   * count (not a preceding SELECT) decides whether to insert: this prevents
+   * duplicate like rows and avoids a unique-constraint crash under concurrent
+   * toggles from the same user — the losing racer's INSERT is a silent ON
+   * CONFLICT DO NOTHING no-op. It does NOT guarantee linearizable toggle
+   * semantics, though: two simultaneous toggles from the same user can each
+   * act on a stale view of "liked", so the `liked` value returned to the
+   * losing racer may not match the post's actual final state (self-corrects
+   * on the next toggle, or on the next `feed`/`listComments` refetch).
    */
   toggleLike: protectedProcedure
     .input(toggleGardenLikeInput)
@@ -788,15 +816,15 @@ export const gardenRouter = router({
         );
       }
 
-      return {
+      return toGardenCommentDto({
         id: inserted.id,
         postId: post.id,
         userId: ctx.user.id,
         username: callerRow?.username ?? "",
         body: input.body,
-        createdAt: toDate(inserted.createdAt ?? new Date()).toISOString(),
         deleted: false,
-      };
+        createdAt: inserted.createdAt,
+      });
     }),
 
   /**
@@ -832,7 +860,10 @@ export const gardenRouter = router({
         conditions.push(
           or(
             lt(gardenPostComments.createdAt, cursorCreatedAt),
-            and(eq(gardenPostComments.createdAt, cursorCreatedAt), lt(gardenPostComments.id, cursorId)),
+            and(
+              eq(gardenPostComments.createdAt, cursorCreatedAt),
+              lt(gardenPostComments.id, cursorId),
+            ),
           )!,
         );
       }
@@ -868,16 +899,19 @@ export const gardenRouter = router({
     }),
 
   /**
-   * Soft-delete a comment (authed, author-only). NOT_FOUND when the comment
-   * doesn't exist or belongs to someone else (existence isn't leaked to a
-   * non-author). `body` is kept in the row for report integrity — only the
-   * `deleted` flag flips; idempotent (deleting an already-deleted comment is
-   * a silent no-op).
+   * Soft-delete a comment (authed, author-only). UNAUTHORIZED for a
+   * deactivated caller (`assertCallerActive`, called first). NOT_FOUND when
+   * the comment doesn't exist or belongs to someone else (existence isn't
+   * leaked to a non-author). `body` is kept in the row for report integrity —
+   * only the `deleted` flag flips; idempotent (deleting an already-deleted
+   * comment is a silent no-op).
    */
   deleteComment: protectedProcedure
     .input(deleteGardenCommentInput)
     .output(z.object({ success: z.literal(true) }))
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const [row] = await ctx.db
         .select({ id: gardenPostComments.id, userId: gardenPostComments.userId })
         .from(gardenPostComments)
@@ -898,14 +932,17 @@ export const gardenRouter = router({
 
   /**
    * Report a comment (App Store Guideline 1.2 UGC moderation; authed).
-   * Mirrors chat.ts's `reportMessage`: NOT_FOUND when the comment doesn't
-   * exist (never leaks whether it's missing vs. just not visible to the
-   * reporter); TOO_MANY_REQUESTS past 10 reports/hour per reporter.
+   * UNAUTHORIZED for a deactivated caller (`assertCallerActive`, called
+   * first). Mirrors chat.ts's `reportMessage`: NOT_FOUND when the comment
+   * doesn't exist (never leaks whether it's missing vs. just not visible to
+   * the reporter); TOO_MANY_REQUESTS past 10 reports/hour per reporter.
    */
   reportComment: protectedProcedure
     .input(reportGardenCommentInput)
     .output(z.object({ success: z.literal(true) }))
     .mutation(async ({ input, ctx }) => {
+      await assertCallerActive(ctx.db, ctx.user.id);
+
       const [comment] = await ctx.db
         .select({ id: gardenPostComments.id })
         .from(gardenPostComments)

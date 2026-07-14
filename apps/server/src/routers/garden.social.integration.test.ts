@@ -20,9 +20,11 @@
  *     comment holds its thread position (`deleted: true`, `body: ""`, not
  *     filtered out); comments from a deactivated author or a
  *     blocked-either-direction user are filtered out for the caller.
- *   - deleteComment: author-only (NOT_FOUND otherwise); idempotent.
+ *   - deleteComment: author-only (NOT_FOUND otherwise); idempotent;
+ *     UNAUTHORIZED for a deactivated caller (assertCallerActive).
  *   - reportComment: success path; NOT_FOUND for a missing comment;
- *     TOO_MANY_REQUESTS past 10 reports/hour per reporter.
+ *     TOO_MANY_REQUESTS past 10 reports/hour per reporter; UNAUTHORIZED for a
+ *     deactivated caller (assertCallerActive).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -57,20 +59,43 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
   };
 
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
 
-  const pushCalls: Array<{ tokens: string[]; title: string; body: string; data?: Record<string, unknown> }> = [];
+  const pushCalls: Array<{
+    tokens: string[];
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }> = [];
   const capturingPush: PushClient = {
     async send(input) {
       pushCalls.push(input);
@@ -108,7 +133,11 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
       .returning({ id: schema.users.id });
     const [commenter] = await db
       .insert(schema.users)
-      .values({ email: "socialcommenter@test.invalid", username: "socialcommenter", passwordHash: "x" })
+      .values({
+        email: "socialcommenter@test.invalid",
+        username: "socialcommenter",
+        passwordHash: "x",
+      })
       .returning({ id: schema.users.id, username: schema.users.username });
     const [other] = await db
       .insert(schema.users)
@@ -142,7 +171,13 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
     otherUserId = other.id;
     deactivatedUserId = deactivatedUser.id;
     deactivatedCallerId = deactivatedCaller.id;
-    seededUserIds.push(ownerUserId, commenterId, otherUserId, deactivatedUserId, deactivatedCallerId);
+    seededUserIds.push(
+      ownerUserId,
+      commenterId,
+      otherUserId,
+      deactivatedUserId,
+      deactivatedCallerId,
+    );
 
     const [store] = await db
       .insert(schema.stores)
@@ -330,15 +365,17 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
         caller.garden.createComment({ postId: visiblePostId, body: "let me in" }),
       ).rejects.toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
 
-      await db
-        .delete(schema.userBlocks)
-        .where(eq(schema.userBlocks.blockerUserId, ownerUserId));
+      await db.delete(schema.userBlocks).where(eq(schema.userBlocks.blockerUserId, ownerUserId));
     });
 
     it("TOO_MANY_REQUESTS after 30 comments in 60s (per commenter, across posts)", async () => {
       const [spammer] = await db
         .insert(schema.users)
-        .values({ email: "socialspammer@test.invalid", username: "socialspammer", passwordHash: "x" })
+        .values({
+          email: "socialspammer@test.invalid",
+          username: "socialspammer",
+          passwordHash: "x",
+        })
         .returning({ id: schema.users.id });
       if (!spammer) throw new Error("Failed to seed spammer");
       seededUserIds.push(spammer.id);
@@ -353,11 +390,17 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
 
       const spammerCaller = createCaller(ctxFor(spammer.id));
       await expect(
-        spammerCaller.garden.createComment({ postId: visiblePostId, body: "comment 30 — still fine" }),
+        spammerCaller.garden.createComment({
+          postId: visiblePostId,
+          body: "comment 30 — still fine",
+        }),
       ).resolves.toMatchObject({ userId: spammer.id });
 
       await expect(
-        spammerCaller.garden.createComment({ postId: visiblePostId, body: "comment 31 — throttled" }),
+        spammerCaller.garden.createComment({
+          postId: visiblePostId,
+          body: "comment 31 — throttled",
+        }),
       ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
     });
   });
@@ -414,7 +457,10 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
       seededPostIds.push(post.id);
 
       const caller = createCaller(ctxFor(commenterId));
-      const comment = await caller.garden.createComment({ postId: post.id, body: "oops, deleting this" });
+      const comment = await caller.garden.createComment({
+        postId: post.id,
+        body: "oops, deleting this",
+      });
       await caller.garden.deleteComment({ commentId: comment.id });
 
       const result = await caller.garden.listComments({ postId: post.id });
@@ -465,9 +511,7 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
       expect(anonResult.comments.map((c) => c.body)).toContain("visible to most");
       expect(anonResult.comments.map((c) => c.body)).not.toContain("from a deactivated account");
 
-      await db
-        .delete(schema.userBlocks)
-        .where(eq(schema.userBlocks.blockerUserId, otherUserId));
+      await db.delete(schema.userBlocks).where(eq(schema.userBlocks.blockerUserId, otherUserId));
     });
 
     it("NOT_FOUND on a processing (invisible) post", async () => {
@@ -513,6 +557,13 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
       await expect(authorCaller.garden.deleteComment({ commentId: comment.id })).resolves.toEqual({
         success: true,
       });
+    });
+
+    it("UNAUTHORIZED for a deactivated caller (assertCallerActive runs before the ownership lookup)", async () => {
+      const caller = createCaller(ctxFor(deactivatedCallerId));
+      await expect(
+        caller.garden.deleteComment({ commentId: "00000000-0000-0000-0000-000000000000" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
     });
   });
 
@@ -563,6 +614,16 @@ describeWithDb("garden social (F-053) — Postgres integration", () => {
       await expect(
         reporterCaller.garden.reportComment({ commentId: comment.id, reason: "spam again" }),
       ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
+    });
+
+    it("UNAUTHORIZED for a deactivated caller (assertCallerActive runs before the comment lookup)", async () => {
+      const caller = createCaller(ctxFor(deactivatedCallerId));
+      await expect(
+        caller.garden.reportComment({
+          commentId: "00000000-0000-0000-0000-000000000000",
+          reason: "spam",
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
     });
   });
 });

@@ -27,6 +27,11 @@
  *   /**                    →  tRPC handler, path unchanged
  *                              (root paths accepted for CD smoke tests, e.g. /health.ping)
  *
+ * Every /legal/* and /garden/* response (200, 404, 405) carries
+ * `X-Content-Type-Options: nosniff` (`html-shell.ts`'s `NOSNIFF_HEADERS`) —
+ * these are the only hand-written HTTP responses this service serves outside
+ * of the tRPC adapter.
+ *
  * tRPC prefix-strip rules:
  *   /trpc/health.ping               → /health.ping
  *   /trpc/a.b,c.d?batch=1&input=…  → /a.b,c.d?batch=1&input=…
@@ -45,6 +50,7 @@ import type { handleMuxWebhookRequest } from "./webhook-mux";
 import type { handleGardenShareRequest } from "./garden-share-html";
 import { TERMS_OF_SERVICE, PRIVACY_POLICY } from "@homegrown/shared";
 import { renderLegalHtml } from "./legal-html";
+import { NOSNIFF_HEADERS } from "./html-shell";
 
 /** Matches `/garden/<postId>` exactly — the postId segment itself is validated (as a UUID) downstream. */
 const GARDEN_SHARE_PATH_RE = /^\/garden\/([^/]+)$/;
@@ -115,7 +121,11 @@ export function createRequestListener(deps: {
     const legalPath = req.url?.split("?")[0];
     if (legalPath !== undefined && Object.prototype.hasOwnProperty.call(LEGAL_PAGES, legalPath)) {
       if (req.method !== "GET") {
-        res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", Allow: "GET" });
+        res.writeHead(405, {
+          "Content-Type": "text/plain; charset=utf-8",
+          Allow: "GET",
+          ...NOSNIFF_HEADERS,
+        });
         res.end("Method Not Allowed");
         return;
       }
@@ -123,6 +133,7 @@ export function createRequestListener(deps: {
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "public, max-age=3600",
+        ...NOSNIFF_HEADERS,
       });
       res.end(LEGAL_PAGES[legalPath]);
       return;
@@ -134,7 +145,11 @@ export function createRequestListener(deps: {
     const gardenShareMatch = legalPath !== undefined ? legalPath.match(GARDEN_SHARE_PATH_RE) : null;
     if (gardenShareMatch && deps.gardenShare) {
       if (req.method !== "GET") {
-        res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", Allow: "GET" });
+        res.writeHead(405, {
+          "Content-Type": "text/plain; charset=utf-8",
+          Allow: "GET",
+          ...NOSNIFF_HEADERS,
+        });
         res.end("Method Not Allowed");
         return;
       }

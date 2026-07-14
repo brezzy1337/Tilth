@@ -36,9 +36,11 @@
  * both rolled back on error. Same optimistic-then-rollback shape as
  * GardenActionRail's `toggleLike`.
  *
- * reportComment (others' comments) — reuses ConversationScreen's
- * report-modal pattern: a reason TextInput in a transparent Modal, a
- * transient "Report received" toast on success.
+ * reportComment (others' comments) — shares ConversationScreen's report
+ * flow: `useReportFlow` (src/hooks/useReportFlow.ts) owns the target/reason/
+ * confirmation state and `ReportReasonModal` (src/components/) renders the
+ * reason TextInput in a transparent Modal, with a transient "Report
+ * received" toast on success.
  *
  * TOO_MANY_REQUESTS / FORBIDDEN map to friendly inline copy (Alert), same
  * idiom as ConversationScreen's chat.send error handling.
@@ -46,23 +48,8 @@
  * React Native only — no DOM elements.
  */
 
-import React, {
-  forwardRef,
-  useCallback,
-  useMemo,
-  useState,
-  type ForwardedRef,
-} from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import React, { forwardRef, useCallback, useMemo, useState, type ForwardedRef } from "react";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   BottomSheetBackdrop,
   BottomSheetFlatList,
@@ -74,13 +61,15 @@ import {
 } from "@gorhom/bottom-sheet";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import type { GardenComment, GardenFeedInput, GardenFeedOutput } from "@homegrown/shared";
+import type { GardenComment, GardenFeedInput } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { patchGardenFeedItem } from "../api/gardenFeedCache";
 import { useAuth } from "../auth/AuthContext";
 import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
+import { useReportFlow } from "../hooks/useReportFlow";
 import { formatRelativeTime } from "../utils/time";
 import { colors, radii, shadows, spacing, type } from "../theme";
-import { Button } from "./Button";
+import { ReportReasonModal } from "./ReportReasonModal";
 
 const PAGE_LIMIT = 30;
 const MAX_COMMENT_CHARS = 500;
@@ -90,10 +79,9 @@ const RATE_LIMIT_MESSAGE = "You're commenting too quickly — give it a moment."
 const BLOCKED_MESSAGE = "You can't comment on this post.";
 const REPORT_RATE_LIMIT_MESSAGE = "Too many reports — please try again later.";
 
-// `pageParams` typed to match each query's cursor exactly (`string | null`)
-// — see GardenActionRail's identical note for why a widened `unknown[]`
-// doesn't satisfy react-query's InfiniteData<T, TPageParam> here.
-type InfiniteFeedData = { pages: GardenFeedOutput[]; pageParams: (string | null)[] };
+// `pageParams` typed to match the cursor exactly (`string | null`) — see
+// gardenFeedCache's identical note for why a widened `unknown[]` doesn't
+// satisfy react-query's InfiniteData<T, TPageParam> here.
 type InfiniteCommentsData = {
   pages: { comments: GardenComment[]; nextCursor: string | null }[];
   pageParams: (string | null)[];
@@ -120,24 +108,6 @@ type CommentRow =
 
 function rowKey(row: CommentRow): string {
   return row.kind === "comment" ? row.comment.id : row.pending.key;
-}
-
-/** Patch a single feed item's counts across every cached `garden.feed` page. */
-function patchFeedItem(
-  data: InfiniteFeedData | undefined,
-  postId: string,
-  patch: (commentCount: number) => number,
-): InfiniteFeedData | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    pages: data.pages.map((page) => ({
-      ...page,
-      items: page.items.map((item) =>
-        item.id === postId ? { ...item, commentCount: patch(item.commentCount) } : item,
-      ),
-    })),
-  };
 }
 
 /** Patch a single comment (e.g. soft-delete) across every cached `listComments` page. */
@@ -172,7 +142,12 @@ function GardenCommentsSheetImpl(
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" />
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        pressBehavior="close"
+      />
     ),
     [],
   );
@@ -232,7 +207,10 @@ function GardenCommentsSheetImpl(
             };
           });
           utils.garden.feed.setInfiniteData(feedQueryInput, (old) =>
-            patchFeedItem(old, postId, (count) => count + 1),
+            patchGardenFeedItem(old, postId, (item) => ({
+              ...item,
+              commentCount: item.commentCount + 1,
+            })),
           );
         },
         onError: (err) => {
@@ -267,7 +245,10 @@ function GardenCommentsSheetImpl(
       await utils.garden.feed.cancel(feedQueryInput);
       const previousFeed = utils.garden.feed.getInfiniteData(feedQueryInput);
       utils.garden.feed.setInfiniteData(feedQueryInput, (old) =>
-        patchFeedItem(old, postId, (count) => Math.max(0, count - 1)),
+        patchGardenFeedItem(old, postId, (item) => ({
+          ...item,
+          commentCount: Math.max(0, item.commentCount - 1),
+        })),
       );
 
       return { previousComments, previousFeed };
@@ -284,20 +265,14 @@ function GardenCommentsSheetImpl(
   });
 
   // -------------------------------------------------------------------------
-  // reportComment — reason modal + transient confirmation (ConversationScreen pattern)
+  // reportComment — reason modal + transient confirmation (shared
+  // useReportFlow/ReportReasonModal, same as ConversationScreen)
   // -------------------------------------------------------------------------
 
-  const [reportTarget, setReportTarget] = useState<GardenComment | null>(null);
-  const [reportReason, setReportReason] = useState("");
-  const [showReportConfirmation, setShowReportConfirmation] = useState(false);
+  const report = useReportFlow<GardenComment>();
 
   const reportComment = trpc.garden.reportComment.useMutation({
-    onSuccess: () => {
-      setReportTarget(null);
-      setReportReason("");
-      setShowReportConfirmation(true);
-      setTimeout(() => setShowReportConfirmation(false), 2500);
-    },
+    onSuccess: () => report.onSubmitted(),
     onError: (err) => {
       if (err.data?.code === "TOO_MANY_REQUESTS") {
         Alert.alert(REPORT_RATE_LIMIT_MESSAGE);
@@ -308,10 +283,10 @@ function GardenCommentsSheetImpl(
   });
 
   const submitReport = useCallback(() => {
-    const reason = reportReason.trim();
-    if (!reportTarget || reason.length === 0) return;
-    reportComment.mutate({ commentId: reportTarget.id, reason });
-  }, [reportTarget, reportReason, reportComment]);
+    const reason = report.reason.trim();
+    if (!report.target || reason.length === 0) return;
+    reportComment.mutate({ commentId: report.target.id, reason });
+  }, [report.target, report.reason, reportComment]);
 
   // -------------------------------------------------------------------------
   // long-press affordance — own comment: Delete; others': Report
@@ -332,11 +307,11 @@ function GardenCommentsSheetImpl(
       } else {
         Alert.alert("Report comment", "Report this comment to the Tilth team?", [
           { text: "Cancel", style: "cancel" },
-          { text: "Report", style: "destructive", onPress: () => setReportTarget(comment) },
+          { text: "Report", style: "destructive", onPress: () => report.open(comment) },
         ]);
       }
     },
-    [myId, deleteComment],
+    [myId, deleteComment, report],
   );
 
   // -------------------------------------------------------------------------
@@ -460,8 +435,9 @@ function GardenCommentsSheetImpl(
           }
           ListEmptyComponent={
             <View style={styles.emptyState}>
+              <Text style={styles.emptyEmoji}>{"\u{1F331}"}</Text>
               <Text style={styles.emptyStateText}>
-                {"\u{1F331}"} Say something nice — be the first to comment.
+                Say something nice — be the first to comment.
               </Text>
             </View>
           }
@@ -469,57 +445,22 @@ function GardenCommentsSheetImpl(
         />
       )}
 
-      {showReportConfirmation ? (
+      {report.showConfirmation ? (
         <View style={[styles.reportToast, shadows.raised]}>
           <Text style={styles.reportToastText}>{"\u{1F331}"} Report received — thank you.</Text>
         </View>
       ) : null}
 
-      <Modal
-        visible={reportTarget !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setReportTarget(null)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, shadows.raised]}>
-            <Text style={styles.modalTitle}>Report comment</Text>
-            <Text style={styles.modalSubtitle}>
-              Tell us what's wrong with this comment and our team will review it.
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              value={reportReason}
-              onChangeText={setReportReason}
-              placeholder="Reason (required)"
-              placeholderTextColor={colors.textMuted}
-              multiline
-              maxLength={500}
-              autoFocus
-            />
-            <View style={styles.modalActions}>
-              <Pressable
-                style={styles.modalCancelButton}
-                onPress={() => {
-                  setReportTarget(null);
-                  setReportReason("");
-                }}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </Pressable>
-              <Button
-                title="Report"
-                variant="danger"
-                fullWidth={false}
-                onPress={submitReport}
-                loading={reportComment.isPending}
-                disabled={reportReason.trim().length === 0}
-                style={styles.modalSubmitButton}
-              />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ReportReasonModal
+        visible={report.target !== null}
+        title="Report comment"
+        subtitle="Tell us what's wrong with this comment and our team will review it."
+        reason={report.reason}
+        onChangeReason={report.setReason}
+        onCancel={report.cancel}
+        onSubmit={submitReport}
+        submitting={reportComment.isPending}
+      />
     </BottomSheetModal>
   );
 }
@@ -616,6 +557,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: spacing.xxxl,
     paddingHorizontal: spacing.xxl,
+    gap: spacing.sm,
+  },
+  // Matches MessagesScreen's empty-state precedent: a standalone emoji line
+  // (fontSize 40) above the caption, rather than inlined into the caption
+  // text.
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: spacing.xs,
   },
   emptyStateText: {
     fontSize: type.body.fontSize,
@@ -656,9 +605,11 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm + 2,
     paddingBottom: spacing.sm + 2,
   },
+  // 40x40 matches ConversationScreen's circular-action send-button
+  // convention (hitSlop 4 keeps the effective touch target well past 44pt).
   sendButton: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderRadius: radii.pill,
     backgroundColor: colors.primary,
     alignItems: "center",
@@ -680,60 +631,5 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: type.label.fontSize,
     fontWeight: type.label.fontWeight,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: `${colors.text}73`,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: spacing.xxl,
-  },
-  modalCard: {
-    width: "100%",
-    backgroundColor: colors.surface,
-    borderRadius: radii.lg,
-    padding: spacing.xl,
-    gap: spacing.md,
-  },
-  modalTitle: {
-    fontSize: type.section.fontSize,
-    fontWeight: type.section.fontWeight,
-    color: colors.text,
-  },
-  modalSubtitle: {
-    fontSize: type.caption.fontSize + 1,
-    color: colors.textMuted,
-    lineHeight: 18,
-  },
-  modalInput: {
-    minHeight: 80,
-    maxHeight: 160,
-    fontSize: type.body.fontSize,
-    color: colors.text,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.sm,
-    textAlignVertical: "top",
-  },
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: spacing.md,
-  },
-  modalCancelButton: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radii.md,
-  },
-  modalCancelText: {
-    color: colors.primary,
-    fontSize: type.body.fontSize,
-    fontWeight: "600",
-  },
-  modalSubmitButton: {
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
   },
 });
