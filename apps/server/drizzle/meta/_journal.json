@@ -120,6 +120,13 @@
       "when": 1783896648509,
       "tag": "0016_account_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784049343714,
+      "tag": "0017_curious_gunslinger",
+      "breakpoints": true
     }
   ]
 }

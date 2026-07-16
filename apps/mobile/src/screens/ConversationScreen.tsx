@@ -31,8 +31,10 @@
  *     The counterpart's userId comes straight from the conversation summary
  *     (viewer is buyer → storeUserId, viewer is seller → buyerId), so
  *     blocking works even before the counterpart has sent anything.
- *   Long-press a counterpart message → Report (reason modal →
- *     chat.reportMessage → transient confirmation banner).
+ *   Long-press a counterpart message → Report: `useReportFlow` (src/hooks/)
+ *     owns the target/reason/confirmation state, `ReportReasonModal`
+ *     (src/components/) renders the reason modal → chat.reportMessage →
+ *     transient confirmation banner.
  *
  * Header title shows the counterpart's name; when the viewer is the buyer it
  * taps through to the store's profile.
@@ -46,7 +48,6 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -62,11 +63,13 @@ import type { ChatMessage, SourcingRequest } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
+import { useReportFlow } from "../hooks/useReportFlow";
 import type { AuthedStackParamList } from "../navigation/types";
 import { formatIsoDateShort, formatMessageTimestamp } from "../utils/time";
 import { colors, radii, shadows, spacing, type } from "../theme";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
+import { ReportReasonModal } from "../components/ReportReasonModal";
 import { SourcingStatusChip } from "../components/SourcingStatusChip";
 
 const PAGE_LIMIT = 30;
@@ -431,20 +434,14 @@ export function ConversationScreen({ route, navigation }: Props) {
   }, [counterpartName, handleBlockPressed]);
 
   // -------------------------------------------------------------------------
-  // Report message (long-press) — reason modal + transient confirmation
+  // Report message (long-press) — shared useReportFlow/ReportReasonModal,
+  // same as GardenCommentsSheet
   // -------------------------------------------------------------------------
 
-  const [reportTarget, setReportTarget] = useState<ChatMessage | null>(null);
-  const [reportReason, setReportReason] = useState("");
-  const [showReportConfirmation, setShowReportConfirmation] = useState(false);
+  const report = useReportFlow<ChatMessage>();
 
   const reportMessage = trpc.chat.reportMessage.useMutation({
-    onSuccess: () => {
-      setReportTarget(null);
-      setReportReason("");
-      setShowReportConfirmation(true);
-      setTimeout(() => setShowReportConfirmation(false), 2500);
-    },
+    onSuccess: () => report.onSubmitted(),
     onError: (err) => Alert.alert("Could not send report", err.message),
   });
 
@@ -453,17 +450,17 @@ export function ConversationScreen({ route, navigation }: Props) {
       if (message.senderUserId === myId) return; // Only counterpart messages are reportable.
       Alert.alert("Report message", "Report this message to the Tilth team?", [
         { text: "Cancel", style: "cancel" },
-        { text: "Report", style: "destructive", onPress: () => setReportTarget(message) },
+        { text: "Report", style: "destructive", onPress: () => report.open(message) },
       ]);
     },
-    [myId],
+    [myId, report],
   );
 
   const submitReport = useCallback(() => {
-    const reason = reportReason.trim();
-    if (!reportTarget || reason.length === 0) return;
-    reportMessage.mutate({ messageId: reportTarget.id, reason });
-  }, [reportTarget, reportReason, reportMessage]);
+    const reason = report.reason.trim();
+    if (!report.target || reason.length === 0) return;
+    reportMessage.mutate({ messageId: report.target.id, reason });
+  }, [report.target, report.reason, reportMessage]);
 
   // -------------------------------------------------------------------------
   // Header — counterpart name (taps to StoreProfile for buyers) + overflow
@@ -653,7 +650,7 @@ export function ConversationScreen({ route, navigation }: Props) {
 
       {/* Report confirmation "toast" — anchored just above the composer so
           it never hides under the native header. */}
-      {showReportConfirmation ? (
+      {report.showConfirmation ? (
         <View style={[styles.reportToast, shadows.raised, { bottom: composerHeight + spacing.md }]}>
           <Text style={styles.reportToastText}>{"\u{1F331}"} Report received — thank you.</Text>
         </View>
@@ -666,52 +663,16 @@ export function ConversationScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      {/* Report reason modal */}
-      <Modal
-        visible={reportTarget !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setReportTarget(null)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, shadows.raised]}>
-            <Text style={styles.modalTitle}>Report message</Text>
-            <Text style={styles.modalSubtitle}>
-              Tell us what's wrong with this message and our team will review it.
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              value={reportReason}
-              onChangeText={setReportReason}
-              placeholder="Reason (required)"
-              placeholderTextColor={colors.textMuted}
-              multiline
-              maxLength={500}
-              autoFocus
-            />
-            <View style={styles.modalActions}>
-              <Pressable
-                style={styles.modalCancelButton}
-                onPress={() => {
-                  setReportTarget(null);
-                  setReportReason("");
-                }}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </Pressable>
-              <Button
-                title="Report"
-                variant="danger"
-                fullWidth={false}
-                onPress={submitReport}
-                loading={reportMessage.isPending}
-                disabled={reportReason.trim().length === 0}
-                style={styles.modalSubmitButton}
-              />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ReportReasonModal
+        visible={report.target !== null}
+        title="Report message"
+        subtitle="Tell us what's wrong with this message and our team will review it."
+        reason={report.reason}
+        onChangeReason={report.setReason}
+        onCancel={report.cancel}
+        onSubmit={submitReport}
+        submitting={reportMessage.isPending}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -884,68 +845,8 @@ const styles = StyleSheet.create({
     fontSize: type.label.fontSize,
     fontWeight: type.label.fontWeight,
   },
-  modalBackdrop: {
-    flex: 1,
-    // Dim scrim: the text token at ~45% opacity (hex-alpha suffix, same
-    // technique as StoreProfileScreen's trust-badge tints).
-    backgroundColor: `${colors.text}73`,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: spacing.xxl,
-  },
-  modalCard: {
-    width: "100%",
-    backgroundColor: colors.surface,
-    borderRadius: radii.lg,
-    padding: spacing.xl,
-    gap: spacing.md,
-  },
-  modalTitle: {
-    fontSize: type.section.fontSize,
-    fontWeight: type.section.fontWeight,
-    color: colors.text,
-  },
-  modalSubtitle: {
-    fontSize: type.caption.fontSize + 1,
-    color: colors.textMuted,
-    lineHeight: 18,
-  },
-  modalInput: {
-    minHeight: 80,
-    maxHeight: 160,
-    fontSize: type.body.fontSize,
-    color: colors.text,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.sm,
-    textAlignVertical: "top",
-  },
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: spacing.md,
-  },
-  modalCancelButton: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radii.md,
-  },
-  modalCancelText: {
-    color: colors.primary,
-    fontSize: type.body.fontSize,
-    fontWeight: "600",
-  },
-  // Sizing-only override — deliberately no backgroundColor here (Button's
-  // `danger` variant supplies it) so the pressed-state color swap still
-  // applies; a color set in this style prop would paint over it every
-  // render, same bug the delete-account button had before it moved to
-  // `variant="danger"` too.
-  modalSubmitButton: {
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
-  },
+  // Report reason modal styles now live in ReportReasonModal
+  // (src/components/ReportReasonModal.tsx), shared with GardenCommentsSheet.
   // Sourcing request/offer card (F-049) — replaces the plain bubble for
   // messages carrying a structured request. Sized like a bubble (maxWidth
   // 85%) but styled as a Card-like surface since it holds more structure

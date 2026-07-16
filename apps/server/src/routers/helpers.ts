@@ -8,11 +8,20 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, count, eq, gte, inArray, or, sql, type SQL } from "drizzle-orm";
+import type { AnyPgColumn, AnyPgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { Db, PushClient } from "../context";
 import type { DbOrTx } from "../db/order-transitions";
-import { stores, sourcingRequests, communityPlaces, conversations, pushTokens, users } from "../db/schema";
+import {
+  stores,
+  sourcingRequests,
+  communityPlaces,
+  conversations,
+  pushTokens,
+  users,
+  userBlocks,
+} from "../db/schema";
 import type { SourcingRequest, SourcingRequestDirection, SourcingRequestStatus } from "@homegrown/shared";
 
 // ---------------------------------------------------------------------------
@@ -280,6 +289,74 @@ export async function findLinkedApprovedPlace(
 }
 
 // ---------------------------------------------------------------------------
+// Blocks — the ONE either-direction block check, shared by chat.ts (start/
+// send), sourcing.ts (createRequest/createOffer), and garden.ts
+// (createComment). Moved here from chat.ts once a third router needed it —
+// cross-router shared, like pushToUser/assertCallerActive above.
+// ---------------------------------------------------------------------------
+
+/** Whether `a` and `b` block each other in either direction. */
+export async function isBlockedEitherDirection(db: Db, a: string, b: string): Promise<boolean> {
+  const [row] = await db
+    .select({ blockerUserId: userBlocks.blockerUserId })
+    .from(userBlocks)
+    .where(
+      or(
+        and(eq(userBlocks.blockerUserId, a), eq(userBlocks.blockedUserId, b)),
+        and(eq(userBlocks.blockerUserId, b), eq(userBlocks.blockedUserId, a)),
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting — the ONE DB-count-based limiter shape shared by chat.ts's
+// `assertSendRateLimit`/`assertReportRateLimit` and garden.ts's
+// `assertGardenCommentRateLimit`/`assertGardenCommentReportRateLimit` (all
+// four were near-identical hand-rolled "COUNT rows for this user within the
+// window" checks — now thin wrappers over this). Pilot-appropriate (no Redis
+// / extra infra): a COUNT over an indexed (user, created_at) range is plenty
+// at this volume. NOT used by chat.ts's `assertPushTokenRateLimit`, which
+// counts by `updatedAt` (re-registrations moving an existing token), not
+// `createdAt` — a genuinely different shape, not a fifth copy of this one.
+// ---------------------------------------------------------------------------
+
+export interface RateLimitOptions {
+  /** The table to count rows in (e.g. `messages`, `gardenPostComments`). */
+  table: AnyPgTable;
+  /** The column holding the acting/reporting user's id (e.g. `messages.senderUserId`). */
+  userIdColumn: AnyPgColumn;
+  /** The column holding the row's timestamp (e.g. `messages.createdAt`). */
+  createdAtColumn: AnyPgColumn;
+  /** The user id to count rows for. */
+  userId: string;
+  /** Max rows allowed within `windowMs` — the limit is hit AT this count (>=), not just past it. */
+  max: number;
+  /** The rolling window, in milliseconds. */
+  windowMs: number;
+  /** TOO_MANY_REQUESTS message shown to the caller once the limit is hit. */
+  message: string;
+}
+
+/**
+ * Throw TOO_MANY_REQUESTS when `userId` has `max` or more rows in `table`
+ * (matched via `userIdColumn`) with `createdAtColumn` within the last
+ * `windowMs`. See the module-header note above for which callers use this.
+ */
+export async function assertRateLimit(db: Db, opts: RateLimitOptions): Promise<void> {
+  const since = new Date(Date.now() - opts.windowMs);
+  const [row] = await db
+    .select({ count: count() })
+    .from(opts.table)
+    .where(and(eq(opts.userIdColumn, opts.userId), gte(opts.createdAtColumn, since)));
+
+  if ((row?.count ?? 0) >= opts.max) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: opts.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Conversation upsert — the ONE (buyer_id, store_id) insert…onConflictDoUpdate
 // idiom shared by chat.start and both sourcing create mutations.
 // ---------------------------------------------------------------------------
@@ -377,7 +454,8 @@ export async function pushToUser(
 //   2. CALLER direction — refuses a write attempted BY a deactivated account
 //      (`assertCallerActive`, called at the top of: `orders.create`,
 //      `chat.start`/`send`, `sourcing.createRequest`/`createOffer`/`respond`/
-//      `withdraw`, `garden.createPhotoSet`/`createPhotoUploadUrls`/`createVideo`).
+//      `withdraw`, `garden.createPhotoSet`/`createPhotoUploadUrls`/`createVideo`,
+//      `garden.toggleLike`/`createComment`/`deleteComment`/`reportComment`).
 //      A deactivated caller reading/browsing is NOT blocked — only writes are.
 // ---------------------------------------------------------------------------
 

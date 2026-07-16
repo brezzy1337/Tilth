@@ -8,6 +8,13 @@
  * source of truth: the server renders it as HTML pages, mobile renders it as
  * a native screen — neither app hand-writes legal copy of its own.
  *
+ * 2026-07-14 (F-053): added a "Garden activity" bullet (likes/comments shown
+ * publicly with username) and noted garden posts may be shared outside the
+ * app via public web links. `lastUpdated` is intentionally NOT bumped for
+ * this content rev — the product hasn't launched yet, so pre-launch drafting
+ * revisions don't need a new "last updated" date; that date will start
+ * moving once the policy is live and counsel-reviewed.
+ *
  * NOT LEGAL ADVICE. The operating entity name and full text require counsel
  * review before app-store submission.
  */
@@ -108,7 +115,8 @@ export const PRIVACY_POLICY: LegalDocument = {
         "Location: the app uses your device's location to show nearby stalls, places, and produce. Your device location is used for those searches and is not stored on our servers. (Seller stand addresses, which sellers enter themselves, are stored.)",
         "Orders and payments: order details, amounts, tips, and fulfillment status. Payments are processed by Stripe — your card details go directly to Stripe and are never stored on our servers. Sellers' payout and identity-verification information is collected by Stripe Connect under Stripe's privacy policy.",
         "Messages: conversations between buyers and sellers (including structured fulfillment requests) are stored so your inbox works. If a message is reported, our team reviews it.",
-        "Photos and videos: garden and listing photos you upload are stored on Google Cloud Storage and are publicly accessible to anyone with the link; videos are processed and hosted by Mux. Don't post media you want to keep private.",
+        "Garden activity: likes and comments you leave on garden posts are stored and shown publicly with your username alongside the post. If a comment is reported, our team reviews it.",
+        "Photos and videos: garden and listing photos you upload are stored on Google Cloud Storage and are publicly accessible to anyone with the link; videos are processed and hosted by Mux. Garden posts may also be shared outside the app via public web links (a share page). Don't post media you want to keep private.",
         "Push notifications: if you enable them, we store your device's push token. Notification previews (truncated) are delivered via Expo's push service.",
       ],
     },

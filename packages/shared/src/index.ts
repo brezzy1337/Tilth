@@ -695,7 +695,7 @@ export const gardenPostPhoto = z.object({
 export type GardenPostPhoto = z.infer<typeof gardenPostPhoto>;
 
 /**
- * Input to `gardenPosts.createPhotoSet` (protected).
+ * Input to `garden.createPhotoSet` (protected).
  * `storeId` is intentionally absent — the server infers it from the authed
  * seller's session, matching `createListingInput` / `createStoreInput`.
  */
@@ -708,7 +708,7 @@ export const createGardenPostPhotoSetInput = z.object({
 export type CreateGardenPostPhotoSetInput = z.infer<typeof createGardenPostPhotoSetInput>;
 
 /**
- * Input to `gardenPosts.createVideo` (protected).
+ * Input to `garden.createVideo` (protected).
  * `storeId` is inferred server-side, same as the photo-set input above.
  * `durationS` is client-reported (from the device's video picker) and is
  * advisory only — the server does not trust it for billing/limits.
@@ -722,7 +722,7 @@ export const createGardenPostVideoInput = z.object({
 export type CreateGardenPostVideoInput = z.infer<typeof createGardenPostVideoInput>;
 
 /**
- * Response from `gardenPosts.createVideo`.
+ * Response from `garden.createVideo`.
  * `uploadUrl` is the Mux direct-upload URL; the mobile app PUTs the raw video
  * file to it directly (the file itself never transits the HomeGrown server).
  * The post is created immediately in "processing" status at `postId`, and
@@ -736,7 +736,7 @@ export const createGardenPostVideoOutput = z.object({
 export type CreateGardenPostVideoOutput = z.infer<typeof createGardenPostVideoOutput>;
 
 /**
- * Input to `gardenPosts.feed` (public).
+ * Input to `garden.feed` (public).
  * Mirrors `nearbyInput`'s geo bounds; `radiusKm` defaults to 25 (tighter than
  * `listings.nearby`'s no-default since the feed is meant to feel local) and
  * is capped at 100 km. Cursor-paginated like `orders.listForMyStore`.
@@ -752,7 +752,12 @@ export const gardenFeedInput = z.object({
 
 export type GardenFeedInput = z.infer<typeof gardenFeedInput>;
 
-/** Fields common to every `gardenFeedItem` variant, regardless of post type. */
+/**
+ * Fields common to every `gardenFeedItem` variant, regardless of post type.
+ * `likeCount`/`likedByMe`/`commentCount` are the F-053 social counts — see the
+ * "Garden social (F-053)" section below for the schemas that mutate them
+ * (`toggleGardenLikeInput`/Output, comment CRUD).
+ */
 const gardenFeedItemBase = z.object({
   id: z.string().uuid(),
   storeId: z.string().uuid(),
@@ -763,6 +768,12 @@ const gardenFeedItemBase = z.object({
   status: gardenPostStatus,
   /** ISO 8601 datetime string. */
   createdAt: z.string().datetime(),
+  /** Total likes on this post. */
+  likeCount: z.number().int().nonnegative(),
+  /** Whether the requesting caller has liked this post. */
+  likedByMe: z.boolean(),
+  /** Total non-deleted comments on this post. */
+  commentCount: z.number().int().nonnegative(),
 });
 
 /** A photo-set garden post as rendered in the feed. */
@@ -784,7 +795,7 @@ export const gardenFeedVideoItem = gardenFeedItemBase.extend({
 export type GardenFeedVideoItem = z.infer<typeof gardenFeedVideoItem>;
 
 /**
- * A single row returned by `gardenPosts.feed`, discriminated on `type` so
+ * A single row returned by `garden.feed`, discriminated on `type` so
  * mobile can render photo-set cards vs. video players without runtime checks.
  */
 export const gardenFeedItem = z.discriminatedUnion("type", [
@@ -795,7 +806,7 @@ export const gardenFeedItem = z.discriminatedUnion("type", [
 export type GardenFeedItem = z.infer<typeof gardenFeedItem>;
 
 /**
- * Paginated response from `gardenPosts.feed`.
+ * Paginated response from `garden.feed`.
  * `nextCursor` is null when the caller has reached the last page, matching
  * `listForMyStoreOutput`'s pagination convention.
  */
@@ -1121,13 +1132,23 @@ export const blockUserInput = z.object({
 export type BlockUserInput = z.infer<typeof blockUserInput>;
 
 /**
+ * Shared "reason" validator for user-generated-content reports — trimmed,
+ * 1-500 characters. Used by both `reportMessageInput` (chat) and
+ * `reportGardenCommentInput` (garden social, F-053) so the two report flows
+ * can't drift apart.
+ */
+export const reportReasonSchema = z.string().trim().min(1).max(500);
+
+export type ReportReason = z.infer<typeof reportReasonSchema>;
+
+/**
  * Input to `chat.reportMessage` (protected).
  * Satisfies App Store Guideline 1.2 (apps with user-generated content must
  * offer a mechanism to report objectionable content).
  */
 export const reportMessageInput = z.object({
   messageId: z.string().uuid(),
-  reason: z.string().trim().min(1).max(500),
+  reason: reportReasonSchema,
 });
 
 export type ReportMessageInput = z.infer<typeof reportMessageInput>;
@@ -1139,6 +1160,129 @@ export const registerPushTokenInput = z.object({
 });
 
 export type RegisterPushTokenInput = z.infer<typeof registerPushTokenInput>;
+
+// ---------------------------------------------------------------------------
+// Garden social — likes, comments, and per-post share links (F-053)
+// A social layer on top of the F-047 garden feed (see the Garden posts
+// section, above, which now carries `likeCount`/`likedByMe`/`commentCount` on
+// every `gardenFeedItem`). Comments are flat (no replies/threads) and mirror
+// the Messaging section's idioms: `gardenCommentBody` mirrors `messageBody`,
+// `listGardenCommentsInput`/Output mirror `messagesListInput`/Output's
+// cursor-pagination shape, and `reportGardenCommentInput` mirrors
+// `reportMessageInput`. The share page itself has no dedicated schema here —
+// it renders the same `gardenFeedItem`-shaped data the server already
+// serves, just keyed by post id instead of a geo query.
+// ---------------------------------------------------------------------------
+
+/** Input to `garden.toggleLike` (protected). Toggles the caller's like on a post. */
+export const toggleGardenLikeInput = z.object({
+  postId: z.string().uuid(),
+});
+
+export type ToggleGardenLikeInput = z.infer<typeof toggleGardenLikeInput>;
+
+/**
+ * Response from `garden.toggleLike`.
+ * `liked` is the caller's new like state after the toggle (not the previous
+ * one); `likeCount` is the post's total count after the change, so the
+ * client can update its UI from this response alone, without refetching.
+ */
+export const toggleGardenLikeOutput = z.object({
+  liked: z.boolean(),
+  likeCount: z.number().int().nonnegative(),
+});
+
+export type ToggleGardenLikeOutput = z.infer<typeof toggleGardenLikeOutput>;
+
+/** A garden comment's text content. Trimmed; 1-500 characters — mirrors `messageBody`'s idiom, shorter cap. */
+export const gardenCommentBody = z.string().trim().min(1).max(500);
+
+export type GardenCommentBody = z.infer<typeof gardenCommentBody>;
+
+/**
+ * A single garden post comment, as returned by `garden.listComments` / created
+ * via `garden.createComment`. `username` is denormalized onto the comment
+ * (same pattern as `blockedUser.username`, above) so the feed/share page can
+ * render "who said it" without a join per render. When `deleted` is true the
+ * server sends `body` as `""` and the client renders a "[comment removed]"
+ * placeholder — the row is soft-deleted, not hard-deleted, so moderation and
+ * the author's own delete both resolve to the same client-visible shape.
+ */
+export const gardenComment = z.object({
+  id: z.string().uuid(),
+  postId: z.string().uuid(),
+  userId: z.string().uuid(),
+  username: z.string(),
+  body: z.string(),
+  /** ISO 8601 datetime string. */
+  createdAt: z.string().datetime(),
+  /** True when soft-deleted (by the author or moderation); `body` is then `""`. */
+  deleted: z.boolean(),
+});
+
+export type GardenComment = z.infer<typeof gardenComment>;
+
+/** Input to `garden.createComment` (protected, caller must be authenticated). */
+export const createGardenCommentInput = z.object({
+  postId: z.string().uuid(),
+  body: gardenCommentBody,
+});
+
+export type CreateGardenCommentInput = z.infer<typeof createGardenCommentInput>;
+
+/** Response from `garden.createComment` — the newly created comment. */
+export const createGardenCommentOutput = gardenComment;
+
+export type CreateGardenCommentOutput = z.infer<typeof createGardenCommentOutput>;
+
+/**
+ * Input to `garden.listComments` (public — comments are visible to anyone who
+ * can see the post, including the public share page).
+ * Cursor-paginated; limit default/max mirror `messagesListInput` exactly
+ * (default 30, max 100).
+ */
+export const listGardenCommentsInput = z.object({
+  postId: z.string().uuid(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+
+export type ListGardenCommentsInput = z.infer<typeof listGardenCommentsInput>;
+
+/**
+ * Paginated response from `garden.listComments`.
+ * Mirrors `messagesListOutput`'s shape exactly (an array field plus a
+ * nullable `nextCursor`) — `nextCursor` is null when the caller has reached
+ * the last page.
+ */
+export const listGardenCommentsOutput = z.object({
+  comments: z.array(gardenComment),
+  nextCursor: z.string().nullable(),
+});
+
+export type ListGardenCommentsOutput = z.infer<typeof listGardenCommentsOutput>;
+
+/**
+ * Input to `garden.deleteComment` (protected, caller must be the comment's
+ * author — soft-delete only, matching `gardenComment.deleted`'s semantics).
+ */
+export const deleteGardenCommentInput = z.object({
+  commentId: z.string().uuid(),
+});
+
+export type DeleteGardenCommentInput = z.infer<typeof deleteGardenCommentInput>;
+
+/**
+ * Input to `garden.reportComment` (protected).
+ * Shares `reportReasonSchema` with `reportMessageInput` (trimmed, 1-500
+ * characters) — same App Store Guideline 1.2 UGC-reporting rationale.
+ */
+export const reportGardenCommentInput = z.object({
+  commentId: z.string().uuid(),
+  reason: reportReasonSchema,
+});
+
+export type ReportGardenCommentInput = z.infer<typeof reportGardenCommentInput>;
 
 // ---------------------------------------------------------------------------
 // Community places — Home map pins (F-048)

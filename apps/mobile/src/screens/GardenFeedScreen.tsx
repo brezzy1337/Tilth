@@ -25,6 +25,12 @@
  * States: location loading/denied/error (mirrors HomeScreen/SearchScreen),
  * feed loading/error+retry/empty, matching the app's existing state styles.
  *
+ * Social layer (F-053): each cell renders a `GardenActionRail` (like/comments
+ * /share) as an absolute sibling over the media — see that file for the
+ * like-optimistic-update strategy. Tapping the rail's comment icon opens the
+ * single `GardenCommentsSheet` instance owned by this screen (a
+ * `BottomSheetModal`, hence the `BottomSheetModalProvider` wrapper below).
+ *
  * React Native only — no DOM elements.
  */
 
@@ -41,18 +47,23 @@ import {
   type ViewToken,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { BottomSheetModal, BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import type { GardenFeedItem } from "@homegrown/shared";
+import type { GardenFeedInput, GardenFeedItem } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
+import { buildGardenFeedQueryInput } from "../api/gardenFeedCache";
 import { useInfiniteScrollEnd } from "../hooks/useInfiniteScrollEnd";
 import { useDeviceLocation } from "../location/useDeviceLocation";
 import type { GardensTabNavigationProp, TabParamList } from "../navigation/types";
 import { GardenPhotoCarousel } from "../components/GardenPhotoCarousel";
 import { GardenVideoCell } from "../components/GardenVideoCell";
+import { GardenActionRail } from "../components/GardenActionRail";
+import {
+  GardenCommentsSheet,
+  type GardenCommentsSheetTarget,
+} from "../components/GardenCommentsSheet";
 import { colors, radii, spacing, type } from "../theme";
 
-const RADIUS_KM = 25;
-const PAGE_LIMIT = 10;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 type Props = Omit<BottomTabScreenProps<TabParamList, "Gardens">, "navigation"> & {
@@ -70,10 +81,23 @@ type GardenFeedListProps = {
   lng: number;
   cellHeight: number;
   onNavigateToStore: (storeId: string, storeName: string) => void;
+  onOpenComments: (postId: string, storeName: string) => void;
 };
 
-function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedListProps) {
+function GardenFeedList({
+  lat,
+  lng,
+  cellHeight,
+  onNavigateToStore,
+  onOpenComments,
+}: GardenFeedListProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Built via the shared `buildGardenFeedQueryInput` (src/api/gardenFeedCache.ts)
+  // — passed to GardenActionRail so its optimistic like patch targets THIS
+  // exact cached query (react-query keys infinite queries by input, not by
+  // reference).
+  const feedQueryInput: GardenFeedInput = buildGardenFeedQueryInput(lat, lng);
 
   const {
     data,
@@ -84,10 +108,9 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = trpc.garden.feed.useInfiniteQuery(
-    { lat, lng, radiusKm: RADIUS_KM, limit: PAGE_LIMIT },
-    { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
-  );
+  } = trpc.garden.feed.useInfiniteQuery(feedQueryInput, {
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  });
 
   const items: GardenFeedItem[] = data?.pages.flatMap((page) => page.items) ?? [];
   const activeIndex = items.findIndex((item) => item.id === activeId);
@@ -181,6 +204,15 @@ function GardenFeedList({ lat, lng, cellHeight, onNavigateToStore }: GardenFeedL
                 onPressStore={onPressStore}
               />
             )}
+            {/* F-053 — social action rail, an absolute sibling over the media
+                (not inside the carousel/video cell — see GardenActionRail's
+                doc comment). GardenPostOverlay reserves the matching
+                right-hand clearance. */}
+            <GardenActionRail
+              item={item}
+              feedQueryInput={feedQueryInput}
+              onOpenComments={onOpenComments}
+            />
           </View>
         );
       }}
@@ -199,56 +231,89 @@ export function GardenFeedScreen({ navigation }: Props) {
   const { data: store } = trpc.stores.getMine.useQuery();
   const isSeller = store !== null && store !== undefined;
 
+  // F-053 — a single comments-sheet instance for the whole feed (not one per
+  // cell); the action rail's comment button opens it for the tapped post.
+  const commentsSheetRef = useRef<BottomSheetModal>(null);
+  const [commentsTarget, setCommentsTarget] = useState<GardenCommentsSheetTarget>(null);
+
+  const feedQueryInput: GardenFeedInput | null =
+    location.status === "granted" && location.coords
+      ? buildGardenFeedQueryInput(location.coords.lat, location.coords.lng)
+      : null;
+
+  const handleOpenComments = (postId: string, storeName: string) => {
+    setCommentsTarget({ postId, storeName });
+    commentsSheetRef.current?.present();
+  };
+
   return (
-    <View
-      style={styles.container}
-      onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
-    >
-      {location.status === "loading" ? (
-        <View style={styles.centeredState}>
-          <ActivityIndicator size="large" color={colors.onPrimary} />
-          <Text style={styles.stateSubText}>Getting your location…</Text>
-        </View>
-      ) : null}
+    // BottomSheetModalProvider hosts the comments sheet's portal — scoped to
+    // this screen (not App.tsx) since it's the only screen that needs an
+    // on-demand BottomSheetModal today; already inside App.tsx's
+    // GestureHandlerRootView, which is all @gorhom/bottom-sheet requires.
+    <BottomSheetModalProvider>
+      <View
+        style={styles.container}
+        onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
+      >
+        {location.status === "loading" ? (
+          <View style={styles.centeredState}>
+            <ActivityIndicator size="large" color={colors.onPrimary} />
+            <Text style={styles.stateSubText}>Getting your location…</Text>
+          </View>
+        ) : null}
 
-      {location.status === "denied" ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>Location access denied.</Text>
-          <Text style={styles.stateSubText}>
-            Enable location permissions in Settings to see nearby garden posts.
-          </Text>
-        </View>
-      ) : null}
+        {location.status === "denied" ? (
+          <View style={styles.centeredState}>
+            <Text style={styles.stateText}>Location access denied.</Text>
+            <Text style={styles.stateSubText}>
+              Enable location permissions in Settings to see nearby garden posts.
+            </Text>
+          </View>
+        ) : null}
 
-      {location.status === "error" ? (
-        <View style={styles.centeredState}>
-          <Text style={styles.stateText}>Could not determine your location.</Text>
-          <Text style={styles.stateSubText}>Please check your device settings and try again.</Text>
-        </View>
-      ) : null}
+        {location.status === "error" ? (
+          <View style={styles.centeredState}>
+            <Text style={styles.stateText}>Could not determine your location.</Text>
+            <Text style={styles.stateSubText}>
+              Please check your device settings and try again.
+            </Text>
+          </View>
+        ) : null}
 
-      {location.status === "granted" && location.coords && containerHeight ? (
-        <GardenFeedList
-          lat={location.coords.lat}
-          lng={location.coords.lng}
-          cellHeight={containerHeight}
-          onNavigateToStore={(storeId, storeName) =>
-            navigation.navigate("StoreProfile", { storeId, storeName })
-          }
+        {location.status === "granted" && location.coords && containerHeight ? (
+          <GardenFeedList
+            lat={location.coords.lat}
+            lng={location.coords.lng}
+            cellHeight={containerHeight}
+            onNavigateToStore={(storeId, storeName) =>
+              navigation.navigate("StoreProfile", { storeId, storeName })
+            }
+            onOpenComments={handleOpenComments}
+          />
+        ) : null}
+
+        {isSeller ? (
+          <Pressable
+            style={styles.fab}
+            onPress={() => navigation.navigate("GardenComposer")}
+            accessibilityRole="button"
+            accessibilityLabel="New garden post"
+          >
+            <Ionicons name="add" size={28} color={colors.onPrimary} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      {feedQueryInput ? (
+        <GardenCommentsSheet
+          ref={commentsSheetRef}
+          target={commentsTarget}
+          feedQueryInput={feedQueryInput}
+          onDismiss={() => setCommentsTarget(null)}
         />
       ) : null}
-
-      {isSeller ? (
-        <Pressable
-          style={styles.fab}
-          onPress={() => navigation.navigate("GardenComposer")}
-          accessibilityRole="button"
-          accessibilityLabel="New garden post"
-        >
-          <Ionicons name="add" size={28} color={colors.onPrimary} />
-        </Pressable>
-      ) : null}
-    </View>
+    </BottomSheetModalProvider>
   );
 }
 

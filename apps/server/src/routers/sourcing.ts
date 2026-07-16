@@ -31,9 +31,10 @@
  *     BAD_REQUEST, matching orders.ts's guarded-UPDATE convention.
  *   - Geo (`growers`) goes through PostGIS ST_DWithin/ST_Distance — never
  *     app-side haversine math.
- *   - Reuses chat.ts's `isBlockedEitherDirection` / `assertSendRateLimit`,
- *     and helpers.ts's `upsertConversation` / `pushToUser` (also used by
- *     chat.ts) — rather than duplicating them. `respond`/`withdraw` also
+ *   - Reuses helpers.ts's `isBlockedEitherDirection` (also used by chat.ts and
+ *     garden.ts) and chat.ts's `assertSendRateLimit`, plus helpers.ts's
+ *     `upsertConversation` / `pushToUser` (also used by chat.ts) — rather than
+ *     duplicating them. `respond`/`withdraw` also
  *     call `assertSendRateLimit` (defense-in-depth: they insert a follow-up
  *     message + fire a push, same shape as the create mutations).
  *   - F-051 — `createRequest`/`createOffer`/`respond`/`withdraw` all call
@@ -71,10 +72,11 @@ import {
   isUserDeactivated,
   assertCallerActive,
   activeUserClause,
+  isBlockedEitherDirection,
   type SourcingRequestFullRow,
 } from "./helpers";
 import type { DbOrTx } from "../db/order-transitions";
-import { isBlockedEitherDirection, assertSendRateLimit } from "./chat";
+import { assertSendRateLimit } from "./chat";
 import type { Db } from "../context";
 
 /** Columns returned by every sourcing_requests insert/update `.returning()`. */

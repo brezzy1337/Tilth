@@ -322,6 +322,85 @@ export const gardenPosts = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Garden social — F-053 likes, flat comments, and comment reports on garden
+// posts. `garden_post_likes` is a pure join row (PK = (postId, userId), no
+// surrogate id) — `garden.toggleLike` deletes it to unlike, inserts (ON
+// CONFLICT DO NOTHING) to like. `garden_post_comments` mirrors `messages`'
+// keyset-pagination + sender-rate-limit index pair exactly (see `messages`,
+// below, in Messaging) but keyed by postId instead of conversationId; soft
+// delete only (`deleted`), body is KEPT in the row when deleted so a
+// moderation report retains the original text — never hard-deleted.
+// `garden_comment_reports` mirrors `message_reports` exactly (App Store
+// Guideline 1.2 UGC moderation, same shape).
+// ---------------------------------------------------------------------------
+
+export const gardenPostLikes = pgTable(
+  "garden_post_likes",
+  {
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => gardenPosts.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.postId, t.userId] }),
+    // Serves `toggleLike`'s post-total COUNT(*) and `garden.feed`'s
+    // per-post like-count/liked-by-me lateral joins.
+    index("garden_post_likes_post_id_idx").on(t.postId),
+  ],
+);
+
+export const gardenPostComments = pgTable(
+  "garden_post_comments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => gardenPosts.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    /**
+     * Soft-delete only (by the author, or moderation). `body` stays in the
+     * row for report integrity — the `gardenComments.list` DTO mapping sends
+     * `""` to the client when this is true (see `@homegrown/shared`'s
+     * `gardenComment.deleted` doc comment).
+     */
+    deleted: boolean("deleted").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Keyset pagination within a post, newest-first: ORDER BY created_at DESC, id DESC.
+    index("garden_post_comments_post_id_created_at_id_idx").on(
+      t.postId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+    // `createComment`'s 30/min-per-user rate limit — COUNT(*) of a
+    // commenter's recent rows across ALL posts (mirrors
+    // `messages_sender_user_id_created_at_idx`).
+    index("garden_post_comments_user_id_created_at_idx").on(t.userId, t.createdAt.desc()),
+  ],
+);
+
+export const gardenCommentReports = pgTable("garden_comment_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  commentId: uuid("comment_id")
+    .notNull()
+    .references(() => gardenPostComments.id),
+  reporterUserId: uuid("reporter_user_id")
+    .notNull()
+    .references(() => users.id),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // Processed Mux events — exactly-once webhook dedup table (mirrors Stripe's)
 // ---------------------------------------------------------------------------
 

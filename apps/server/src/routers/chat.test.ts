@@ -1,7 +1,8 @@
 /**
  * Unit tests for pure/small helpers in the chat router (F-037/F-038).
  *
- * No real DB — `isBlockedEitherDirection` is exercised against a minimal fake
+ * No real DB — helpers.ts's `isBlockedEitherDirection` (shared with
+ * sourcing.ts and garden.ts) is exercised here against a minimal fake
  * select() builder (mirrors the fakeGardenDb pattern in garden.test.ts).
  *
  * Full router behavior (start/list/messages/send/markRead/blockUser/
@@ -29,9 +30,9 @@ import {
   encodeConversationsCursor,
   decodeConversationsCursor,
   truncate,
-  isBlockedEitherDirection,
   assertSendRateLimit,
 } from "./chat";
+import { isBlockedEitherDirection } from "./helpers";
 import type { Db } from "../context";
 
 const UUID_A = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";

@@ -64,7 +64,7 @@ describeWithDb("garden.feed — PostGIS integration", () => {
 
   const createCaller = createCallerFactory(appRouter);
 
-  function makeCtx(): Context {
+  function makeCtx(userId: string | null = null): Context {
     return {
       db: db as Context["db"],
       jwtSecret: TEST_SECRET,
@@ -74,7 +74,7 @@ describeWithDb("garden.feed — PostGIS integration", () => {
       media: null,
       mux: null,
       push: { send: async () => {} },
-      user: null,
+      user: userId ? { id: userId } : null,
     };
   }
 
@@ -285,6 +285,9 @@ describeWithDb("garden.feed — PostGIS integration", () => {
 
   afterAll(async () => {
     for (const id of seededPostIds) {
+      // F-053 — likes/comments FK-reference garden_posts; delete them first.
+      await db.delete(schema.gardenPostLikes).where(eq(schema.gardenPostLikes.postId, id));
+      await db.delete(schema.gardenPostComments).where(eq(schema.gardenPostComments.postId, id));
       await db.delete(schema.gardenPosts).where(eq(schema.gardenPosts.id, id));
     }
     for (const id of seededLocationIds) {
@@ -459,5 +462,89 @@ describeWithDb("garden.feed — PostGIS integration", () => {
         cursor: "not-a-valid-cursor!!",
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+  });
+
+  // -------------------------------------------------------------------------
+  // F-053 — likeCount / likedByMe / commentCount on feed rows
+  // -------------------------------------------------------------------------
+
+  describe("F-053 — feed social counts", () => {
+    let likerId: string, otherViewerId: string, deactivatedCommenterId: string;
+
+    beforeAll(async () => {
+      const [liker] = await db
+        .insert(schema.users)
+        .values({ email: "gardenliker@test.invalid", username: "gardenliker", passwordHash: "x" })
+        .returning({ id: schema.users.id });
+      const [otherViewer] = await db
+        .insert(schema.users)
+        .values({ email: "gardenviewer@test.invalid", username: "gardenviewer", passwordHash: "x" })
+        .returning({ id: schema.users.id });
+      const [deactivatedCommenter] = await db
+        .insert(schema.users)
+        .values({
+          email: "gardendeactivated@test.invalid",
+          username: "gardendeactivated",
+          passwordHash: "x",
+          deactivatedAt: new Date(),
+        })
+        .returning({ id: schema.users.id });
+      if (!liker || !otherViewer || !deactivatedCommenter) {
+        throw new Error("Failed to seed F-053 fixture users");
+      }
+      likerId = liker.id;
+      otherViewerId = otherViewer.id;
+      deactivatedCommenterId = deactivatedCommenter.id;
+      seededUserIds.push(likerId, otherViewerId, deactivatedCommenterId);
+
+      // One like on postNearNew, by `likerId`.
+      await db.insert(schema.gardenPostLikes).values({ postId: postNearNew, userId: likerId });
+
+      // Three comments on postNearNew: one live (counts), one soft-deleted
+      // (must NOT count), one by a deactivated user (must NOT count).
+      await db.insert(schema.gardenPostComments).values([
+        { postId: postNearNew, userId: likerId, body: "Beautiful tomatoes!" },
+        { postId: postNearNew, userId: otherViewerId, body: "will be deleted", deleted: true },
+        { postId: postNearNew, userId: deactivatedCommenterId, body: "from a deactivated account" },
+      ]);
+    });
+
+    it("likeCount and commentCount reflect only live rows (excluding deleted + deactivated-author comments)", async () => {
+      const caller = createCaller(makeCtx());
+      const result = await caller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 });
+
+      const row = result.items.find((i) => i.id === postNearNew);
+      expect(row).toBeDefined();
+      expect(row?.likeCount).toBe(1);
+      // 3 comments seeded, but only 1 is live+active-author.
+      expect(row?.commentCount).toBe(1);
+    });
+
+    it("likedByMe is true for the liker, false for another authed user, and false when unauthenticated", async () => {
+      const likerCaller = createCaller(makeCtx(likerId));
+      const otherCaller = createCaller(makeCtx(otherViewerId));
+      const anonCaller = createCaller(makeCtx());
+
+      const [likerResult, otherResult, anonResult] = await Promise.all([
+        likerCaller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 }),
+        otherCaller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 }),
+        anonCaller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 }),
+      ]);
+
+      expect(likerResult.items.find((i) => i.id === postNearNew)?.likedByMe).toBe(true);
+      expect(otherResult.items.find((i) => i.id === postNearNew)?.likedByMe).toBe(false);
+      expect(anonResult.items.find((i) => i.id === postNearNew)?.likedByMe).toBe(false);
+    });
+
+    it("a post with no likes/comments reports likeCount=0, likedByMe=false, commentCount=0", async () => {
+      const caller = createCaller(makeCtx());
+      const result = await caller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 });
+
+      const row = result.items.find((i) => i.id === postNearOld);
+      expect(row).toBeDefined();
+      expect(row?.likeCount).toBe(0);
+      expect(row?.likedByMe).toBe(false);
+      expect(row?.commentCount).toBe(0);
+    });
   });
 });

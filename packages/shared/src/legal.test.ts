@@ -58,4 +58,8 @@ describe("content tripwires — these assert claims that must stay true to the c
   it("terms of service mentions the 18-years-old minimum age", () => {
     expect(tosText).toContain("18 years old");
   });
+
+  it("privacy policy mentions garden likes and comments (F-053 garden social)", () => {
+    expect(privacyText).toContain("likes and comments");
+  });
 });
