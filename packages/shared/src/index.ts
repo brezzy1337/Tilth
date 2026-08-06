@@ -1379,5 +1379,5 @@ export type MyPlaceOutput = z.infer<typeof myPlaceOutput>;
 // disclaimer.
 // ---------------------------------------------------------------------------
 
-export type { LegalSection, LegalDocument } from "./legal.js";
-export { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal.js";
+export type { LegalSection, LegalDocument } from "./legal";
+export { TERMS_OF_SERVICE, PRIVACY_POLICY } from "./legal";
