@@ -43,8 +43,8 @@ describeWithDb("places.nearby — PostGIS integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   const stubStripe: Context["stripe"] = {
     createConnectedAccount: async () => {
       throw new Error("stub: not implemented");
@@ -86,6 +86,7 @@ describeWithDb("places.nearby — PostGIS integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };

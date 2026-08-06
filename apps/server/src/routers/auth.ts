@@ -22,12 +22,23 @@ import {
   changePasswordInput,
   deleteAccountInput,
   deleteAccountOutput,
+  requestRestoreCodeInput,
+  requestRestoreCodeOutput,
+  verifyRestoreInput,
+  otpPurpose,
+  RESTORE_CODE_TTL_MINUTES,
+  RESTORE_CODE_MAX_ATTEMPTS,
+  RESTORE_CODE_RESEND_COOLDOWN_SECONDS,
+  RESTORE_CODE_MAX_PER_HOUR,
+  RESTORE_VERIFICATION_REQUIRED,
 } from "@homegrown/shared";
-import { eq, or, and, notExists, notInArray } from "drizzle-orm";
+import { eq, or, and, notExists, notInArray, desc, isNull, gt, count, sql } from "drizzle-orm";
 import { publicProcedure, protectedProcedure, router } from "../trpc";
-import { users, stores, orders, sourcingRequests, pushTokens } from "../db/schema";
+import { users, stores, orders, sourcingRequests, pushTokens, restoreCodes } from "../db/schema";
 import { TERMINAL_ORDER_STATUSES } from "../db/order-transitions";
-import type { Db, AuthHelpers } from "../context";
+import type { DbOrTx } from "../db/order-transitions";
+import { maskEmail } from "../mask";
+import type { Db, AuthHelpers, EmailClient } from "../context";
 
 /** F-051 — the soft-delete grace period; see `deleteAccount` below. */
 const DELETE_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -65,6 +76,221 @@ async function requirePasswordMatch(
 
   const valid = await auth.verifyPassword(plainPassword, found.passwordHash);
   if (!valid) throw invalidCredentials();
+}
+
+// ---------------------------------------------------------------------------
+// F-054 — email-verified account restore
+//
+// Today (no email provider configured, `ctx.email === null`): a password-verified
+// `login` on a deactivated-in-grace account SILENTLY self-restores, exactly
+// as before F-054. Once `RESEND_API_KEY` is mounted (`ctx.email` non-null),
+// that silent restore is replaced by an emailed 6-digit code the caller must
+// submit to `verifyRestore` — `login` instead throws a FORBIDDEN
+// `RESTORE_VERIFICATION_REQUIRED` challenge. This is the env-gated rollout
+// switch: the feature is completely dark until the key exists (mirrors the
+// Mux/GCS `ctx.mux`/`ctx.media` null-gating pattern in `garden.ts`).
+// ---------------------------------------------------------------------------
+
+/** Mirrors the shared `otpPurpose` enum's only member today. */
+const RESTORE_PURPOSE = otpPurpose.enum.account_restore;
+
+const RESTORE_COOLDOWN_MS = RESTORE_CODE_RESEND_COOLDOWN_SECONDS * 1000;
+
+/** The row shape `login`/`requestRestoreCode`/`verifyRestore` all look up by usernameOrEmail. */
+interface LoginLookupRow {
+  id: string;
+  email: string;
+  username: string;
+  passwordHash: string;
+  deactivatedAt: Date | null;
+  deleteAfter: Date | null;
+}
+
+/** Generic, oracle-free "wrong credentials" error — the ONE UNAUTHORIZED shape shared by login/requestRestoreCode/verifyRestore for credential failures. */
+function invalidCredentialsError(): TRPCError {
+  return new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
+}
+
+/**
+ * Look up a user by `usernameOrEmail` and verify `password` against the
+ * stored hash, throwing the SAME generic `invalidCredentialsError()` on
+ * either a missing row or a hash mismatch — never distinguishes the two.
+ * Shared by `login`, `requestRestoreCode`, and `verifyRestore` so all three
+ * surfaces fail identically on bad credentials (no account-existence oracle).
+ *
+ * Pre-existing, documented timing gap (not fixed here, same as before this
+ * helper was extracted): the DB lookup and the hash verify take measurably
+ * different time depending on whether `found` exists (a real scrypt verify
+ * vs. none at all) — a timing side-channel for username/email enumeration.
+ */
+async function verifyLoginCredentials(
+  db: Db,
+  auth: AuthHelpers,
+  usernameOrEmail: string,
+  password: string,
+): Promise<LoginLookupRow> {
+  const [found] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      username: users.username,
+      passwordHash: users.passwordHash,
+      deactivatedAt: users.deactivatedAt,
+      deleteAfter: users.deleteAfter,
+    })
+    .from(users)
+    .where(or(eq(users.email, usernameOrEmail), eq(users.username, usernameOrEmail)))
+    .limit(1);
+
+  if (!found) throw invalidCredentialsError();
+
+  const valid = await auth.verifyPassword(password, found.passwordHash);
+  if (!valid) throw invalidCredentialsError();
+
+  return found;
+}
+
+/** True when `row` is deactivated AND still within its 30-day grace window. */
+function isDeactivatedInGrace(row: Pick<LoginLookupRow, "deactivatedAt" | "deleteAfter">): boolean {
+  return row.deactivatedAt !== null && row.deleteAfter !== null && row.deleteAfter.getTime() > Date.now();
+}
+
+/**
+ * Clears `deactivatedAt`/`deleteAfter` — the ONE account-restore write,
+ * shared by `login`'s legacy silent path and `verifyRestore`'s
+ * code-confirmed path. Takes `DbOrTx` (not just `Db`) so `verifyRestore` can
+ * call it INSIDE its own transaction, alongside marking the code consumed
+ * and deleting other outstanding codes — all three writes commit or roll
+ * back together (see `verifyRestore` below).
+ */
+async function restoreDeactivatedAccount(db: DbOrTx, userId: string): Promise<void> {
+  await db.update(users).set({ deactivatedAt: null, deleteAfter: null }).where(eq(users.id, userId));
+}
+
+/** The single newest restore-code row for `userId`/`RESTORE_PURPOSE`, regardless of consumed/expired state — used for cooldown/hourly-cap bookkeeping. */
+async function latestRestoreCode(
+  db: DbOrTx,
+  userId: string,
+): Promise<{ createdAt: Date; consumedAt: Date | null } | undefined> {
+  const [row] = await db
+    .select({ createdAt: restoreCodes.createdAt, consumedAt: restoreCodes.consumedAt })
+    .from(restoreCodes)
+    .where(and(eq(restoreCodes.userId, userId), eq(restoreCodes.purpose, RESTORE_PURPOSE)))
+    .orderBy(desc(restoreCodes.createdAt))
+    .limit(1);
+  return row;
+}
+
+/** True when the newest code is unconsumed AND younger than `RESTORE_CODE_RESEND_COOLDOWN_SECONDS`. */
+function isWithinResendCooldown(latest: { createdAt: Date; consumedAt: Date | null } | undefined): boolean {
+  if (!latest || latest.consumedAt) return false;
+  return Date.now() - latest.createdAt.getTime() < RESTORE_COOLDOWN_MS;
+}
+
+/** Count of `userId`/`RESTORE_PURPOSE` codes created in the last rolling hour — the RESTORE_CODE_MAX_PER_HOUR cap. */
+async function restoreCodeCountLastHour(db: DbOrTx, userId: string): Promise<number> {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+  const [row] = await db
+    .select({ count: count() })
+    .from(restoreCodes)
+    .where(
+      and(
+        eq(restoreCodes.userId, userId),
+        eq(restoreCodes.purpose, RESTORE_PURPOSE),
+        gt(restoreCodes.createdAt, since),
+      ),
+    );
+  return row?.count ?? 0;
+}
+
+/**
+ * True when a currently-valid (unconsumed AND unexpired) restore code exists
+ * for `userId` — the SAME lookup `verifyRestore` uses to find a submittable
+ * code. Used by `login`'s hourly-cap edge (see `issueRestoreCode`'s "capped"
+ * result below) to decide between issuing the `RESTORE_VERIFICATION_REQUIRED`
+ * challenge (a code the caller can still submit exists) and TOO_MANY_REQUESTS
+ * (no usable code exists — a challenge would be a dead end).
+ */
+async function hasValidUnexpiredCode(db: DbOrTx, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: restoreCodes.id })
+    .from(restoreCodes)
+    .where(
+      and(
+        eq(restoreCodes.userId, userId),
+        eq(restoreCodes.purpose, RESTORE_PURPOSE),
+        isNull(restoreCodes.consumedAt),
+        gt(restoreCodes.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
+
+/** Outcome of `issueRestoreCode` — what the caller should do next. */
+type RestoreCodeIssueResult =
+  | { status: "sent"; code: string }
+  | { status: "cooldown" }
+  | { status: "capped" };
+
+/**
+ * Atomically decide whether to create a fresh restore code for `userId`,
+ * enforcing the resend cooldown and hourly cap — WITHOUT sending the email
+ * (callers send it themselves, using the returned plaintext `code`, AFTER
+ * this transaction has committed — a slow network call to the email provider must
+ * never hold the lock below open).
+ *
+ * CRITICAL (F-054 review fix — rate-limit TOCTOU): the cooldown read, the
+ * hourly-count read, and the insert used to run as three separate
+ * statements with no lock between them — N parallel requests for the same
+ * user could all observe "under cap" before any of them inserted, bypassing
+ * both the cooldown and the hourly cap. This now runs the reads + the insert
+ * inside ONE transaction that FIRST takes
+ * `pg_advisory_xact_lock(hashtext(userId))` — a transaction-scoped advisory
+ * lock (auto-released on commit/rollback; no manual unlock needed) that
+ * serializes every concurrent caller for the SAME user (a different user's
+ * call is unaffected; a `hashtext` collision between two different users'
+ * ids would only cost them a harmless, vanishingly rare false wait, never a
+ * correctness problem). `login`'s auto-send path and `requestRestoreCode`
+ * BOTH go through this one function so neither can race the other, or
+ * itself.
+ */
+async function issueRestoreCode(
+  db: Db,
+  auth: AuthHelpers,
+  userId: string,
+): Promise<RestoreCodeIssueResult> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
+
+    const latest = await latestRestoreCode(tx, userId);
+    if (isWithinResendCooldown(latest)) return { status: "cooldown" };
+
+    const countLastHour = await restoreCodeCountLastHour(tx, userId);
+    if (countLastHour >= RESTORE_CODE_MAX_PER_HOUR) return { status: "capped" };
+
+    const code = auth.generateRestoreCode();
+    const codeHash = await auth.hashPassword(code);
+    const expiresAt = new Date(Date.now() + RESTORE_CODE_TTL_MINUTES * 60_000);
+
+    await tx.insert(restoreCodes).values({ userId, purpose: RESTORE_PURPOSE, codeHash, expiresAt });
+
+    return { status: "sent", code };
+  });
+}
+
+/**
+ * Email a restore code to `toEmail`. Deliberately separate from
+ * `issueRestoreCode` (see its doc comment) — this is the ONE place the TTL
+ * is interpolated into the email body, from the shared
+ * `RESTORE_CODE_TTL_MINUTES` constant rather than a hardcoded string.
+ */
+async function sendRestoreCodeEmail(email: EmailClient, toEmail: string, code: string): Promise<void> {
+  await email.sendEmail({
+    to: toEmail,
+    subject: "Your Tilth restore code",
+    text: `Your Tilth restore code is ${code}. It expires in ${RESTORE_CODE_TTL_MINUTES} minutes. If you didn't try to restore your account, you can ignore this.`,
+  });
 }
 
 export const authRouter = router({
@@ -152,66 +378,238 @@ export const authRouter = router({
    *
    * F-051 — deactivated accounts (`auth.deleteAccount`, soft-delete + 30-day
    * grace): a password-verified login inside the grace window (`deleteAfter`
-   * still in the future) SELF-RESTORES the account (clears `deactivatedAt` /
-   * `deleteAfter`) and proceeds as a normal login. Past the grace window (or
-   * a malformed state — `deleteAfter` unset while `deactivatedAt` is set),
-   * login is rejected with the SAME generic UNAUTHORIZED message as a wrong
-   * password — an attacker probing usernames/emails must not be able to
-   * distinguish "wrong password" from "this account was deleted".
+   * still in the future) restores the account and proceeds as a normal
+   * login. Past the grace window (or a malformed state — `deleteAfter`
+   * unset while `deactivatedAt` is set), login is rejected with the SAME
+   * generic UNAUTHORIZED message as a wrong password — an attacker probing
+   * usernames/emails must not be able to distinguish "wrong password" from
+   * "this account was deleted".
+   *
+   * F-054 — email-verified restore, ENV-GATED on `ctx.email` (non-null only
+   * once `RESEND_API_KEY` is configured):
+   *   - `ctx.email === null` (no email provider configured): unchanged from
+   *     F-051 — the account SELF-RESTORES silently right here, no code
+   *     challenge. This is the "feature dark" state; today's behavior is
+   *     preserved byte-for-byte.
+   *   - `ctx.email !== null`: silent restore is replaced by an emailed
+   *     6-digit code, issued atomically via `issueRestoreCode` (see its doc
+   *     comment for the rate-limit-TOCTOU fix). Three outcomes:
+   *       - "sent": a fresh code was created — email it, then throw FORBIDDEN
+   *         `RESTORE_VERIFICATION_REQUIRED`.
+   *       - "cooldown": a fresh unconsumed code already exists (younger than
+   *         the resend cooldown, so necessarily still unexpired — the
+   *         cooldown is 60s, well under the 10-minute TTL) — do NOT send
+   *         again, but still throw the same challenge; the caller has a
+   *         usable code.
+   *       - "capped": the hourly cap is reached. If a currently-valid
+   *         (unconsumed, unexpired) code STILL exists from an earlier send
+   *         this hour, throw the same challenge (no send) — the caller has
+   *         something to submit. Otherwise every code from this hour has
+   *         expired, so a challenge would be a dead end: throw
+   *         TOO_MANY_REQUESTS instead (post-review fix — this used to always
+   *         throw the challenge here, sending the user to a code screen with
+   *         no valid code in existence).
+   *     The account is NOT restored in any of these branches; that only
+   *     happens once `verifyRestore` confirms the emailed code.
    */
   login: publicProcedure
     .input(loginInput)
     .output(authResponse)
     .mutation(async ({ input, ctx }) => {
-      const { usernameOrEmail, password } = input;
-
-      // Look up by email OR username
-      const [found] = await ctx.db
-        .select({
-          id: users.id,
-          email: users.email,
-          username: users.username,
-          passwordHash: users.passwordHash,
-          deactivatedAt: users.deactivatedAt,
-          deleteAfter: users.deleteAfter,
-        })
-        .from(users)
-        .where(
-          or(
-            eq(users.email, usernameOrEmail),
-            eq(users.username, usernameOrEmail),
-          ),
-        )
-        .limit(1);
-
-      const INVALID_CREDS = new TRPCError({
-        code: "UNAUTHORIZED",
-        message: "Invalid credentials",
-      });
-
-      // Pre-existing, documented timing gap (not fixed here): the DB lookup
-      // above and the hash verify below take measurably different time
-      // depending on whether `found` exists (a real scrypt verify vs. none at
-      // all), which is a timing side-channel for username/email enumeration.
-      // Not addressed in this pass — see requirePasswordMatch's doc comment
-      // for why `login` isn't wired through it.
-      if (!found) throw INVALID_CREDS;
-
-      const valid = await ctx.auth.verifyPassword(password, found.passwordHash);
-      if (!valid) throw INVALID_CREDS;
+      const found = await verifyLoginCredentials(
+        ctx.db,
+        ctx.auth,
+        input.usernameOrEmail,
+        input.password,
+      );
 
       if (found.deactivatedAt) {
-        const withinGrace = found.deleteAfter !== null && found.deleteAfter.getTime() > Date.now();
-        if (!withinGrace) throw INVALID_CREDS;
+        if (!isDeactivatedInGrace(found)) throw invalidCredentialsError();
 
-        // Self-restore: clear both fields so every deactivation-gated
-        // surface (helpers.ts's activeUserClause/isUserDeactivated) sees
-        // this account as active again from this point on.
-        await ctx.db
-          .update(users)
-          .set({ deactivatedAt: null, deleteAfter: null })
-          .where(eq(users.id, found.id));
+        if (ctx.email) {
+          const result = await issueRestoreCode(ctx.db, ctx.auth, found.id);
+
+          if (result.status === "sent") {
+            await sendRestoreCodeEmail(ctx.email, found.email, result.code);
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+          }
+
+          if (result.status === "cooldown") {
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+          }
+
+          // result.status === "capped" — only challenge if there's actually
+          // a valid code left to submit; otherwise this is a dead end.
+          if (await hasValidUnexpiredCode(ctx.db, found.id)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+          }
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Too many restore attempts. Try again later.",
+          });
+        }
+
+        // Feature dark (no email provider configured) — pre-F-054 silent self-restore,
+        // unchanged: clears both fields so every deactivation-gated surface
+        // (helpers.ts's activeUserClause/isUserDeactivated) sees this account
+        // as active again from this point on.
+        await restoreDeactivatedAccount(ctx.db, found.id);
       }
+
+      const token = await ctx.auth.signToken(found.id, ctx.jwtSecret);
+
+      return {
+        token,
+        user: {
+          id: found.id,
+          email: found.email,
+          username: found.username,
+        },
+      };
+    }),
+
+  /**
+   * Request a fresh restore code for a deactivated-in-grace account (F-054).
+   * Public — re-verifies credentials exactly like `login` (same generic
+   * UNAUTHORIZED on a wrong password, unknown account, an ACTIVE account, or
+   * an account past its grace window — no account-existence or
+   * deactivation-state oracle; a live account never needs this endpoint).
+   *
+   * Rate-limited per (user, purpose): at most one send per
+   * `RESTORE_CODE_RESEND_COOLDOWN_SECONDS`, and at most
+   * `RESTORE_CODE_MAX_PER_HOUR` sends per rolling hour — both TOO_MANY_REQUESTS.
+   *
+   * Mobile calls this to resend a code after `login` throws the
+   * `RESTORE_VERIFICATION_REQUIRED` challenge (see `login` above); it is a
+   * no-op-safe way to trigger the SAME code-issuing path outside of a login
+   * attempt.
+   */
+  requestRestoreCode: publicProcedure
+    .input(requestRestoreCodeInput)
+    .output(requestRestoreCodeOutput)
+    .mutation(async ({ input, ctx }) => {
+      const found = await verifyLoginCredentials(
+        ctx.db,
+        ctx.auth,
+        input.usernameOrEmail,
+        input.password,
+      );
+
+      // Same generic error for a live account, a past-grace account, AND a
+      // feature-dark environment (no email provider) — none of these may be
+      // distinguishable from a wrong password.
+      if (!ctx.email || !isDeactivatedInGrace(found)) throw invalidCredentialsError();
+
+      // Same atomic issue path `login`'s auto-send uses — see
+      // `issueRestoreCode`'s doc comment for the rate-limit-TOCTOU fix.
+      const result = await issueRestoreCode(ctx.db, ctx.auth, found.id);
+
+      if (result.status === "cooldown") {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Please wait before requesting another code.",
+        });
+      }
+      if (result.status === "capped") {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many restore code requests. Try again later.",
+        });
+      }
+
+      await sendRestoreCodeEmail(ctx.email, found.email, result.code);
+
+      return { sent: true, maskedEmail: maskEmail(found.email) };
+    }),
+
+  /**
+   * Submit a restore code and complete reactivation (F-054). Public —
+   * re-verifies credentials exactly like `login`/`requestRestoreCode` (same
+   * generic UNAUTHORIZED for a wrong password, unknown account, a non-
+   * deactivated-in-grace account, or a feature-dark environment).
+   *
+   * Loads the newest unconsumed, unexpired code for (user, purpose),
+   * ATOMICALLY increments its `attempts` (UPDATE...RETURNING — no TOCTOU
+   * between reading and bumping the counter), and rejects once attempts
+   * exceeds `RESTORE_CODE_MAX_ATTEMPTS` — even if the submitted code is
+   * correct on that very attempt. A missing/expired/consumed code and a
+   * wrong code all produce the SAME generic UNAUTHORIZED (no "wrong code vs
+   * expired" distinction).
+   *
+   * On match: marks the code consumed, restores the account via the SAME
+   * `restoreDeactivatedAccount` write `login`'s legacy silent path uses,
+   * deletes every other outstanding (unconsumed) code for this user, and
+   * returns the same `authResponse` shape `login` returns.
+   */
+  verifyRestore: publicProcedure
+    .input(verifyRestoreInput)
+    .output(authResponse)
+    .mutation(async ({ input, ctx }) => {
+      const found = await verifyLoginCredentials(
+        ctx.db,
+        ctx.auth,
+        input.usernameOrEmail,
+        input.password,
+      );
+
+      if (!ctx.email || !isDeactivatedInGrace(found)) throw invalidCredentialsError();
+
+      const invalidCode = () =>
+        new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired code" });
+
+      const [codeRow] = await ctx.db
+        .select({ id: restoreCodes.id, codeHash: restoreCodes.codeHash })
+        .from(restoreCodes)
+        .where(
+          and(
+            eq(restoreCodes.userId, found.id),
+            eq(restoreCodes.purpose, RESTORE_PURPOSE),
+            isNull(restoreCodes.consumedAt),
+            gt(restoreCodes.expiresAt, new Date()),
+          ),
+        )
+        .orderBy(desc(restoreCodes.createdAt))
+        .limit(1);
+
+      if (!codeRow) throw invalidCode();
+
+      // Atomic increment (UPDATE...RETURNING) — no separate read-then-write
+      // gap for two concurrent verify attempts to race past the cap.
+      const [updated] = await ctx.db
+        .update(restoreCodes)
+        .set({ attempts: sql`${restoreCodes.attempts} + 1` })
+        .where(eq(restoreCodes.id, codeRow.id))
+        .returning({ attempts: restoreCodes.attempts });
+
+      if (!updated || updated.attempts > RESTORE_CODE_MAX_ATTEMPTS) throw invalidCode();
+
+      const matches = await ctx.auth.verifyPassword(input.code, codeRow.codeHash);
+      if (!matches) throw invalidCode();
+
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .update(restoreCodes)
+          .set({ consumedAt: new Date() })
+          .where(eq(restoreCodes.id, codeRow.id));
+
+        // The SAME `restoreDeactivatedAccount` write `login`'s legacy silent
+        // path uses (post-review fix — this used to be inlined here, drifting
+        // from the doc comment above claiming it used the helper).
+        await restoreDeactivatedAccount(tx, found.id);
+
+        // Delete every OTHER outstanding (unconsumed) code for this user —
+        // the just-consumed row above no longer matches `isNull(consumedAt)`
+        // and survives for audit purposes.
+        await tx
+          .delete(restoreCodes)
+          .where(
+            and(
+              eq(restoreCodes.userId, found.id),
+              eq(restoreCodes.purpose, RESTORE_PURPOSE),
+              isNull(restoreCodes.consumedAt),
+            ),
+          );
+      });
 
       const token = await ctx.auth.signToken(found.id, ctx.jwtSecret);
 

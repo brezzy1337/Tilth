@@ -127,6 +127,13 @@
       "when": 1784049343714,
       "tag": "0017_curious_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786025059460,
+      "tag": "0018_sleepy_black_knight",
+      "breakpoints": true
     }
   ]
 }

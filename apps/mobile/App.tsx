@@ -51,6 +51,7 @@ import {
 import { HeroScreen } from "./src/screens/HeroScreen";
 import { LogInScreen } from "./src/screens/LogInScreen";
 import { SignUpScreen } from "./src/screens/SignUpScreen";
+import { RestoreVerifyScreen } from "./src/screens/RestoreVerifyScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { SearchScreen } from "./src/screens/SearchScreen";
 import { GardenFeedScreen } from "./src/screens/GardenFeedScreen";
@@ -206,6 +207,11 @@ function RootNavigator() {
             name="SignUp"
             component={SignUpScreen}
             options={{ title: "Sign Up" }}
+          />
+          <PreAuthStack.Screen
+            name="RestoreVerify"
+            component={RestoreVerifyScreen}
+            options={{ title: "Restore Account" }}
           />
         </PreAuthStack.Navigator>
       ) : (

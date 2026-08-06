@@ -50,19 +50,37 @@ describeWithDb("stores.get — trust tier (F-016) PostGIS/Postgres integration",
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   /** Stub StripeClient — trust-tier tests never call Stripe; stub keeps types happy. */
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
@@ -76,6 +94,7 @@ describeWithDb("stores.get — trust tier (F-016) PostGIS/Postgres integration",
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };

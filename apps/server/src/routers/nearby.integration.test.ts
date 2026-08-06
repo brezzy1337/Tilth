@@ -49,19 +49,37 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   /** Stub StripeClient — nearby tests never call Stripe; stub keeps types happy. */
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
@@ -75,6 +93,7 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -392,7 +411,7 @@ describeWithDb("listings.nearby — PostGIS integration", () => {
 
     expect(withUndefinedQuery.length).toBe(withoutQuery.length);
     expect(withUndefinedQuery.map((r) => r.id).sort()).toEqual(
-      withoutQuery.map((r) => r.id).sort()
+      withoutQuery.map((r) => r.id).sort(),
     );
   });
 

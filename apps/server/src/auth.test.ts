@@ -10,6 +10,7 @@ import {
   verifyPassword,
   signToken,
   verifyToken,
+  generateRestoreCode,
 } from "./auth";
 
 const TEST_SECRET = "test-jwt-secret-that-is-at-least-32-chars";
@@ -89,5 +90,19 @@ describe("signToken / verifyToken", () => {
 
   it("returns null for an empty string", async () => {
     expect(await verifyToken("", TEST_SECRET)).toBeNull();
+  });
+});
+
+describe("generateRestoreCode", () => {
+  it("returns a 6-digit, zero-padded string", () => {
+    for (let i = 0; i < 50; i++) {
+      const code = generateRestoreCode();
+      expect(code).toMatch(/^\d{6}$/);
+    }
+  });
+
+  it("produces different codes across calls (not constant)", () => {
+    const codes = new Set(Array.from({ length: 20 }, () => generateRestoreCode()));
+    expect(codes.size).toBeGreaterThan(1);
   });
 });

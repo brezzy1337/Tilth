@@ -23,7 +23,7 @@ import {
   Text,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { loginInput } from "@homegrown/shared";
+import { loginInput, RESTORE_VERIFICATION_REQUIRED } from "@homegrown/shared";
 import { trpc } from "../api/trpc";
 import { useAuth } from "../auth/AuthContext";
 import { FormField } from "../components/FormField";
@@ -51,7 +51,19 @@ export function LogInScreen({ navigation }: Props) {
       await auth.signIn(data.token, data.user);
       // Navigation handled by AuthContext gate in App.tsx
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      // F-054: a deactivated-in-grace account with email verification
+      // enabled server-side throws this exact FORBIDDEN challenge instead
+      // of completing login. Match on the precise marker (never a substring
+      // match) so unrelated FORBIDDEN errors keep the generic path below.
+      if (err.data?.code === "FORBIDDEN" && err.message === RESTORE_VERIFICATION_REQUIRED) {
+        navigation.navigate("RestoreVerify", {
+          usernameOrEmail: variables.usernameOrEmail,
+          password: variables.password,
+        });
+        return;
+      }
+
       if (err.data?.code === "UNAUTHORIZED") {
         setServerError("Invalid credentials.");
       } else {

@@ -118,19 +118,37 @@ const stubAuth: Context["auth"] = {
   verifyPassword: authHelpers.verifyPassword,
   signToken: authHelpers.signToken,
   verifyToken: authHelpers.verifyToken,
+  generateRestoreCode: authHelpers.generateRestoreCode,
 };
-
 /** Stub StripeClient — existing router tests never call Stripe; stub keeps types happy. */
 const stubStripe: Context["stripe"] = {
-  createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-  createAccountLink: async () => { throw new Error("stub: not implemented"); },
-  retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-  createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  refundPayment: async () => { throw new Error("stub: not implemented"); },
-  createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+  createConnectedAccount: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createAccountLink: async () => {
+    throw new Error("stub: not implemented");
+  },
+  retrieveAccountStatus: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createPaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  retrievePaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  cancelPaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  capturePaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  refundPayment: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createDashboardLink: async () => {
+    throw new Error("stub: not implemented");
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -152,6 +170,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -185,6 +204,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -218,6 +238,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -251,6 +272,7 @@ describe("auth.register", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -294,6 +316,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -331,6 +354,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -355,6 +379,7 @@ describe("auth.login", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -387,6 +412,7 @@ describe("auth.me", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID5 },
     };
@@ -408,6 +434,7 @@ describe("auth.me", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -434,6 +461,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -454,6 +482,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID6 },
     };
@@ -485,6 +514,7 @@ describe("stores.getMine", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID6 },
     };
@@ -525,6 +555,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID7 },
     };
@@ -549,6 +580,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID7 },
     };
@@ -578,6 +610,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID7 },
     };
@@ -604,6 +637,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID7 },
     };
@@ -622,6 +656,7 @@ describe("stores.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -639,7 +674,7 @@ describe("stores.create", () => {
 
 describe("stores.get", () => {
   const PUBLIC_STORE_ID = "a2eebc99-9c0b-4ef8-bb6d-6bb9bd380b00";
-  const PUBLIC_USER_ID  = "b2eebc99-9c0b-4ef8-bb6d-6bb9bd380b01";
+  const PUBLIC_USER_ID = "b2eebc99-9c0b-4ef8-bb6d-6bb9bd380b01";
 
   it("returns public profile (id, name, logo, about) for an existing store", async () => {
     const db = fakeDb({
@@ -664,6 +699,7 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -702,6 +738,7 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -727,14 +764,15 @@ describe("stores.get", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.stores.get({ storeId: PUBLIC_USER_ID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.stores.get({ storeId: PUBLIC_USER_ID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 });
 
@@ -780,6 +818,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
@@ -812,6 +851,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
@@ -838,6 +878,7 @@ describe("listings.create", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -881,6 +922,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
@@ -916,6 +958,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
@@ -937,6 +980,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: LISTING_USER_UUID },
     };
@@ -957,6 +1001,7 @@ describe("listings.update", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -989,6 +1034,7 @@ describe("listings.listByStore", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -1011,6 +1057,7 @@ describe("listings.listByStore", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };
@@ -1060,6 +1107,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
@@ -1087,6 +1135,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
@@ -1108,6 +1157,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: GEO_USER_ID },
     };
@@ -1128,6 +1178,7 @@ describe("geo.setStoreLocation", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: null,
     };

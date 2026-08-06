@@ -85,7 +85,10 @@ describe("sourcing — resolveCallerPlace", () => {
 
   it("returns the place when the caller has a linked approved place", async () => {
     const db = fakeDb([{ id: UUID_A, name: "River Co-op" }]);
-    await expect(resolveCallerPlace(db, UUID_A)).resolves.toEqual({ id: UUID_A, name: "River Co-op" });
+    await expect(resolveCallerPlace(db, UUID_A)).resolves.toEqual({
+      id: UUID_A,
+      name: "River Co-op",
+    });
   });
 
   it("throws NOT_FOUND when the caller has no linked place", async () => {

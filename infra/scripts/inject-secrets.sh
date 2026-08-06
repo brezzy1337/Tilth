@@ -23,6 +23,7 @@
 #        STRIPE_SECRET_KEY
 #        STRIPE_WEBHOOK_SECRET         (may be a placeholder — see note below)
 #        STRIPE_WEBHOOK_SECRET_CONNECT (may be a placeholder — see note below)
+#        RESEND_API_KEY                (sending-only key — F-054 email verification)
 #
 #   All secret values flow via --data-file=- (stdin pipe) or process
 #   substitution — never echoed, never written to a file, never passed as a
@@ -324,6 +325,25 @@ else
         log_ok "STRIPE_WEBHOOK_SECRET_CONNECT stored."
     fi
     unset _WEBHOOK_SECRET_CONNECT
+fi
+
+# ── RESEND_API_KEY ────────────────────────────────────────────────────────────
+# Required to enable email verification (F-054). Create it in the Resend
+# dashboard (resend.com) with "sending" access only — a full-access key is not
+# needed. EMAIL_FROM is not a secret and is not set anywhere in the deploy —
+# the server's env schema defaults it to no-reply@tilth.market; add it to
+# deploy.yml's --set-env-vars only if that default ever needs overriding.
+if secret_has_version "RESEND_API_KEY"; then
+    log_ok "RESEND_API_KEY already has an enabled version — skipping."
+else
+    printf '\nEnter RESEND_API_KEY (re_…, sending scope only, input hidden): '
+    read -rs _RESEND_KEY
+    printf '\n'
+    if [[ -z "${_RESEND_KEY}" ]]; then
+        die "RESEND_API_KEY cannot be empty."
+    fi
+    printf '%s' "${_RESEND_KEY}" | add_secret_version_from_fd "RESEND_API_KEY"
+    unset _RESEND_KEY
 fi
 
 # =============================================================================

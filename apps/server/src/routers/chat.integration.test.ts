@@ -58,24 +58,47 @@ describeWithDb("chat router — Postgres integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
 
   /** Every push.send call made across the whole test file, for assertion. */
-  const pushCalls: Array<{ tokens: string[]; title: string; body: string; data?: Record<string, unknown> }> = [];
+  const pushCalls: Array<{
+    tokens: string[];
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }> = [];
   const capturingPush: PushClient = {
     async send(input) {
       pushCalls.push(input);
@@ -91,6 +114,7 @@ describeWithDb("chat router — Postgres integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: capturingPush,
       user: userId ? { id: userId } : null,
     };
@@ -281,9 +305,7 @@ describeWithDb("chat router — Postgres integration", () => {
     );
 
     // Clean up the block so subsequent tests in this conversation still work.
-    await db
-      .delete(schema.userBlocks)
-      .where(eq(schema.userBlocks.blockerUserId, sellerUserId));
+    await db.delete(schema.userBlocks).where(eq(schema.userBlocks.blockerUserId, sellerUserId));
   });
 
   it("send: sends a push notification to the other party's registered device after commit", async () => {
@@ -397,8 +419,12 @@ describeWithDb("chat router — Postgres integration", () => {
 
   it("blockUser is idempotent — repeating it does not error", async () => {
     const caller = createCaller(ctxFor(buyerId));
-    await expect(caller.chat.blockUser({ userId: otherBuyerId })).resolves.toEqual({ success: true });
-    await expect(caller.chat.blockUser({ userId: otherBuyerId })).resolves.toEqual({ success: true });
+    await expect(caller.chat.blockUser({ userId: otherBuyerId })).resolves.toEqual({
+      success: true,
+    });
+    await expect(caller.chat.blockUser({ userId: otherBuyerId })).resolves.toEqual({
+      success: true,
+    });
   });
 
   it("blockUser rejects blocking yourself", async () => {

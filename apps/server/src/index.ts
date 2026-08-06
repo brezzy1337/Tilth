@@ -19,7 +19,7 @@ import { env } from "./env";
 import { db } from "./db/index";
 import { appRouter } from "./router";
 import { createContext } from "./context";
-import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
+import { hashPassword, verifyPassword, signToken, verifyToken, generateRestoreCode } from "./auth";
 import { geocodeAddress } from "./geocode";
 import { createStripeClient } from "./stripe";
 import { handleStripeWebhookRequest } from "./webhook";
@@ -29,6 +29,7 @@ import { createRequestListener } from "./request-listener";
 import { createGcsMediaClient } from "./gcs";
 import { createMuxClient } from "./mux";
 import { createExpoPushClient } from "./push";
+import { createResendEmailClient, emailEnabled } from "./email";
 
 const stripe = createStripeClient(env.STRIPE_SECRET_KEY, {
   refreshUrl: env.STRIPE_CONNECT_REFRESH_URL,
@@ -49,18 +50,27 @@ const mux =
 // is optional, only raises rate limits), so this client is always constructed.
 const push = createExpoPushClient(env.EXPO_ACCESS_TOKEN);
 
+// F-054 — Resend credentials do not exist yet for this pilot. OPTIONAL at
+// boot, same graceful-degradation pattern as Mux/GCS above: when unset,
+// `email` is null and `auth.login`'s deactivated-in-grace self-restore path
+// keeps its pre-F-054 silent-restore behavior (see auth.ts).
+const email = emailEnabled(env.RESEND_API_KEY)
+  ? createResendEmailClient(env.RESEND_API_KEY, env.EMAIL_FROM)
+  : null;
+
 const trpcHandler = createHTTPHandler({
   router: appRouter,
   createContext: (opts) =>
     createContext(opts, {
       db,
       jwtSecret: env.JWT_SECRET,
-      auth: { hashPassword, verifyPassword, signToken, verifyToken },
+      auth: { hashPassword, verifyPassword, signToken, verifyToken, generateRestoreCode },
       geocode: (input) => geocodeAddress(input, env.GOOGLE_GEOCODING_API_KEY),
       stripe,
       media,
       mux,
       push,
+      email,
     }),
 });
 
