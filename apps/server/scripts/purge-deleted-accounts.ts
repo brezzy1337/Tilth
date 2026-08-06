@@ -48,7 +48,14 @@ import { randomBytes } from "node:crypto";
 import { eq, and, or, isNotNull, lte, asc } from "drizzle-orm";
 import * as schema from "../src/db/schema.js";
 import { hashPassword } from "../src/auth.js";
+import { maskEmail } from "../src/mask.js";
 import { fail, getDb, closeDb, isMainModule, type OperatorDb } from "./lib.js";
+
+// Re-exported (not just imported) so this module's existing test-import
+// surface (`./purge-deleted-accounts.test.ts` imports `maskEmail` from
+// here) keeps working now that the implementation lives in `../src/mask.js`
+// — the single shared copy also used by `routers/auth.ts`.
+export { maskEmail };
 
 /** The name a purged user's store is renamed to — never leave a store's own name PII-bearing. */
 export const DELETED_STORE_NAME = "Deleted stand";
@@ -61,25 +68,6 @@ export const DELETED_STORE_NAME = "Deleted stand";
 /** Anonymized email for a purged user — deterministic on their (already-opaque) id. */
 export function anonymizedEmail(userId: string): string {
   return `deleted-${userId}@deleted.invalid`;
-}
-
-/**
- * Mask an email for stdout: keeps the first char of the local part and the
- * first char of the domain, replaces the rest with `*`s (e.g.
- * "jane@example.com" -> "j***@e***.com" — the TLD is kept as-is since it
- * carries no PII on its own). Never used for anything but display — the raw
- * email is still what's written to the DB (pre-anonymization) or read from
- * it; this only governs what this CLI prints.
- */
-export function maskEmail(email: string): string {
-  const at = email.indexOf("@");
-  if (at <= 0) return "***"; // malformed — never print it verbatim
-  const local = email.slice(0, at);
-  const domain = email.slice(at + 1);
-  const dot = domain.lastIndexOf(".");
-  const domainHead = dot > 0 ? domain.slice(0, dot) : domain;
-  const domainTail = dot > 0 ? domain.slice(dot) : "";
-  return `${local[0]}***@${domainHead[0] ?? "*"}***${domainTail}`;
 }
 
 /** Anonymized username for a purged user, given an 8-hex-char random suffix. */

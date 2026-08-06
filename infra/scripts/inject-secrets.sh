@@ -330,8 +330,9 @@ fi
 # ── SENDGRID_API_KEY ──────────────────────────────────────────────────────────
 # Required to enable email verification (F-054). Create it in the GCP
 # Marketplace SendGrid subscription with Mail Send access only — no other
-# scopes. SENDGRID_FROM_EMAIL is not a secret (it has an in-code default) and
-# is set as a plain env var on the Cloud Run service, not injected here.
+# scopes. SENDGRID_FROM_EMAIL is not a secret and is not set anywhere in the
+# deploy — the server's env schema defaults it to no-reply@tilth.market; add it
+# to deploy.yml's --set-env-vars only if that default ever needs overriding.
 if secret_has_version "SENDGRID_API_KEY"; then
     log_ok "SENDGRID_API_KEY already has an enabled version — skipping."
 else

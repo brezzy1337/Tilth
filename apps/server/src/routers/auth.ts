@@ -36,6 +36,8 @@ import { eq, or, and, notExists, notInArray, desc, isNull, gt, count, sql } from
 import { publicProcedure, protectedProcedure, router } from "../trpc";
 import { users, stores, orders, sourcingRequests, pushTokens, restoreCodes } from "../db/schema";
 import { TERMINAL_ORDER_STATUSES } from "../db/order-transitions";
+import type { DbOrTx } from "../db/order-transitions";
+import { maskEmail } from "../mask";
 import type { Db, AuthHelpers, EmailClient } from "../context";
 
 /** F-051 — the soft-delete grace period; see `deleteAccount` below. */
@@ -153,14 +155,21 @@ function isDeactivatedInGrace(row: Pick<LoginLookupRow, "deactivatedAt" | "delet
   return row.deactivatedAt !== null && row.deleteAfter !== null && row.deleteAfter.getTime() > Date.now();
 }
 
-/** Clears `deactivatedAt`/`deleteAfter` — the ONE account-restore write, shared by `login`'s legacy silent path and `verifyRestore`'s code-confirmed path. */
-async function restoreDeactivatedAccount(db: Db, userId: string): Promise<void> {
+/**
+ * Clears `deactivatedAt`/`deleteAfter` — the ONE account-restore write,
+ * shared by `login`'s legacy silent path and `verifyRestore`'s
+ * code-confirmed path. Takes `DbOrTx` (not just `Db`) so `verifyRestore` can
+ * call it INSIDE its own transaction, alongside marking the code consumed
+ * and deleting other outstanding codes — all three writes commit or roll
+ * back together (see `verifyRestore` below).
+ */
+async function restoreDeactivatedAccount(db: DbOrTx, userId: string): Promise<void> {
   await db.update(users).set({ deactivatedAt: null, deleteAfter: null }).where(eq(users.id, userId));
 }
 
 /** The single newest restore-code row for `userId`/`RESTORE_PURPOSE`, regardless of consumed/expired state — used for cooldown/hourly-cap bookkeeping. */
 async function latestRestoreCode(
-  db: Db,
+  db: DbOrTx,
   userId: string,
 ): Promise<{ createdAt: Date; consumedAt: Date | null } | undefined> {
   const [row] = await db
@@ -179,7 +188,7 @@ function isWithinResendCooldown(latest: { createdAt: Date; consumedAt: Date | nu
 }
 
 /** Count of `userId`/`RESTORE_PURPOSE` codes created in the last rolling hour — the RESTORE_CODE_MAX_PER_HOUR cap. */
-async function restoreCodeCountLastHour(db: Db, userId: string): Promise<number> {
+async function restoreCodeCountLastHour(db: DbOrTx, userId: string): Promise<number> {
   const since = new Date(Date.now() - 60 * 60 * 1000);
   const [row] = await db
     .select({ count: count() })
@@ -195,46 +204,93 @@ async function restoreCodeCountLastHour(db: Db, userId: string): Promise<number>
 }
 
 /**
- * Generate, store (hashed — NEVER plaintext), and email a fresh restore
- * code. Callers are responsible for cooldown/hourly-cap checks BEFORE
- * calling this — it always creates+sends unconditionally.
+ * True when a currently-valid (unconsumed AND unexpired) restore code exists
+ * for `userId` — the SAME lookup `verifyRestore` uses to find a submittable
+ * code. Used by `login`'s hourly-cap edge (see `issueRestoreCode`'s "capped"
+ * result below) to decide between issuing the `RESTORE_VERIFICATION_REQUIRED`
+ * challenge (a code the caller can still submit exists) and TOO_MANY_REQUESTS
+ * (no usable code exists — a challenge would be a dead end).
  */
-async function createAndSendRestoreCode(
+async function hasValidUnexpiredCode(db: DbOrTx, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: restoreCodes.id })
+    .from(restoreCodes)
+    .where(
+      and(
+        eq(restoreCodes.userId, userId),
+        eq(restoreCodes.purpose, RESTORE_PURPOSE),
+        isNull(restoreCodes.consumedAt),
+        gt(restoreCodes.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
+
+/** Outcome of `issueRestoreCode` — what the caller should do next. */
+type RestoreCodeIssueResult =
+  | { status: "sent"; code: string }
+  | { status: "cooldown" }
+  | { status: "capped" };
+
+/**
+ * Atomically decide whether to create a fresh restore code for `userId`,
+ * enforcing the resend cooldown and hourly cap — WITHOUT sending the email
+ * (callers send it themselves, using the returned plaintext `code`, AFTER
+ * this transaction has committed — a slow network call to SendGrid must
+ * never hold the lock below open).
+ *
+ * CRITICAL (F-054 review fix — rate-limit TOCTOU): the cooldown read, the
+ * hourly-count read, and the insert used to run as three separate
+ * statements with no lock between them — N parallel requests for the same
+ * user could all observe "under cap" before any of them inserted, bypassing
+ * both the cooldown and the hourly cap. This now runs the reads + the insert
+ * inside ONE transaction that FIRST takes
+ * `pg_advisory_xact_lock(hashtext(userId))` — a transaction-scoped advisory
+ * lock (auto-released on commit/rollback; no manual unlock needed) that
+ * serializes every concurrent caller for the SAME user (a different user's
+ * call is unaffected; a `hashtext` collision between two different users'
+ * ids would only cost them a harmless, vanishingly rare false wait, never a
+ * correctness problem). `login`'s auto-send path and `requestRestoreCode`
+ * BOTH go through this one function so neither can race the other, or
+ * itself.
+ */
+async function issueRestoreCode(
   db: Db,
   auth: AuthHelpers,
-  email: EmailClient,
   userId: string,
-  toEmail: string,
-): Promise<void> {
-  const code = auth.generateRestoreCode();
-  const codeHash = await auth.hashPassword(code);
-  const expiresAt = new Date(Date.now() + RESTORE_CODE_TTL_MINUTES * 60_000);
+): Promise<RestoreCodeIssueResult> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
 
-  await db.insert(restoreCodes).values({ userId, purpose: RESTORE_PURPOSE, codeHash, expiresAt });
+    const latest = await latestRestoreCode(tx, userId);
+    if (isWithinResendCooldown(latest)) return { status: "cooldown" };
 
-  await email.sendEmail({
-    to: toEmail,
-    subject: "Your Tilth restore code",
-    text: `Your Tilth restore code is ${code}. It expires in 10 minutes. If you didn't try to restore your account, you can ignore this.`,
+    const countLastHour = await restoreCodeCountLastHour(tx, userId);
+    if (countLastHour >= RESTORE_CODE_MAX_PER_HOUR) return { status: "capped" };
+
+    const code = auth.generateRestoreCode();
+    const codeHash = await auth.hashPassword(code);
+    const expiresAt = new Date(Date.now() + RESTORE_CODE_TTL_MINUTES * 60_000);
+
+    await tx.insert(restoreCodes).values({ userId, purpose: RESTORE_PURPOSE, codeHash, expiresAt });
+
+    return { status: "sent", code };
   });
 }
 
 /**
- * Mask an email for client display: keeps the first char of the local part
- * and the first char of the domain, replaces the rest with `*`s (e.g.
- * "jane@example.com" -> "j***@e***.com"). Mirrors
- * `scripts/purge-deleted-accounts.ts`'s `maskEmail` exactly (reimplemented
- * here rather than imported — routers never import from `scripts/`).
+ * Email a restore code to `toEmail`. Deliberately separate from
+ * `issueRestoreCode` (see its doc comment) — this is the ONE place the TTL
+ * is interpolated into the email body, from the shared
+ * `RESTORE_CODE_TTL_MINUTES` constant rather than a hardcoded string.
  */
-function maskEmail(email: string): string {
-  const at = email.indexOf("@");
-  if (at <= 0) return "***";
-  const local = email.slice(0, at);
-  const domain = email.slice(at + 1);
-  const dot = domain.lastIndexOf(".");
-  const domainHead = dot > 0 ? domain.slice(0, dot) : domain;
-  const domainTail = dot > 0 ? domain.slice(dot) : "";
-  return `${local[0]}***@${domainHead[0] ?? "*"}***${domainTail}`;
+async function sendRestoreCodeEmail(email: EmailClient, toEmail: string, code: string): Promise<void> {
+  await email.sendEmail({
+    to: toEmail,
+    subject: "Your Tilth restore code",
+    text: `Your Tilth restore code is ${code}. It expires in ${RESTORE_CODE_TTL_MINUTES} minutes. If you didn't try to restore your account, you can ignore this.`,
+  });
 }
 
 export const authRouter = router({
@@ -336,13 +392,25 @@ export const authRouter = router({
    *     challenge. This is the "feature dark" state; today's behavior is
    *     preserved byte-for-byte.
    *   - `ctx.email !== null`: silent restore is replaced by an emailed
-   *     6-digit code. This branch creates+sends a code (skipping creation,
-   *     but still issuing the challenge, if a fresh unconsumed code already
-   *     exists within the resend cooldown — see `isWithinResendCooldown`)
-   *     and throws FORBIDDEN with message === `RESTORE_VERIFICATION_REQUIRED`
-   *     (the exact marker mobile matches on — see the shared constant's doc
-   *     comment). The account is NOT restored here; that only happens once
-   *     `verifyRestore` confirms the emailed code.
+   *     6-digit code, issued atomically via `issueRestoreCode` (see its doc
+   *     comment for the rate-limit-TOCTOU fix). Three outcomes:
+   *       - "sent": a fresh code was created — email it, then throw FORBIDDEN
+   *         `RESTORE_VERIFICATION_REQUIRED`.
+   *       - "cooldown": a fresh unconsumed code already exists (younger than
+   *         the resend cooldown, so necessarily still unexpired — the
+   *         cooldown is 60s, well under the 10-minute TTL) — do NOT send
+   *         again, but still throw the same challenge; the caller has a
+   *         usable code.
+   *       - "capped": the hourly cap is reached. If a currently-valid
+   *         (unconsumed, unexpired) code STILL exists from an earlier send
+   *         this hour, throw the same challenge (no send) — the caller has
+   *         something to submit. Otherwise every code from this hour has
+   *         expired, so a challenge would be a dead end: throw
+   *         TOO_MANY_REQUESTS instead (post-review fix — this used to always
+   *         throw the challenge here, sending the user to a code screen with
+   *         no valid code in existence).
+   *     The account is NOT restored in any of these branches; that only
+   *     happens once `verifyRestore` confirms the emailed code.
    */
   login: publicProcedure
     .input(loginInput)
@@ -359,14 +427,26 @@ export const authRouter = router({
         if (!isDeactivatedInGrace(found)) throw invalidCredentialsError();
 
         if (ctx.email) {
-          const latest = await latestRestoreCode(ctx.db, found.id);
-          if (!isWithinResendCooldown(latest)) {
-            const countLastHour = await restoreCodeCountLastHour(ctx.db, found.id);
-            if (countLastHour < RESTORE_CODE_MAX_PER_HOUR) {
-              await createAndSendRestoreCode(ctx.db, ctx.auth, ctx.email, found.id, found.email);
-            }
+          const result = await issueRestoreCode(ctx.db, ctx.auth, found.id);
+
+          if (result.status === "sent") {
+            await sendRestoreCodeEmail(ctx.email, found.email, result.code);
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
           }
-          throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+
+          if (result.status === "cooldown") {
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+          }
+
+          // result.status === "capped" — only challenge if there's actually
+          // a valid code left to submit; otherwise this is a dead end.
+          if (await hasValidUnexpiredCode(ctx.db, found.id)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+          }
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Too many restore attempts. Try again later.",
+          });
         }
 
         // Feature dark (no SendGrid configured) — pre-F-054 silent self-restore,
@@ -420,23 +500,24 @@ export const authRouter = router({
       // distinguishable from a wrong password.
       if (!ctx.email || !isDeactivatedInGrace(found)) throw invalidCredentialsError();
 
-      const latest = await latestRestoreCode(ctx.db, found.id);
-      if (isWithinResendCooldown(latest)) {
+      // Same atomic issue path `login`'s auto-send uses — see
+      // `issueRestoreCode`'s doc comment for the rate-limit-TOCTOU fix.
+      const result = await issueRestoreCode(ctx.db, ctx.auth, found.id);
+
+      if (result.status === "cooldown") {
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
           message: "Please wait before requesting another code.",
         });
       }
-
-      const countLastHour = await restoreCodeCountLastHour(ctx.db, found.id);
-      if (countLastHour >= RESTORE_CODE_MAX_PER_HOUR) {
+      if (result.status === "capped") {
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
           message: "Too many restore code requests. Try again later.",
         });
       }
 
-      await createAndSendRestoreCode(ctx.db, ctx.auth, ctx.email, found.id, found.email);
+      await sendRestoreCodeEmail(ctx.email, found.email, result.code);
 
       return { sent: true, maskedEmail: maskEmail(found.email) };
     }),
@@ -511,10 +592,10 @@ export const authRouter = router({
           .set({ consumedAt: new Date() })
           .where(eq(restoreCodes.id, codeRow.id));
 
-        await tx
-          .update(users)
-          .set({ deactivatedAt: null, deleteAfter: null })
-          .where(eq(users.id, found.id));
+        // The SAME `restoreDeactivatedAccount` write `login`'s legacy silent
+        // path uses (post-review fix — this used to be inlined here, drifting
+        // from the doc comment above claiming it used the helper).
+        await restoreDeactivatedAccount(tx, found.id);
 
         // Delete every OTHER outstanding (unconsumed) code for this user —
         // the just-consumed row above no longer matches `isNull(consumedAt)`

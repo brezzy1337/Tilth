@@ -26,7 +26,6 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -56,9 +55,7 @@ export function RestoreVerifyScreen({ route }: Props) {
   // A code was already emailed by the login attempt that threw the
   // RESTORE_VERIFICATION_REQUIRED challenge — start the countdown as if a
   // send just happened rather than calling requestRestoreCode on mount.
-  const [secondsRemaining, setSecondsRemaining] = useState(
-    RESTORE_CODE_RESEND_COOLDOWN_SECONDS,
-  );
+  const [secondsRemaining, setSecondsRemaining] = useState(RESTORE_CODE_RESEND_COOLDOWN_SECONDS);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -122,8 +119,7 @@ export function RestoreVerifyScreen({ route }: Props) {
     resendMutation.mutate({ usernameOrEmail, password });
   }
 
-  const resendLabel =
-    secondsRemaining > 0 ? `Resend code in ${secondsRemaining}s` : "Resend code";
+  const resendLabel = secondsRemaining > 0 ? `Resend code in ${secondsRemaining}s` : "Resend code";
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -134,15 +130,16 @@ export function RestoreVerifyScreen({ route }: Props) {
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>{"\u{1F331}"} Welcome back!</Text>
           <Text style={styles.subtitle}>
-            This account was scheduled for deletion. To restore it, enter the 6-digit code we
-            emailed you.
+            {`This account was scheduled for deletion. To restore it, enter the ${RESTORE_CODE_LENGTH}-digit code we emailed you.`}
           </Text>
 
           <Card style={styles.formCard}>
             <FormField
               label="Verification code"
               value={code}
-              onChangeText={(text) => setCode(text.replace(/[^0-9]/g, "").slice(0, RESTORE_CODE_LENGTH))}
+              onChangeText={(text) =>
+                setCode(text.replace(/[^0-9]/g, "").slice(0, RESTORE_CODE_LENGTH))
+              }
               error={codeError}
               keyboardType="number-pad"
               maxLength={RESTORE_CODE_LENGTH}
@@ -162,20 +159,14 @@ export function RestoreVerifyScreen({ route }: Props) {
             />
           </Card>
 
-          <Pressable
-            style={styles.linkRow}
-            onPress={handleResend}
+          <Button
+            title={resendLabel}
+            variant="ghost"
+            fullWidth={false}
             disabled={secondsRemaining > 0 || resendMutation.isPending}
-          >
-            <Text
-              style={[
-                styles.link,
-                secondsRemaining > 0 || resendMutation.isPending ? styles.linkDisabled : null,
-              ]}
-            >
-              {resendMutation.isPending ? "Sending…" : resendLabel}
-            </Text>
-          </Pressable>
+            loading={resendMutation.isPending}
+            onPress={handleResend}
+          />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -214,7 +205,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     letterSpacing: 8,
     fontSize: type.title.fontSize,
-    fontWeight: "700",
+    fontWeight: type.title.fontWeight,
   },
   resendNotice: {
     marginBottom: spacing.md,
@@ -227,17 +218,5 @@ const styles = StyleSheet.create({
     fontSize: type.caption.fontSize,
     color: colors.danger,
     textAlign: "center",
-  },
-  linkRow: {
-    marginTop: spacing.lg,
-    alignItems: "center",
-  },
-  link: {
-    fontSize: type.body.fontSize,
-    color: colors.primary,
-    fontWeight: "600",
-  },
-  linkDisabled: {
-    color: colors.textMuted,
   },
 });

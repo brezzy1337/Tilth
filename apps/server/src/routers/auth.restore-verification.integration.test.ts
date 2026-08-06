@@ -43,6 +43,7 @@ import { eq } from "drizzle-orm";
 import {
   RESTORE_CODE_MAX_ATTEMPTS,
   RESTORE_CODE_MAX_PER_HOUR,
+  RESTORE_CODE_TTL_MINUTES,
   RESTORE_VERIFICATION_REQUIRED,
 } from "@homegrown/shared";
 import { migrateForTest } from "../db/migrate-for-test";
@@ -295,6 +296,111 @@ describeWithDb("F-054 restore verification — Postgres integration", () => {
       await restore(userId);
       await db.delete(schema.restoreCodes).where(eq(schema.restoreCodes.userId, userId));
     });
+
+    // -------------------------------------------------------------------
+    // Fix #3 — login's hourly-cap edge: challenge-without-send only when a
+    // currently-valid code actually exists to submit; otherwise
+    // TOO_MANY_REQUESTS (a challenge would be a dead end).
+    // -------------------------------------------------------------------
+
+    it("cap reached AND every existing code has expired: throws TOO_MANY_REQUESTS (not the challenge), sends nothing, and does not restore the account", async () => {
+      const userId = await seedUser(
+        "restore-cap-expired@test.invalid",
+        "restorecapexpired",
+        "RestoreCap123!",
+      );
+      await deactivateInGrace(userId);
+
+      // RESTORE_CODE_MAX_PER_HOUR codes, all created well past the resend
+      // cooldown (so the cooldown check doesn't short-circuit first) AND
+      // already expired (createdAt + TTL is in the past) — cap is reached,
+      // but nothing is left to submit.
+      const createdAt = new Date(Date.now() - 15 * 60 * 1000);
+      const expiresAt = new Date(createdAt.getTime() + RESTORE_CODE_TTL_MINUTES * 60_000);
+      for (let i = 0; i < RESTORE_CODE_MAX_PER_HOUR; i++) {
+        await db.insert(schema.restoreCodes).values({
+          userId,
+          purpose: "account_restore",
+          codeHash: await authHelpers.hashPassword("000000"),
+          createdAt,
+          expiresAt,
+        });
+      }
+
+      const { client: emailClient, sent } = makeCapturingEmail();
+      const anon = createCaller(ctxFor(null, emailClient));
+
+      const err = await anon.auth
+        .login({ usernameOrEmail: "restorecapexpired", password: "RestoreCap123!" })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+        message: "Too many restore attempts. Try again later.",
+      });
+
+      // No email sent, no new code row, and the account is still deactivated.
+      expect(sent).toHaveLength(0);
+      const codes = await db
+        .select()
+        .from(schema.restoreCodes)
+        .where(eq(schema.restoreCodes.userId, userId));
+      expect(codes).toHaveLength(RESTORE_CODE_MAX_PER_HOUR);
+
+      const [userRow] = await db
+        .select({ deactivatedAt: schema.users.deactivatedAt })
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      expect(userRow?.deactivatedAt).not.toBeNull();
+
+      await restore(userId);
+      await db.delete(schema.restoreCodes).where(eq(schema.restoreCodes.userId, userId));
+    });
+
+    it("cap reached but a currently-valid code still exists: throws the SAME challenge (no send)", async () => {
+      const userId = await seedUser(
+        "restore-cap-valid@test.invalid",
+        "restorecapvalid",
+        "RestoreCap123!",
+      );
+      await deactivateInGrace(userId);
+
+      // RESTORE_CODE_MAX_PER_HOUR codes, created past the resend cooldown but
+      // still UNEXPIRED (createdAt + TTL is still in the future) — cap is
+      // reached, and every one of them is still submittable.
+      const createdAt = new Date(Date.now() - 5 * 60 * 1000);
+      const expiresAt = new Date(createdAt.getTime() + RESTORE_CODE_TTL_MINUTES * 60_000);
+      for (let i = 0; i < RESTORE_CODE_MAX_PER_HOUR; i++) {
+        await db.insert(schema.restoreCodes).values({
+          userId,
+          purpose: "account_restore",
+          codeHash: await authHelpers.hashPassword("000000"),
+          createdAt,
+          expiresAt,
+        });
+      }
+
+      const { client: emailClient, sent } = makeCapturingEmail();
+      const anon = createCaller(ctxFor(null, emailClient));
+
+      const err = await anon.auth
+        .login({ usernameOrEmail: "restorecapvalid", password: "RestoreCap123!" })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: "FORBIDDEN", message: RESTORE_VERIFICATION_REQUIRED });
+
+      // No email sent (nothing new issued) and no new code row — the cap
+      // still blocked issuance; the challenge is only "there IS a code you
+      // can submit", not "here's a new one".
+      expect(sent).toHaveLength(0);
+      const codes = await db
+        .select()
+        .from(schema.restoreCodes)
+        .where(eq(schema.restoreCodes.userId, userId));
+      expect(codes).toHaveLength(RESTORE_CODE_MAX_PER_HOUR);
+
+      await restore(userId);
+      await db.delete(schema.restoreCodes).where(eq(schema.restoreCodes.userId, userId));
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -456,6 +562,56 @@ describeWithDb("F-054 restore verification — Postgres integration", () => {
           password: "RestoreHourly123!",
         }),
       ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
+
+      await restore(userId);
+      await db.delete(schema.restoreCodes).where(eq(schema.restoreCodes.userId, userId));
+    });
+
+    // -------------------------------------------------------------------
+    // Fix #2 — rate-limit TOCTOU: the cooldown/count check and the insert
+    // now run atomically (per-user `pg_advisory_xact_lock`). This asserts
+    // the deterministic half of that fix: once the hourly cap is already
+    // met, the guarded issue path refuses WITHOUT ever inserting a new row
+    // — i.e. the refusal and the non-insert are the same atomic outcome,
+    // not a separate check that a race could slip past.
+    // -------------------------------------------------------------------
+    it("refuses cleanly at the hourly cap without inserting a new code row (guarded issue path)", async () => {
+      const userId = await seedUser(
+        "restore-guarded-cap@test.invalid",
+        "restoreguardedcap",
+        "RestoreGuarded123!",
+      );
+      await deactivateInGrace(userId);
+
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      for (let i = 0; i < RESTORE_CODE_MAX_PER_HOUR; i++) {
+        await db.insert(schema.restoreCodes).values({
+          userId,
+          purpose: "account_restore",
+          codeHash: await authHelpers.hashPassword("000000"),
+          createdAt: tenMinutesAgo,
+          expiresAt: new Date(tenMinutesAgo.getTime() + RESTORE_CODE_TTL_MINUTES * 60_000),
+        });
+      }
+
+      const { client: emailClient, sent } = makeCapturingEmail();
+      const caller = createCaller(ctxFor(null, emailClient));
+
+      await expect(
+        caller.auth.requestRestoreCode({
+          usernameOrEmail: "restoreguardedcap",
+          password: "RestoreGuarded123!",
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TOO_MANY_REQUESTS" }));
+
+      // The refusal happened INSIDE the guarded transaction before any
+      // insert — row count is unchanged, and nothing was ever emailed.
+      expect(sent).toHaveLength(0);
+      const codes = await db
+        .select()
+        .from(schema.restoreCodes)
+        .where(eq(schema.restoreCodes.userId, userId));
+      expect(codes).toHaveLength(RESTORE_CODE_MAX_PER_HOUR);
 
       await restore(userId);
       await db.delete(schema.restoreCodes).where(eq(schema.restoreCodes.userId, userId));
