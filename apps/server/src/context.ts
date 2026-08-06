@@ -30,6 +30,8 @@ export interface AuthHelpers {
   verifyPassword(plain: string, stored: string): Promise<boolean>;
   signToken(userId: string, secret: string): Promise<string>;
   verifyToken(token: string, secret: string): Promise<string | null>;
+  /** F-054 — generate a cryptographically random restore code. See `auth.ts`'s doc comment. */
+  generateRestoreCode(): string;
 }
 
 /**
@@ -180,6 +182,25 @@ export interface MuxClient {
 }
 
 /**
+ * DI interface for sending transactional email (F-054 account-restore codes).
+ *
+ * Backed by SendGrid's v3 REST API via plain `fetch` in production (see
+ * `email.ts`), but routers only depend on this small interface — never the
+ * SendGrid HTTP details directly — so the router import tree stays
+ * fetch-detail-free and mobile-typecheck-safe (mirrors `StripeClient` /
+ * `MediaClient` / `MuxClient` above).
+ *
+ * `null` in `ContextDeps.email` / `Context.email` means `SENDGRID_API_KEY` is
+ * unset: `auth.login`'s self-restore path stays on its pre-F-054 SILENT
+ * restore behavior (no code challenge), and `auth.requestRestoreCode` /
+ * `auth.verifyRestore` are unreachable in a meaningful way (see auth.ts).
+ * This is the same graceful-degradation shape as `MediaClient`/`MuxClient`.
+ */
+export interface EmailClient {
+  sendEmail(input: { to: string; subject: string; text: string }): Promise<void>;
+}
+
+/**
  * DI interface for sending Expo push notifications (F-037/F-038).
  *
  * Backed by `expo-server-sdk` in production (see `push.ts`), but routers only
@@ -217,6 +238,8 @@ export interface ContextDeps {
   mux: MuxClient | null;
   /** Never null — see PushClient doc comment. */
   push: PushClient;
+  /** Null when SENDGRID_API_KEY is unset — see EmailClient doc comment. */
+  email: EmailClient | null;
 }
 
 export async function createContext({ req }: CreateHTTPContextOptions, deps: ContextDeps) {
@@ -240,6 +263,7 @@ export async function createContext({ req }: CreateHTTPContextOptions, deps: Con
     media: deps.media,
     mux: deps.mux,
     push: deps.push,
+    email: deps.email,
     user,
   };
 }

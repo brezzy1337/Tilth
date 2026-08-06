@@ -48,18 +48,36 @@ describeWithDb("garden.feed — PostGIS integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
@@ -73,6 +91,7 @@ describeWithDb("garden.feed — PostGIS integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: userId ? { id: userId } : null,
     };
@@ -86,7 +105,11 @@ describeWithDb("garden.feed — PostGIS integration", () => {
   const T4 = new Date("2026-01-01T00:04:00.000Z");
 
   let storeAId: string, storeBId: string, storeCId: string;
-  let postNearOld: string, postNearVideo: string, postNearProcessing: string, postNearErrored: string, postNearNew: string;
+  let postNearOld: string,
+    postNearVideo: string,
+    postNearProcessing: string,
+    postNearErrored: string,
+    postNearNew: string;
   let postMid: string, postFar: string;
 
   beforeAll(async () => {
@@ -261,7 +284,13 @@ describeWithDb("garden.feed — PostGIS integration", () => {
       .returning({ id: schema.gardenPosts.id });
 
     if (
-      !pNearOld || !pNearVideo || !pNearProcessing || !pNearErrored || !pNearNew || !pMid || !pFar
+      !pNearOld ||
+      !pNearVideo ||
+      !pNearProcessing ||
+      !pNearErrored ||
+      !pNearNew ||
+      !pMid ||
+      !pFar
     ) {
       throw new Error("Failed to seed garden posts");
     }
@@ -511,7 +540,12 @@ describeWithDb("garden.feed — PostGIS integration", () => {
 
     it("likeCount and commentCount reflect only live rows (excluding deleted + deactivated-author comments)", async () => {
       const caller = createCaller(makeCtx());
-      const result = await caller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 });
+      const result = await caller.garden.feed({
+        lat: 37.7749,
+        lng: -122.4194,
+        radiusKm: 10,
+        limit: 50,
+      });
 
       const row = result.items.find((i) => i.id === postNearNew);
       expect(row).toBeDefined();
@@ -538,7 +572,12 @@ describeWithDb("garden.feed — PostGIS integration", () => {
 
     it("a post with no likes/comments reports likeCount=0, likedByMe=false, commentCount=0", async () => {
       const caller = createCaller(makeCtx());
-      const result = await caller.garden.feed({ lat: 37.7749, lng: -122.4194, radiusKm: 10, limit: 50 });
+      const result = await caller.garden.feed({
+        lat: 37.7749,
+        lng: -122.4194,
+        radiusKm: 10,
+        limit: 50,
+      });
 
       const row = result.items.find((i) => i.id === postNearOld);
       expect(row).toBeDefined();

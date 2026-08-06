@@ -70,23 +70,46 @@ describeWithDb("sourcing router — Postgres integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   const stubStripe: Context["stripe"] = {
-    createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-    createAccountLink: async () => { throw new Error("stub: not implemented"); },
-    retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-    createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    refundPayment: async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+    createConnectedAccount: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createAccountLink: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrieveAccountStatus: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   const createCaller = createCallerFactory(appRouter);
 
-  const pushCalls: Array<{ tokens: string[]; title: string; body: string; data?: Record<string, unknown> }> = [];
+  const pushCalls: Array<{
+    tokens: string[];
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }> = [];
   const capturingPush: PushClient = {
     async send(input) {
       pushCalls.push(input);
@@ -102,6 +125,7 @@ describeWithDb("sourcing router — Postgres integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: capturingPush,
       user: userId ? { id: userId } : null,
     };
@@ -129,21 +153,38 @@ describeWithDb("sourcing router — Postgres integration", () => {
 
     const [placeUser] = await db
       .insert(schema.users)
-      .values({ email: "sourcing-place@test.invalid", username: "sourcingplace", passwordHash: "x" })
+      .values({
+        email: "sourcing-place@test.invalid",
+        username: "sourcingplace",
+        passwordHash: "x",
+      })
       .returning({ id: schema.users.id });
     const [growerUser] = await db
       .insert(schema.users)
-      .values({ email: "sourcing-grower@test.invalid", username: "sourcinggrower", passwordHash: "x" })
+      .values({
+        email: "sourcing-grower@test.invalid",
+        username: "sourcinggrower",
+        passwordHash: "x",
+      })
       .returning({ id: schema.users.id });
     const [grower2User] = await db
       .insert(schema.users)
-      .values({ email: "sourcing-grower2@test.invalid", username: "sourcinggrower2", passwordHash: "x" })
+      .values({
+        email: "sourcing-grower2@test.invalid",
+        username: "sourcinggrower2",
+        passwordHash: "x",
+      })
       .returning({ id: schema.users.id });
     const [strangerUser] = await db
       .insert(schema.users)
-      .values({ email: "sourcing-stranger@test.invalid", username: "sourcingstranger", passwordHash: "x" })
+      .values({
+        email: "sourcing-stranger@test.invalid",
+        username: "sourcingstranger",
+        passwordHash: "x",
+      })
       .returning({ id: schema.users.id });
-    if (!placeUser || !growerUser || !grower2User || !strangerUser) throw new Error("Failed to seed users");
+    if (!placeUser || !growerUser || !grower2User || !strangerUser)
+      throw new Error("Failed to seed users");
 
     placeUserId = placeUser.id;
     growerUserId = growerUser.id;
@@ -259,7 +300,9 @@ describeWithDb("sourcing router — Postgres integration", () => {
     await db.delete(schema.messages).where(eq(schema.messages.senderUserId, placeUserId));
     for (const id of seededConversationIds) {
       await db.delete(schema.messages).where(eq(schema.messages.conversationId, id));
-      await db.delete(schema.sourcingRequests).where(eq(schema.sourcingRequests.conversationId, id));
+      await db
+        .delete(schema.sourcingRequests)
+        .where(eq(schema.sourcingRequests.conversationId, id));
       await db.delete(schema.conversations).where(eq(schema.conversations.id, id));
     }
     for (const id of seededPlaceIds) {
@@ -331,14 +374,22 @@ describeWithDb("sourcing router — Postgres integration", () => {
   it("createRequest: a non-linked caller gets NOT_FOUND", async () => {
     const caller = createCaller(ctxFor(growerUserId));
     await expect(
-      caller.sourcing.createRequest({ storeId: growerStoreId, produce: "Corn", quantity: "5 bushels" }),
+      caller.sourcing.createRequest({
+        storeId: growerStoreId,
+        produce: "Corn",
+        quantity: "5 bushels",
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
   it("createRequest: targeting the caller's own store gets BAD_REQUEST", async () => {
     const caller = createCaller(ctxFor(placeUserId));
     await expect(
-      caller.sourcing.createRequest({ storeId: selfOwnedStoreId, produce: "Corn", quantity: "5 bushels" }),
+      caller.sourcing.createRequest({
+        storeId: selfOwnedStoreId,
+        produce: "Corn",
+        quantity: "5 bushels",
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
   });
 
@@ -358,7 +409,10 @@ describeWithDb("sourcing router — Postgres integration", () => {
     await db
       .delete(schema.userBlocks)
       .where(
-        and(eq(schema.userBlocks.blockerUserId, growerUserId), eq(schema.userBlocks.blockedUserId, placeUserId)),
+        and(
+          eq(schema.userBlocks.blockerUserId, growerUserId),
+          eq(schema.userBlocks.blockedUserId, placeUserId),
+        ),
       );
   });
 
@@ -396,14 +450,22 @@ describeWithDb("sourcing router — Postgres integration", () => {
   it("createOffer: an unlinked (but approved) place gets NOT_FOUND", async () => {
     const caller = createCaller(ctxFor(growerUserId));
     await expect(
-      caller.sourcing.createOffer({ placeId: unlinkedPlaceId, produce: "Eggs", quantity: "10 dozen" }),
+      caller.sourcing.createOffer({
+        placeId: unlinkedPlaceId,
+        produce: "Eggs",
+        quantity: "10 dozen",
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
   it("createOffer: a pending place gets NOT_FOUND", async () => {
     const caller = createCaller(ctxFor(growerUserId));
     await expect(
-      caller.sourcing.createOffer({ placeId: pendingPlaceId, produce: "Eggs", quantity: "10 dozen" }),
+      caller.sourcing.createOffer({
+        placeId: pendingPlaceId,
+        produce: "Eggs",
+        quantity: "10 dozen",
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
@@ -423,7 +485,10 @@ describeWithDb("sourcing router — Postgres integration", () => {
     await db
       .delete(schema.userBlocks)
       .where(
-        and(eq(schema.userBlocks.blockerUserId, placeUserId), eq(schema.userBlocks.blockedUserId, growerUserId)),
+        and(
+          eq(schema.userBlocks.blockerUserId, placeUserId),
+          eq(schema.userBlocks.blockedUserId, growerUserId),
+        ),
       );
   });
 
@@ -436,7 +501,10 @@ describeWithDb("sourcing router — Postgres integration", () => {
   it("respond: the counterparty (store owner) accepts, flips status, and appends a follow-up message", async () => {
     const growerCaller = createCaller(ctxFor(growerUserId));
 
-    const updated = await growerCaller.sourcing.respond({ requestId: req1Id, response: "accepted" });
+    const updated = await growerCaller.sourcing.respond({
+      requestId: req1Id,
+      response: "accepted",
+    });
     expect(updated.status).toBe("accepted");
     expect(updated.respondedAt).not.toBeNull();
 
@@ -444,7 +512,9 @@ describeWithDb("sourcing router — Postgres integration", () => {
       .select({ body: schema.messages.body, sourcingRequestId: schema.messages.sourcingRequestId })
       .from(schema.messages)
       .where(eq(schema.messages.conversationId, sharedConversationId));
-    const followUp = followUps.find((m) => m.body === "Accepted the fulfillment request: 20 lb of Tomatoes");
+    const followUp = followUps.find(
+      (m) => m.body === "Accepted the fulfillment request: 20 lb of Tomatoes",
+    );
     expect(followUp).toBeDefined();
     expect(followUp?.sourcingRequestId).toBeNull();
   });
@@ -458,17 +528,17 @@ describeWithDb("sourcing router — Postgres integration", () => {
     });
     req2Id = created.request.id;
 
-    await expect(placeCaller.sourcing.respond({ requestId: req2Id, response: "accepted" })).rejects.toThrow(
-      expect.objectContaining({ code: "NOT_FOUND" }),
-    );
+    await expect(
+      placeCaller.sourcing.respond({ requestId: req2Id, response: "accepted" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
   it("respond: responding to a non-pending request gets BAD_REQUEST", async () => {
     const growerCaller = createCaller(ctxFor(growerUserId));
     // req1 was already accepted above.
-    await expect(growerCaller.sourcing.respond({ requestId: req1Id, response: "declined" })).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST" }),
-    );
+    await expect(
+      growerCaller.sourcing.respond({ requestId: req1Id, response: "declined" }),
+    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
   });
 
   // -------------------------------------------------------------------------
@@ -485,7 +555,9 @@ describeWithDb("sourcing router — Postgres integration", () => {
       .select({ body: schema.messages.body })
       .from(schema.messages)
       .where(eq(schema.messages.conversationId, sharedConversationId));
-    expect(followUps.some((m) => m.body === "Withdrew the fulfillment request: 10 lb of Squash")).toBe(true);
+    expect(
+      followUps.some((m) => m.body === "Withdrew the fulfillment request: 10 lb of Squash"),
+    ).toBe(true);
   });
 
   it("withdraw: a non-creator gets NOT_FOUND", async () => {
@@ -538,7 +610,11 @@ describeWithDb("sourcing router — Postgres integration", () => {
   it("growers: distance-ordered, aggregates listingCount + sampleListings, includes zero-listing stores", async () => {
     const placeCaller = createCaller(ctxFor(placeUserId));
 
-    const results = await placeCaller.sourcing.growers({ lat: COOP_LAT, lng: COOP_LNG, radiusKm: 20 });
+    const results = await placeCaller.sourcing.growers({
+      lat: COOP_LAT,
+      lng: COOP_LNG,
+      radiusKm: 20,
+    });
     const ids = results.map((r) => r.storeId);
     expect(ids.indexOf(growerStoreId)).toBeLessThan(ids.indexOf(growerStore2Id));
 
@@ -555,9 +631,9 @@ describeWithDb("sourcing router — Postgres integration", () => {
 
   it("growers: a non-linked caller gets NOT_FOUND", async () => {
     const strangerCaller = createCaller(ctxFor(strangerUserId));
-    await expect(strangerCaller.sourcing.growers({ lat: COOP_LAT, lng: COOP_LNG, radiusKm: 20 })).rejects.toThrow(
-      expect.objectContaining({ code: "NOT_FOUND" }),
-    );
+    await expect(
+      strangerCaller.sourcing.growers({ lat: COOP_LAT, lng: COOP_LNG, radiusKm: 20 }),
+    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
   });
 
   // -------------------------------------------------------------------------
@@ -566,7 +642,10 @@ describeWithDb("sourcing router — Postgres integration", () => {
 
   it("chat.messages: the originating message carries the request DTO; follow-ups carry null", async () => {
     const placeCaller = createCaller(ctxFor(placeUserId));
-    const page = await placeCaller.chat.messages({ conversationId: sharedConversationId, limit: 50 });
+    const page = await placeCaller.chat.messages({
+      conversationId: sharedConversationId,
+      limit: 50,
+    });
 
     const req1Card = page.items.find((m) => m.sourcingRequest?.id === req1Id);
     expect(req1Card).toBeDefined();
@@ -577,7 +656,9 @@ describeWithDb("sourcing router — Postgres integration", () => {
       produce: "Tomatoes",
     });
 
-    const followUp = page.items.find((m) => m.body === "Accepted the fulfillment request: 20 lb of Tomatoes");
+    const followUp = page.items.find(
+      (m) => m.body === "Accepted the fulfillment request: 20 lb of Tomatoes",
+    );
     expect(followUp?.sourcingRequest).toBeNull();
   });
 

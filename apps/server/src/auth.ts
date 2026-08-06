@@ -10,8 +10,9 @@
  *   (N=16384, r=8, p=1 — OWASP minimum recommendation for interactive login).
  */
 
-import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomInt, scrypt, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
+import { RESTORE_CODE_LENGTH } from "@homegrown/shared";
 
 const SALT_BYTES = 32;
 const KEY_LENGTH = 64;
@@ -113,4 +114,22 @@ export async function verifyToken(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Restore codes (F-054) — email-verified account restore
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a cryptographically random `RESTORE_CODE_LENGTH`-digit code (e.g.
+ * "042137"), zero-padded. Uses `crypto.randomInt` (uniformly distributed,
+ * cryptographically secure) rather than `Math.random()`. Lives here (not
+ * `routers/auth.ts`) because it needs `node:crypto` — the router tree stays
+ * node-built-in-free for mobile-typecheck compatibility; routers call this
+ * via `ctx.auth.generateRestoreCode()` (see `AuthHelpers` in `context.ts`).
+ */
+export function generateRestoreCode(): string {
+  const max = 10 ** RESTORE_CODE_LENGTH;
+  const value = randomInt(0, max);
+  return value.toString().padStart(RESTORE_CODE_LENGTH, "0");
 }

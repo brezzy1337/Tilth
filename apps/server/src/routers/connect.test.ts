@@ -27,17 +27,17 @@ const createCaller = createCallerFactory(appRouter);
 // ---------------------------------------------------------------------------
 
 const UUID_STORE = "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22";
-const UUID_USER  = "c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33";
+const UUID_USER = "c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33";
 const STRIPE_ACCOUNT_ID = "acct_test_bucket";
 const TEST_SECRET = "test-jwt-secret-that-is-at-least-32-chars";
 
 const stubAuth: Context["auth"] = {
-  hashPassword:   authHelpers.hashPassword,
+  hashPassword: authHelpers.hashPassword,
   verifyPassword: authHelpers.verifyPassword,
-  signToken:      authHelpers.signToken,
-  verifyToken:    authHelpers.verifyToken,
+  signToken: authHelpers.signToken,
+  verifyToken: authHelpers.verifyToken,
+  generateRestoreCode: authHelpers.generateRestoreCode,
 };
-
 // ---------------------------------------------------------------------------
 // Restore mocks after every test
 // ---------------------------------------------------------------------------
@@ -64,14 +64,14 @@ function makeCtx(capturedKeys: string[]): Context {
   };
 
   const b = {
-    from:  () => b,
+    from: () => b,
     where: () => b,
     limit: () => Promise.resolve([storeRow]),
-    then:  (resolve: (v: unknown[]) => void) => Promise.resolve([storeRow]).then(resolve),
+    then: (resolve: (v: unknown[]) => void) => Promise.resolve([storeRow]).then(resolve),
   };
   const updateBuilder = {
-    set:       () => updateBuilder,
-    where:     () => updateBuilder,
+    set: () => updateBuilder,
+    where: () => updateBuilder,
     returning: () => Promise.resolve([{ id: UUID_STORE }]),
   };
   const db = {
@@ -84,30 +84,43 @@ function makeCtx(capturedKeys: string[]): Context {
       capturedKeys.push(input.idempotencyKey);
       return { id: STRIPE_ACCOUNT_ID };
     }),
-    createAccountLink:     async () => ({ url: "https://connect.stripe.com/setup/test" }),
+    createAccountLink: async () => ({ url: "https://connect.stripe.com/setup/test" }),
     retrieveAccountStatus: async () => ({
       chargesEnabled: false,
       payoutsEnabled: false,
       detailsSubmitted: false,
     }),
-    createPaymentIntent:   async () => { throw new Error("stub: not implemented"); },
-    retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-    cancelPaymentIntent:   async () => { throw new Error("stub: not implemented"); },
-    capturePaymentIntent:  async () => { throw new Error("stub: not implemented"); },
-    refundPayment:         async () => { throw new Error("stub: not implemented"); },
-    createDashboardLink:   async () => { throw new Error("stub: not implemented"); },
+    createPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    retrievePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    cancelPaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    capturePaymentIntent: async () => {
+      throw new Error("stub: not implemented");
+    },
+    refundPayment: async () => {
+      throw new Error("stub: not implemented");
+    },
+    createDashboardLink: async () => {
+      throw new Error("stub: not implemented");
+    },
   };
 
   return {
     db,
     jwtSecret: TEST_SECRET,
-    auth:      stubAuth,
-    geocode:   async () => null,
+    auth: stubAuth,
+    geocode: async () => null,
     stripe,
     media: null,
     mux: null,
+    email: null,
     push: { send: async () => {} },
-    user:      { id: UUID_USER },
+    user: { id: UUID_USER },
   };
 }
 

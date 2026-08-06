@@ -60,8 +60,8 @@ describeWithDb("account settings (F-051) — Postgres integration", () => {
     verifyPassword: authHelpers.verifyPassword,
     signToken: authHelpers.signToken,
     verifyToken: authHelpers.verifyToken,
+    generateRestoreCode: authHelpers.generateRestoreCode,
   };
-
   const stubStripe: Context["stripe"] = {
     createConnectedAccount: async () => {
       throw new Error("stub: not implemented");
@@ -104,6 +104,7 @@ describeWithDb("account settings (F-051) — Postgres integration", () => {
       stripe: stubStripe,
       media: null,
       mux: null,
+      email: null,
       push: capturingPush,
       user: userId ? { id: userId } : null,
     };

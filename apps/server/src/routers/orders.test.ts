@@ -44,8 +44,8 @@ const stubAuth: Context["auth"] = {
   verifyPassword: authHelpers.verifyPassword,
   signToken: authHelpers.signToken,
   verifyToken: authHelpers.verifyToken,
+  generateRestoreCode: authHelpers.generateRestoreCode,
 };
-
 /** A fully functional stub StripeClient that can be overridden per test. */
 function makeStripeStub(overrides: Partial<Context["stripe"]> = {}): Context["stripe"] {
   return {
@@ -128,7 +128,9 @@ function fakeDb(opts: {
         // already loaded by this select() call (the slot was consumed above).
         // When false, use the dedicated joinRows option.
         const joinResult = opts.joinUsesSelectSlot
-          ? (opts.selectSequence ? (opts.selectSequence[slotIdx] ?? []) : (opts.selectRows ?? []))
+          ? opts.selectSequence
+            ? (opts.selectSequence[slotIdx] ?? [])
+            : (opts.selectRows ?? [])
           : (opts.joinRows ?? []);
         const jb = {
           where: () => ({ limit: () => Promise.resolve(joinResult) }),
@@ -169,28 +171,30 @@ function fakeDb(opts: {
     return updateBuilder;
   };
 
-  const transactionFn = opts.transactionFn ?? (async (fn: (tx: unknown) => Promise<unknown>) => {
-    return fn({
-      insert: insertFn,
-      update: () => {
-        const callIdx = updateCallCount++;
-        const returningRows = opts.updateSequence
-          ? (opts.updateSequence[callIdx] ?? [{ id: UUID_ORDER }])
-          : (opts.updateRows ?? [{ id: UUID_ORDER }]);
-        const ub = {
-          set: (s: unknown) => {
-            capturedUpdates.push(s);
-            opts.updateFn?.(s);
-            return ub;
-          },
-          where: () => ub,
-          returning: () => Promise.resolve(returningRows),
-        };
-        return ub;
-      },
-      select: selectFn,
+  const transactionFn =
+    opts.transactionFn ??
+    (async (fn: (tx: unknown) => Promise<unknown>) => {
+      return fn({
+        insert: insertFn,
+        update: () => {
+          const callIdx = updateCallCount++;
+          const returningRows = opts.updateSequence
+            ? (opts.updateSequence[callIdx] ?? [{ id: UUID_ORDER }])
+            : (opts.updateRows ?? [{ id: UUID_ORDER }]);
+          const ub = {
+            set: (s: unknown) => {
+              capturedUpdates.push(s);
+              opts.updateFn?.(s);
+              return ub;
+            },
+            where: () => ub,
+            returning: () => Promise.resolve(returningRows),
+          };
+          return ub;
+        },
+        select: selectFn,
+      });
     });
-  });
 
   return {
     select: selectFn,
@@ -283,7 +287,9 @@ describe("handleStripeEvent — payment_intent.succeeded", () => {
     } as Stripe.Event;
 
     // Should not throw even when 0 rows updated (dedup short-circuit)
-    await expect(handleStripeEvent(event, { db, stripe: stubStripeForWebhook })).resolves.toBeUndefined();
+    await expect(
+      handleStripeEvent(event, { db, stripe: stubStripeForWebhook }),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -311,7 +317,10 @@ describe("handleStripeEvent — account.updated", () => {
       },
     } as Stripe.Event;
 
-    await handleStripeEvent(event, { db, stripe: { ...stubStripeForWebhook, retrieveAccountStatus } });
+    await handleStripeEvent(event, {
+      db,
+      stripe: { ...stubStripeForWebhook, retrieveAccountStatus },
+    });
 
     // retrieveAccountStatus should have been called with the account id
     expect(retrieveAccountStatus).toHaveBeenCalledWith(STRIPE_ACCOUNT_ID);
@@ -347,7 +356,10 @@ describe("handleStripeEvent — account.updated", () => {
       },
     } as Stripe.Event;
 
-    await handleStripeEvent(event, { db, stripe: { ...stubStripeForWebhook, retrieveAccountStatus } });
+    await handleStripeEvent(event, {
+      db,
+      stripe: { ...stubStripeForWebhook, retrieveAccountStatus },
+    });
     expect(captured[0]).toMatchObject({
       chargesEnabled: false,
       payoutsEnabled: false,
@@ -365,7 +377,9 @@ describe("handleStripeEvent — unknown event type", () => {
       data: { object: {} },
     } as unknown as Stripe.Event;
 
-    await expect(handleStripeEvent(event, { db, stripe: stubStripeForWebhook })).resolves.toBeUndefined();
+    await expect(
+      handleStripeEvent(event, { db, stripe: stubStripeForWebhook }),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -431,7 +445,9 @@ describe("orders.create", () => {
               }
               const rows = callCount === 0 ? insertedOrderRows : insertedItemRows;
               callCount++;
-              return Promise.resolve(opts.insertRows ? opts.insertRows[callCount - 1] ?? rows : rows);
+              return Promise.resolve(
+                opts.insertRows ? (opts.insertRows[callCount - 1] ?? rows) : rows,
+              );
             },
           }),
         }),
@@ -489,6 +505,7 @@ describe("orders.create", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
@@ -581,8 +598,8 @@ describe("orders.create", () => {
     });
 
     expect(result.order.tipCents).toBe(0);
-    expect(result.order.totalCents).toBe(400);           // totalCents === subtotalCents
-    expect(result.order.applicationFeeCents).toBe(40);   // fee unchanged
+    expect(result.order.totalCents).toBe(400); // totalCents === subtotalCents
+    expect(result.order.applicationFeeCents).toBe(40); // fee unchanged
   });
 
   it("rejects items from multiple stores with BAD_REQUEST", async () => {
@@ -687,16 +704,17 @@ describe("orders.create", () => {
     const caller = createCaller({ ...ctx, user: null });
 
     await expect(
-      caller.orders.create({ items: [{ listingId: UUID_LISTING_1, quantity: 1 }], fulfillmentMethod: "pickup" }),
+      caller.orders.create({
+        items: [{ listingId: UUID_LISTING_1, quantity: 1 }],
+        fulfillmentMethod: "pickup",
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 
   it("rejects when a listing is not found", async () => {
     // Return fewer listings than requested (missing UUID_LISTING_2)
     const ctx = makeOrderCtx({
-      listingRows: [
-        { id: UUID_LISTING_1, storeId: UUID_STORE, name: "Tomatoes", priceCents: 200 },
-      ],
+      listingRows: [{ id: UUID_LISTING_1, storeId: UUID_STORE, name: "Tomatoes", priceCents: 200 }],
     });
     const caller = createCaller(ctx);
 
@@ -756,7 +774,10 @@ describe("orders.create", () => {
         // deliveryAddress intentionally omitted
       }),
     ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Delivery address is required") }),
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Delivery address is required"),
+      }),
     );
 
     // Critical: Stripe must NOT have been called
@@ -834,6 +855,7 @@ describe("connect.createOnboardingLink", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
@@ -883,9 +905,9 @@ describe("connect.createOnboardingLink", () => {
     const caller = createCaller({ ...ctx, user: null });
 
     // input is now {} — client no longer supplies URLs
-    await expect(
-      caller.connect.createOnboardingLink({}),
-    ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
+    await expect(caller.connect.createOnboardingLink({})).rejects.toThrow(
+      expect.objectContaining({ code: "UNAUTHORIZED" }),
+    );
   });
 
   it("throws NOT_FOUND when the caller has no store", async () => {
@@ -909,15 +931,16 @@ describe("connect.createOnboardingLink", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
     const caller = createCaller(ctx);
 
     // input is now {} — client no longer supplies URLs
-    await expect(
-      caller.connect.createOnboardingLink({}),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.connect.createOnboardingLink({})).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 });
 
@@ -951,6 +974,7 @@ describe("connect.status", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
@@ -986,6 +1010,7 @@ describe("connect.status", () => {
       stripe: makeStripeStub(),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
@@ -1036,6 +1061,7 @@ describe("connect.dashboardLink", () => {
       stripe: makeStripeStub(opts.stripeOverrides ?? {}),
       media: null,
       mux: null,
+      email: null,
       push: { send: async () => {} },
       user: { id: UUID_BUYER },
     };
@@ -1114,27 +1140,29 @@ const UUID_ORDER_PAID = "bb00bc99-9c0b-4ef8-bb6d-6bb9bd380abb";
  * A base order row matching the mapOrder shape.
  * All refund fields start null; tests override specific fields.
  */
-function makeOrderRow(overrides: Partial<{
-  id: string;
-  storeId: string;
-  buyerId: string;
-  status: string;
-  preparationState: "packing" | "ready" | null;
-  subtotalCents: number;
-  applicationFeeCents: number;
-  totalCents: number;
-  tipCents: number;
-  stripePaymentIntentId: string | null;
-  fulfillmentMethod: "pickup" | "delivery";
-  deliveryAddress: string | null;
-  refundRequestedAt: Date | null;
-  refundReason: string | null;
-  refundApprovedAt: Date | null;
-  refundDeclinedAt: Date | null;
-  storeUserId: string;
-  createdAt: Date;
-  updatedAt: Date;
-}> = {}) {
+function makeOrderRow(
+  overrides: Partial<{
+    id: string;
+    storeId: string;
+    buyerId: string;
+    status: string;
+    preparationState: "packing" | "ready" | null;
+    subtotalCents: number;
+    applicationFeeCents: number;
+    totalCents: number;
+    tipCents: number;
+    stripePaymentIntentId: string | null;
+    fulfillmentMethod: "pickup" | "delivery";
+    deliveryAddress: string | null;
+    refundRequestedAt: Date | null;
+    refundReason: string | null;
+    refundApprovedAt: Date | null;
+    refundDeclinedAt: Date | null;
+    storeUserId: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = {},
+) {
   return {
     id: UUID_ORDER_PAID,
     storeId: UUID_STORE,
@@ -1192,6 +1220,7 @@ function makeRefundCtx(opts: {
     stripe: makeStripeStub(opts.stripeOverrides ?? {}),
     media: null,
     mux: null,
+    email: null,
     push: { send: async () => {} },
     user: { id: opts.userId },
   };
@@ -1209,9 +1238,15 @@ describe("orders.requestRefund", () => {
     // updateSequence: claim returns a row (success)
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],         // initial load (plain select, no join for requestRefund)
-        [{ ...orderRow, refundRequestedAt: new Date("2026-06-22T10:00:00Z"), refundReason: "damaged" }], // re-fetch
-        [],                  // order items
+        [orderRow], // initial load (plain select, no join for requestRefund)
+        [
+          {
+            ...orderRow,
+            refundRequestedAt: new Date("2026-06-22T10:00:00Z"),
+            refundReason: "damaged",
+          },
+        ], // re-fetch
+        [], // order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID }], // claim update succeeds
@@ -1273,18 +1308,18 @@ describe("orders.requestRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 
   it("returns NOT_FOUND when order does not exist", async () => {
     const ctx = makeRefundCtx({ selectSequence: [[]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when order is pending_payment", async () => {
@@ -1292,9 +1327,9 @@ describe("orders.requestRefund", () => {
     const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when order is cancelled", async () => {
@@ -1302,9 +1337,9 @@ describe("orders.requestRefund", () => {
     const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when order is already refunded", async () => {
@@ -1312,9 +1347,9 @@ describe("orders.requestRefund", () => {
     const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when order is disputed", async () => {
@@ -1322,9 +1357,9 @@ describe("orders.requestRefund", () => {
     const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("rejects with BAD_REQUEST on a double-request (refundRequestedAt already set)", async () => {
@@ -1335,9 +1370,12 @@ describe("orders.requestRefund", () => {
     const ctx = makeRefundCtx({ selectSequence: [[orderRow]], userId: UUID_BUYER });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("already requested") }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("already requested"),
+      }),
+    );
   });
 
   it("rejects with BAD_REQUEST when guarded UPDATE returns 0 rows (concurrent re-request race)", async () => {
@@ -1351,9 +1389,12 @@ describe("orders.requestRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.requestRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("already requested") }));
+    await expect(caller.orders.requestRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("already requested"),
+      }),
+    );
   });
 
   it("succeeds (re-request) when refundDeclinedAt is set and refundRequestedAt is null, and update clears refundDeclinedAt", async () => {
@@ -1372,9 +1413,9 @@ describe("orders.requestRefund", () => {
     };
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],   // initial load
+        [orderRow], // initial load
         [updatedRow], // re-fetch after update (loadOrderById)
-        [],           // order items
+        [], // order items
       ],
       updateSequence: [[{ id: UUID_ORDER_PAID }]], // claim succeeds
       captureUpdates: updates,
@@ -1405,7 +1446,9 @@ describe("orders.requestRefund", () => {
 
 describe("orders.approveRefund", () => {
   it("claim wins on a FULFILLED (captured) order: calls refundPayment with stable idempotencyKey and sets refundApprovedAt — does NOT change status", async () => {
-    const refundPayment = vi.fn().mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
+    const refundPayment = vi
+      .fn()
+      .mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
     const cancelPaymentIntent = vi.fn();
     const updates: unknown[] = [];
 
@@ -1423,9 +1466,9 @@ describe("orders.approveRefund", () => {
     //   call 0 — claim UPDATE returns a row (claim wins)
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],  // slot 0 — innerJoin load
+        [orderRow], // slot 0 — innerJoin load
         [{ ...orderRow, refundApprovedAt: new Date("2026-06-22T12:00:00Z") }], // re-fetch
-        [],           // order items
+        [], // order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID, status: "fulfilled" }], // claim wins (captured → refund branch)
@@ -1440,7 +1483,11 @@ describe("orders.approveRefund", () => {
 
     // Stripe refundPayment must be called with the stable key (no amountCents = full refund)
     expect(refundPayment).toHaveBeenCalledOnce();
-    const refundCall = refundPayment.mock.calls[0]![0] as { paymentIntentId: string; idempotencyKey: string; amountCents?: number };
+    const refundCall = refundPayment.mock.calls[0]![0] as {
+      paymentIntentId: string;
+      idempotencyKey: string;
+      amountCents?: number;
+    };
     expect(refundCall.paymentIntentId).toBe(STRIPE_PI_ID);
     expect(refundCall.idempotencyKey).toBe(`refund-${UUID_ORDER_PAID}`);
     expect(refundCall.amountCents).toBeUndefined();
@@ -1472,9 +1519,9 @@ describe("orders.approveRefund", () => {
 
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],  // slot 0 — innerJoin load
+        [orderRow], // slot 0 — innerJoin load
         [{ ...orderRow, refundApprovedAt: new Date("2026-06-22T12:00:00Z") }], // re-fetch
-        [],           // order items
+        [], // order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID, status: "paid" }], // claim wins (uncaptured → void branch)
@@ -1523,7 +1570,7 @@ describe("orders.approveRefund", () => {
 
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],          // slot 0 — initial innerJoin load
+        [orderRow], // slot 0 — initial innerJoin load
         [alreadyApprovedRow], // slot 1 — re-read after 0-row claim
       ],
       updateSequence: [
@@ -1534,9 +1581,9 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
 
     // Critical: refundPayment must NOT have been called
     expect(refundPayment).not.toHaveBeenCalled();
@@ -1571,9 +1618,9 @@ describe("orders.approveRefund", () => {
     const caller = createCaller(ctx);
 
     // The Stripe error must propagate
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow("Stripe network timeout");
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      "Stripe network timeout",
+    );
 
     // Two updates must have been issued: the claim and the revert
     expect(updates).toHaveLength(2);
@@ -1613,9 +1660,9 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow("Stripe network timeout");
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      "Stripe network timeout",
+    );
 
     expect(cancelPaymentIntent).toHaveBeenCalledOnce();
     expect(refundPayment).not.toHaveBeenCalled();
@@ -1635,9 +1682,9 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when no refund was requested", async () => {
@@ -1652,9 +1699,12 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("No refund requested") }));
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("No refund requested"),
+      }),
+    );
   });
 
   it("rejects with PRECONDITION_FAILED when stripePaymentIntentId is missing", async () => {
@@ -1670,13 +1720,15 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "PRECONDITION_FAILED" }),
+    );
   });
 
   it("rejects with BAD_REQUEST on double-approve (pre-check) and does NOT call refundPayment a second time", async () => {
-    const refundPayment = vi.fn().mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
+    const refundPayment = vi
+      .fn()
+      .mockResolvedValue({ id: "re_test", status: "succeeded", amountRefunded: 500 });
 
     // Order already has refundApprovedAt set (already approved once).
     // The new flow: pre-check fires BEFORE the claim because refundRequestedAt is set
@@ -1693,19 +1745,26 @@ describe("orders.approveRefund", () => {
     // Claim returns 0 rows (already approved); re-read returns the order with approvedAt set
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],                                                            // initial load
-        [{ refundApprovedAt: new Date("2026-06-21T08:00:00Z"), refundDeclinedAt: null, refundRequestedAt: new Date("2026-06-20T10:00:00Z") }], // re-read
+        [orderRow], // initial load
+        [
+          {
+            refundApprovedAt: new Date("2026-06-21T08:00:00Z"),
+            refundDeclinedAt: null,
+            refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
+          },
+        ], // re-read
       ],
-      updateSequence: [[]],  // claim returns 0 rows
+      updateSequence: [[]], // claim returns 0 rows
       userId: UUID_SELLER,
       stripeOverrides: { refundPayment },
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already approved") }),
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Refund already approved"),
+      }),
     );
 
     // Stripe must NOT have been called
@@ -1729,10 +1788,11 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid or fulfilled") }),
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid or fulfilled"),
+      }),
     );
 
     expect(refundPayment).not.toHaveBeenCalled();
@@ -1755,10 +1815,11 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid or fulfilled") }),
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid or fulfilled"),
+      }),
     );
 
     expect(refundPayment).not.toHaveBeenCalled();
@@ -1781,10 +1842,11 @@ describe("orders.approveRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.approveRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid or fulfilled") }),
+    await expect(caller.orders.approveRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid or fulfilled"),
+      }),
     );
 
     expect(refundPayment).not.toHaveBeenCalled();
@@ -1814,11 +1876,7 @@ describe("orders.declineRefund", () => {
     // updateSequence: claim UPDATE returns a row (success)
     // selectSequence: slot 0 — innerJoin initial load; slot 1 — re-fetch (loadOrderById); slot 2 — items
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [orderRow],
-        [declinedRow],
-        [],
-      ],
+      selectSequence: [[orderRow], [declinedRow], []],
       updateSequence: [[{ id: UUID_ORDER_PAID }]], // claim wins
       captureUpdates: updates,
       userId: UUID_SELLER,
@@ -1857,7 +1915,7 @@ describe("orders.declineRefund", () => {
 
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],           // initial innerJoin load
+        [orderRow], // initial innerJoin load
         [alreadyApprovedRow], // re-read after 0-row claim
       ],
       updateSequence: [[]], // claim returns 0 rows
@@ -1865,9 +1923,9 @@ describe("orders.declineRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST" }));
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST" }),
+    );
   });
 
   it("returns NOT_FOUND when caller is not the store owner", async () => {
@@ -1881,9 +1939,9 @@ describe("orders.declineRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 
   it("rejects with BAD_REQUEST when no refund was requested (pre-check via 0-row claim)", async () => {
@@ -1910,9 +1968,12 @@ describe("orders.declineRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("No refund requested") }));
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("No refund requested"),
+      }),
+    );
   });
 
   it("rejects with BAD_REQUEST when refund is already approved", async () => {
@@ -1927,18 +1988,18 @@ describe("orders.declineRefund", () => {
       refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
     };
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [orderRow],
-        [alreadyApprovedRow],
-      ],
+      selectSequence: [[orderRow], [alreadyApprovedRow]],
       updateSequence: [[]], // claim fails
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already approved") }));
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Refund already approved"),
+      }),
+    );
   });
 
   it("rejects with BAD_REQUEST when refund is already declined", async () => {
@@ -1953,18 +2014,18 @@ describe("orders.declineRefund", () => {
       refundRequestedAt: new Date("2026-06-20T10:00:00Z"),
     };
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [orderRow],
-        [alreadyDeclinedRow],
-      ],
+      selectSequence: [[orderRow], [alreadyDeclinedRow]],
       updateSequence: [[]], // claim fails
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Refund already declined") }));
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Refund already declined"),
+      }),
+    );
   });
 
   it("rejects with BAD_REQUEST when status is 'refunded' (with refundRequestedAt set)", async () => {
@@ -1979,10 +2040,11 @@ describe("orders.declineRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid or fulfilled") }),
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid or fulfilled"),
+      }),
     );
   });
 
@@ -1998,10 +2060,11 @@ describe("orders.declineRefund", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.declineRefund({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid or fulfilled") }),
+    await expect(caller.orders.declineRefund({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid or fulfilled"),
+      }),
     );
   });
 });
@@ -2015,7 +2078,11 @@ describe("orders.markFulfilled", () => {
     const updates: unknown[] = [];
     const capturePaymentIntent = vi.fn().mockResolvedValue({ status: "succeeded" });
     const orderRow = makeOrderRow({ status: "paid", storeUserId: UUID_SELLER });
-    const fulfilledRow = { ...orderRow, status: "fulfilled", updatedAt: new Date("2026-06-22T14:00:00Z") };
+    const fulfilledRow = {
+      ...orderRow,
+      status: "fulfilled",
+      updatedAt: new Date("2026-06-22T14:00:00Z"),
+    };
 
     // selectSequence:
     //   slot 0 — innerJoin load (joinUsesSelectSlot)
@@ -2025,9 +2092,9 @@ describe("orders.markFulfilled", () => {
     //   call 0 — guarded UPDATE returns a row (claim wins)
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],       // slot 0 — innerJoin load
-        [fulfilledRow],   // slot 1 — re-fetch after update
-        [],               // slot 2 — order items
+        [orderRow], // slot 0 — innerJoin load
+        [fulfilledRow], // slot 1 — re-fetch after update
+        [], // slot 2 — order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
@@ -2072,9 +2139,9 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "PRECONDITION_FAILED" }));
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "PRECONDITION_FAILED" }),
+    );
 
     expect(capturePaymentIntent).not.toHaveBeenCalled();
     expect(updates).toHaveLength(0);
@@ -2105,9 +2172,9 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow("Stripe network timeout");
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      "Stripe network timeout",
+    );
 
     expect(capturePaymentIntent).toHaveBeenCalledOnce();
     expect(capturePaymentIntent).toHaveBeenCalledWith(STRIPE_PI_ID);
@@ -2171,9 +2238,9 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
 
     // No update must have been issued
     expect(updates).toHaveLength(0);
@@ -2189,9 +2256,9 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
 
     expect(updates).toHaveLength(0);
   });
@@ -2207,10 +2274,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
 
     expect(updates).toHaveLength(0);
@@ -2227,10 +2295,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
 
     expect(updates).toHaveLength(0);
@@ -2247,10 +2316,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
 
     expect(updates).toHaveLength(0);
@@ -2267,10 +2337,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
 
     expect(updates).toHaveLength(0);
@@ -2287,10 +2358,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
 
     expect(updates).toHaveLength(0);
@@ -2312,10 +2384,11 @@ describe("orders.markFulfilled", () => {
     });
     const caller = createCaller(ctx);
 
-    await expect(
-      caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID }),
-    ).rejects.toThrow(
-      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("Only paid orders") }),
+    await expect(caller.orders.markFulfilled({ orderId: UUID_ORDER_PAID })).rejects.toThrow(
+      expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Only paid orders"),
+      }),
     );
   });
 });
@@ -2339,9 +2412,9 @@ describe("orders.setPreparationState", () => {
     //   call 0 — guarded UPDATE returns a row (claim wins)
     const ctx = makeRefundCtx({
       selectSequence: [
-        [orderRow],   // slot 0 — innerJoin load
+        [orderRow], // slot 0 — innerJoin load
         [packingRow], // slot 1 — re-fetch after update
-        [],           // slot 2 — order items
+        [], // slot 2 — order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
@@ -2385,7 +2458,7 @@ describe("orders.setPreparationState", () => {
       selectSequence: [
         [orderRow], // slot 0 — innerJoin load
         [readyRow], // slot 1 — re-fetch after update
-        [],         // slot 2 — order items
+        [], // slot 2 — order items
       ],
       updateSequence: [
         [{ id: UUID_ORDER_PAID }], // guarded UPDATE wins
@@ -2543,8 +2616,8 @@ describe("orders.listForMyStore", () => {
     // Provide limit+1=21 as default — but 0 rows returned, so no next cursor
     const ctx = makeRefundCtx({
       selectSequence: [
-        [{ id: UUID_STORE }],  // store lookup
-        [],                     // orders for store (empty, 0 < limit+1)
+        [{ id: UUID_STORE }], // store lookup
+        [], // orders for store (empty, 0 < limit+1)
       ],
       userId: UUID_SELLER,
     });
@@ -2569,9 +2642,9 @@ describe("orders.listForMyStore", () => {
     // 2 rows returned (< limit+1=21), so nextCursor should be null
     const ctx = makeRefundCtx({
       selectSequence: [
-        [{ id: UUID_STORE }],         // store lookup
-        [orderRow1, orderRow2],        // store orders (already newest-first from DB)
-        [],                             // order items for both
+        [{ id: UUID_STORE }], // store lookup
+        [orderRow1, orderRow2], // store orders (already newest-first from DB)
+        [], // order items for both
       ],
       userId: UUID_SELLER,
     });
@@ -2612,7 +2685,7 @@ describe("orders.listForMyStore", () => {
       selectSequence: [
         [{ id: UUID_STORE }],
         [orderRow1, orderRow2, orderRow3], // limit+1 rows returned
-        [],                                // items
+        [], // items
       ],
       userId: UUID_SELLER,
     });
@@ -2640,7 +2713,7 @@ describe("orders.listForMyStore", () => {
     const ctx = makeRefundCtx({
       selectSequence: [
         [{ id: UUID_STORE }],
-        [orderRow1],  // only 1 row returned, limit=2 → no next page
+        [orderRow1], // only 1 row returned, limit=2 → no next page
         [],
       ],
       userId: UUID_SELLER,
@@ -2692,68 +2765,56 @@ describe("orders.listForMyStore", () => {
 
   it("malformed cursor (missing '|' separator) throws BAD_REQUEST", async () => {
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [{ id: UUID_STORE }],
-        [],
-      ],
+      selectSequence: [[{ id: UUID_STORE }], []],
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
     // Decodes to "not-a-valid-cursor" — no pipe separator
     const badCursor = btoa("not-a-valid-cursor");
-    await expect(
-      caller.orders.listForMyStore({ cursor: badCursor }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }));
+    await expect(caller.orders.listForMyStore({ cursor: badCursor })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }),
+    );
   });
 
   it("malformed cursor (invalid base64) throws BAD_REQUEST", async () => {
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [{ id: UUID_STORE }],
-        [],
-      ],
+      selectSequence: [[{ id: UUID_STORE }], []],
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
     // Not valid base64
-    await expect(
-      caller.orders.listForMyStore({ cursor: "!!!not-base64!!!" }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }));
+    await expect(caller.orders.listForMyStore({ cursor: "!!!not-base64!!!" })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }),
+    );
   });
 
   it("malformed cursor (non-uuid id) throws BAD_REQUEST", async () => {
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [{ id: UUID_STORE }],
-        [],
-      ],
+      selectSequence: [[{ id: UUID_STORE }], []],
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
     // Valid date but non-uuid id
     const badCursor = btoa("2026-06-22T12:00:00.000Z|not-a-uuid");
-    await expect(
-      caller.orders.listForMyStore({ cursor: badCursor }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }));
+    await expect(caller.orders.listForMyStore({ cursor: badCursor })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }),
+    );
   });
 
   it("malformed cursor (bad date) throws BAD_REQUEST", async () => {
     const ctx = makeRefundCtx({
-      selectSequence: [
-        [{ id: UUID_STORE }],
-        [],
-      ],
+      selectSequence: [[{ id: UUID_STORE }], []],
       userId: UUID_SELLER,
     });
     const caller = createCaller(ctx);
 
     // Invalid date but valid uuid
     const badCursor = btoa("not-a-date|a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
-    await expect(
-      caller.orders.listForMyStore({ cursor: badCursor }),
-    ).rejects.toThrow(expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }));
+    await expect(caller.orders.listForMyStore({ cursor: badCursor })).rejects.toThrow(
+      expect.objectContaining({ code: "BAD_REQUEST", message: expect.stringContaining("cursor") }),
+    );
   });
 });

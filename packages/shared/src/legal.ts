@@ -78,7 +78,7 @@ export const TERMS_OF_SERVICE: LegalDocument = {
     {
       heading: "Deleting your account",
       paragraphs: [
-        "You can delete your account in Settings. Deletion is blocked while you have orders in progress. After you confirm, your account is deactivated immediately — logging back in within the 30-day grace period restores it. Once the grace period ends, your account is permanently anonymized in periodic maintenance runs. Records we're required to keep (like transaction history) are retained in anonymized form.",
+        "You can delete your account in Settings. Deletion is blocked while you have orders in progress. After you confirm, your account is deactivated immediately — it can be restored by logging back in within the 30-day grace period and confirming a verification code we email you. Once the grace period ends, your account is permanently anonymized in periodic maintenance runs. Records we're required to keep (like transaction history) are retained in anonymized form.",
       ],
     },
     {
@@ -138,7 +138,7 @@ export const PRIVACY_POLICY: LegalDocument = {
       bullets: [
         "Notifications: toggle push notifications off in Settings (or in your device's system settings).",
         "Blocking: block or unblock users in Messages and Settings; blocked users can't message you.",
-        "Delete your account: Settings → Delete account. Your account deactivates immediately, disappears from the marketplace, and can be restored by logging back in within the 30-day grace period. After the grace period ends, your account is permanently anonymized in periodic maintenance runs: your email, username, and password hash are scrubbed, and transaction records we must retain are kept in anonymized form.",
+        "Delete your account: Settings → Delete account. Your account deactivates immediately, disappears from the marketplace, and can be restored by logging back in within the 30-day grace period and confirming a verification code we email you. After the grace period ends, your account is permanently anonymized in periodic maintenance runs: your email, username, and password hash are scrubbed, and transaction records we must retain are kept in anonymized form.",
       ],
     },
     {

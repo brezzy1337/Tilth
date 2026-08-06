@@ -593,6 +593,48 @@ export const communityPlaces = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Restore codes — F-054 email-verified account restore. When SendGrid is
+// configured (`ctx.email` non-null), `auth.login` on a deactivated-in-grace
+// account no longer self-restores silently: it emails a 6-digit code and the
+// caller must submit it via `auth.verifyRestore` to complete reactivation
+// (see `apps/server/src/routers/auth.ts`). `purpose` mirrors the shared
+// `otpPurpose` zod enum (currently only "account_restore") as plain text, not
+// pgEnum — same rationale as `communityPlaces.type`/`.status`: validated at
+// the tRPC boundary, and a future purpose (e.g. F-004 password reset) can be
+// added without a migration. `codeHash` is never the plaintext code — hashed
+// with the SAME `hashPassword` auth.ts uses elsewhere, never logged.
+// ---------------------------------------------------------------------------
+
+export const restoreCodes = pgTable(
+  "restore_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    /** 'account_restore' today — mirrors shared `otpPurpose`. */
+    purpose: text("purpose").notNull(),
+    codeHash: text("code_hash").notNull(),
+    /** Incremented atomically on each verify attempt; rejected once it exceeds RESTORE_CODE_MAX_ATTEMPTS. */
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Set once the code is successfully verified; null while still usable. */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (t) => [
+    // Cooldown/hourly-cap lookups (newest-first) and the "load the newest
+    // unconsumed code" query `auth.verifyRestore` runs, all keyed by
+    // (userId, purpose).
+    index("restore_codes_user_id_purpose_created_at_idx").on(
+      t.userId,
+      t.purpose,
+      t.createdAt.desc(),
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Sourcing requests — F-049 structured produce requests/offers between
 // community places (co-ops/markets) and growers (stores). Rides the existing
 // chat: the originating message carries `sourcingRequestId`; accept/decline/

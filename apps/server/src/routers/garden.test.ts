@@ -41,18 +41,36 @@ const stubAuth: Context["auth"] = {
   verifyPassword: authHelpers.verifyPassword,
   signToken: authHelpers.signToken,
   verifyToken: authHelpers.verifyToken,
+  generateRestoreCode: authHelpers.generateRestoreCode,
 };
-
 const stubStripe: Context["stripe"] = {
-  createConnectedAccount: async () => { throw new Error("stub: not implemented"); },
-  createAccountLink: async () => { throw new Error("stub: not implemented"); },
-  retrieveAccountStatus: async () => { throw new Error("stub: not implemented"); },
-  createPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  retrievePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  cancelPaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  capturePaymentIntent: async () => { throw new Error("stub: not implemented"); },
-  refundPayment: async () => { throw new Error("stub: not implemented"); },
-  createDashboardLink: async () => { throw new Error("stub: not implemented"); },
+  createConnectedAccount: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createAccountLink: async () => {
+    throw new Error("stub: not implemented");
+  },
+  retrieveAccountStatus: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createPaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  retrievePaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  cancelPaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  capturePaymentIntent: async () => {
+    throw new Error("stub: not implemented");
+  },
+  refundPayment: async () => {
+    throw new Error("stub: not implemented");
+  },
+  createDashboardLink: async () => {
+    throw new Error("stub: not implemented");
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +126,7 @@ function makeCtx(overrides: Partial<Context> = {}): Context {
     stripe: stubStripe,
     media: null,
     mux: null,
+    email: null,
     push: { send: async () => {} },
     user: { id: UUID_USER },
     ...overrides,
@@ -228,7 +247,10 @@ describe("garden.createPhotoUploadUrls — with GCS configured", () => {
 
     const caller = createCaller(makeCtx({ media }));
 
-    const result = await caller.garden.createPhotoUploadUrls({ count: 3, contentType: "image/png" });
+    const result = await caller.garden.createPhotoUploadUrls({
+      count: 3,
+      contentType: "image/png",
+    });
 
     expect(result).toHaveLength(3);
     expect(createUploadUrl).toHaveBeenCalledTimes(3);
@@ -287,7 +309,9 @@ describe("garden.createPhotoSet — bucket URL validation", () => {
     });
 
     expect(result.id).toBe(UUID_POST);
-    expect(result.photos).toEqual([{ url: "https://storage.googleapis.com/my-bucket/garden/x.jpg" }]);
+    expect(result.photos).toEqual([
+      { url: "https://storage.googleapis.com/my-bucket/garden/x.jpg" },
+    ]);
   });
 
   it("skips the bucket check entirely when ctx.media is null", async () => {
@@ -333,7 +357,10 @@ describe("garden router — protectedProcedure guard", () => {
     const caller = createCaller(makeCtx({ user: null }));
 
     await expect(
-      caller.garden.createPhotoSet({ caption: "x", photos: [{ url: "https://example.com/a.jpg" }] }),
+      caller.garden.createPhotoSet({
+        caption: "x",
+        photos: [{ url: "https://example.com/a.jpg" }],
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "UNAUTHORIZED" }));
   });
 
