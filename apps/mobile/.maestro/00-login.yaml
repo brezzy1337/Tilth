@@ -1,0 +1,39 @@
+# 00-login.yaml — F-055 mobile E2E harness.
+#
+# Launches the app clean (no persisted session), goes Hero → Log In, signs in
+# with the dedicated 🧪 e2e-runner@tilth.market account (creds injected by CI
+# as MAESTRO_TEST_EMAIL / MAESTRO_TEST_PASSWORD), and asserts Home is reached.
+#
+# Runs against PROD (https://api.tilth.market) — EXPO_PUBLIC_API_URL is baked
+# into the release APK at build time, not set here.
+#
+# Home anchor: the header's "Settings" icon (accessibilityLabel="Settings",
+# see HomeScreen.tsx) plus the "Tilth" header title. Both render unconditionally
+# as soon as HomeScreen mounts, before the location/map state resolves — so
+# this assertion does NOT depend on map tiles, the Google Maps API key (may be
+# absent in CI), or GPS/location permissions.
+appId: market.tilth.app
+---
+- launchApp:
+    clearState: true
+
+# Hero → Log In
+- assertVisible: "Log In"
+- tapOn: "Log In"
+
+# Log In form (see LogInScreen.tsx — testID added for the two inputs since
+# the screen also renders a "Log In" submit button with the same label as the
+# Hero CTA; the input testIDs avoid any ambiguity when targeting fields).
+- tapOn:
+    id: "login-username-input"
+- inputText: "${MAESTRO_TEST_EMAIL}"
+- tapOn:
+    id: "login-password-input"
+- inputText: "${MAESTRO_TEST_PASSWORD}"
+- tapOn: "Log In"
+
+# auth.login is a real network call against prod — give it room.
+- extendedWaitUntil:
+    visible: "Tilth"
+    timeout: 20000
+- assertVisible: "Settings"

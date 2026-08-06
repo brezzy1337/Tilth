@@ -1,0 +1,69 @@
+# 03-blocked-users.yaml — F-055 mobile E2E harness.
+#
+# Covers Settings > Privacy > Blocked users (F-051) as far as can be driven
+# reliably in CI. The full checklist item — start a fresh conversation with
+# the 🧪 test stand (apps/server/scripts/test-accounts.ts: store "🧪 Tilth
+# Test Stand", tilth_test_stand), send a message, block from the thread,
+# assert the block shows up here, unblock, assert the list empties — is
+# deliberately NOT automated in v1. See the TODO block below for why, and
+# what would need to be true to turn it on.
+#
+# What IS covered here: Settings > Privacy > Blocked users renders, regardless
+# of whether the list is empty or has entries left over from a previous
+# partial run (asserts the screen's nav header title, which is
+# state-independent — see App.tsx: AuthedStack.Screen name="BlockedUsers"
+# options={{ title: "Blocked Users" }} — rather than the empty-state copy).
+appId: market.tilth.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 20000
+- tapOn: "Settings"
+- tapOn: "Blocked users"
+- extendedWaitUntil:
+    visible: "Blocked Users"
+    timeout: 15000
+- assertVisible: "Blocked Users"
+- back
+- assertVisible: "Settings"
+
+# ---------------------------------------------------------------------------
+# TODO (v1 gap): drive the full block/unblock loop against the 🧪 test stand.
+#
+# Why this isn't wired up yet:
+#   - Reaching the test stand's StoreProfile from the e2e-runner account
+#     requires either the Home map/sheet or Search — BOTH are gated behind
+#     `useDeviceLocation` (src/location/useDeviceLocation.ts), which calls
+#     `Location.getCurrentPositionAsync`. On a CI Android emulator this
+#     resolves to whatever fix the emulator/CI config gives it (commonly the
+#     AVD's default mock location, e.g. Mountain View, ~37.42,-122.09) unless
+#     the workflow explicitly sets one (`adb emu geo fix <lng> <lat>`) —
+#     which apps/mobile/.maestro does not control.
+#   - The test stand's location is whatever `--lat`/`--lng` was passed to
+#     `pnpm test-accounts seed` (apps/server/scripts/test-accounts.ts) —
+#     there's no fixed, known-good coordinate in this repo to assert against,
+#     and Home's nearby radius is 25 km / Search's is 50 km, so an emulator
+#     default location landing outside that radius would silently break the
+#     flow with an empty result list rather than a clear failure.
+#   - There is no stable deep link / storeId to jump straight to
+#     StoreProfile — it has to be discovered via a location-dependent query.
+#
+# Once the mobile-e2e workflow pins the emulator's location to a fixed point
+# known to be within range of the seeded 🧪 test stand (e.g. `adb emu geo fix`
+# in .github/workflows/mobile-e2e.yml, matching the coords used for
+# `pnpm test-accounts seed`), this flow can add:
+#   1. tapOn "Search produce" (HomeScreen SeasonalModule search button)
+#   2. tapOn the search box -> inputText "Tilth Test Stand" (or a produce
+#      name from TEST_LISTINGS, e.g. "Test Tomatoes")
+#   3. tapOn the "🧪 Tilth Test Stand" result -> StoreProfile
+#   4. tapOn "Message" -> Conversation screen
+#   5. tapOn the composer -> inputText "e2e block test" -> tapOn the send
+#      button (accessibilityLabel "Send message")
+#   6. tapOn "Conversation options" (header overflow, accessibilityLabel) ->
+#      tapOn "Block user" -> tapOn "Block" (native Alert confirm)
+#   7. assertVisible "Settings" (blockUser.onSuccess navigates back)
+#   8. tapOn "Settings" -> tapOn "Blocked users" -> assertVisible the test
+#      stand's counterpart username -> tapOn "Unblock" -> assertVisible
+#      "No blocked users"
+# ---------------------------------------------------------------------------

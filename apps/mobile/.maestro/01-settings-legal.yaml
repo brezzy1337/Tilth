@@ -1,0 +1,46 @@
+# 01-settings-legal.yaml — F-055 mobile E2E harness.
+#
+# Covers the F-051/F-052 checklist: Settings renders the signed-in profile row,
+# and both legal docs (native LegalScreen, F-052) open in-app with their real
+# copy from packages/shared/src/legal.ts.
+#
+# Assumes 00-login.yaml already ran in this suite (Maestro runs flows in
+# filename order via `maestro test apps/mobile/.maestro/`) and the session
+# from SecureStore is still valid — no clearState here, just relaunch.
+appId: market.tilth.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 20000
+
+# Gear icon → Settings (HomeScreen.tsx: accessibilityLabel="Settings")
+- tapOn: "Settings"
+
+# Account section — profile email row (SettingsScreen.tsx: SettingsRow
+# label="Email" value={user?.email}). Asserting the actual injected email
+# confirms both that Settings rendered AND that the signed-in user really is
+# the e2e-runner account.
+- assertVisible: "Email"
+- assertVisible: "${MAESTRO_TEST_EMAIL}"
+
+# About → Terms of Service (native LegalScreen; header title set in App.tsx)
+- tapOn: "Terms of Service"
+- assertVisible: "Terms of Service"
+- extendedWaitUntil:
+    visible: "Welcome to Tilth"
+    timeout: 10000
+- assertVisible: "Welcome to Tilth"
+- back
+
+# Back on Settings — About → Privacy Policy
+- assertVisible: "Settings"
+- tapOn: "Privacy Policy"
+- assertVisible: "Privacy Policy"
+- extendedWaitUntil:
+    visible: "What this covers"
+    timeout: 10000
+- assertVisible: "What this covers"
+- back
+
+- assertVisible: "Settings"
