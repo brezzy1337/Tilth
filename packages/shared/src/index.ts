@@ -91,6 +91,89 @@ export const authResponse = z.object({
 export type AuthResponse = z.infer<typeof authResponse>;
 
 // ---------------------------------------------------------------------------
+// Account restore email verification (F-054)
+// Today, logging into a soft-deleted account within its 30-day grace period
+// (see `deleteAccountInput`/`deleteAccountOutput` below) silently reactivates
+// it. This section adds an email-code confirmation step in front of that
+// reactivation: correct password on a deactivated-in-grace account -> server
+// emails a 6-digit code -> user submits it -> account restores and receives
+// the same `authResponse` shape as a normal login.
+//
+// This is env-gated server-side (no SendGrid key configured => legacy silent
+// restore stays in effect), so the schemas below are additive, not a
+// replacement for the existing login/auth contract.
+// ---------------------------------------------------------------------------
+
+/** Digits in a restore code, e.g. "042137". */
+export const RESTORE_CODE_LENGTH = 6;
+/** Minutes a generated restore code remains valid. */
+export const RESTORE_CODE_TTL_MINUTES = 10;
+/** Incorrect-code attempts allowed before a code is invalidated. */
+export const RESTORE_CODE_MAX_ATTEMPTS = 5;
+/** Minimum seconds between two "send me a new code" requests. */
+export const RESTORE_CODE_RESEND_COOLDOWN_SECONDS = 60;
+/** Maximum restore codes a single account may request in a rolling hour. */
+export const RESTORE_CODE_MAX_PER_HOUR = 5;
+
+/**
+ * Machine-readable marker the server places in the `TRPCError` message/cause
+ * when `auth.login` hits a deactivated-in-grace account and email-verified
+ * restore is enabled (i.e. SendGrid is configured). Mobile matches on this
+ * exact string to branch into the restore-code flow instead of showing a
+ * generic login error.
+ */
+export const RESTORE_VERIFICATION_REQUIRED = "RESTORE_VERIFICATION_REQUIRED" as const;
+
+/** A 6-digit restore code, e.g. "042137". Exactly `RESTORE_CODE_LENGTH` digits. */
+export const restoreCodeSchema = z.string().regex(/^\d{6}$/, "Code must be exactly 6 digits");
+
+export type RestoreCode = z.infer<typeof restoreCodeSchema>;
+
+/**
+ * Input to the procedure that triggers sending a restore code. Re-parses the
+ * same credentials as `auth.login` (reusing `loginInput`'s field schemas
+ * rather than redeclaring the rules) because the server must re-verify the
+ * password before emailing a code.
+ */
+export const requestRestoreCodeInput = z.object({
+  usernameOrEmail: loginInput.shape.usernameOrEmail,
+  password: loginInput.shape.password,
+});
+
+export type RequestRestoreCodeInput = z.infer<typeof requestRestoreCodeInput>;
+
+/**
+ * Output of the procedure that triggers sending a restore code. `maskedEmail`
+ * lets the UI say "we sent a code to j***@e***.com" without exposing the
+ * full address.
+ */
+export const requestRestoreCodeOutput = z.object({
+  sent: z.literal(true),
+  maskedEmail: z.string(),
+});
+
+export type RequestRestoreCodeOutput = z.infer<typeof requestRestoreCodeOutput>;
+
+/**
+ * Input to the procedure that submits a restore code and completes
+ * reactivation. On success the server returns an `authResponse` — the same
+ * shape as `auth.login` — so the client's post-login handling is unchanged.
+ */
+export const verifyRestoreInput = requestRestoreCodeInput.extend({
+  code: restoreCodeSchema,
+});
+
+export type VerifyRestoreInput = z.infer<typeof verifyRestoreInput>;
+
+/**
+ * What a one-time code is for. Only `"account_restore"` exists today
+ * (F-054); F-004 password reset is expected to extend this enum later.
+ */
+export const otpPurpose = z.enum(["account_restore"]);
+
+export type OtpPurpose = z.infer<typeof otpPurpose>;
+
+// ---------------------------------------------------------------------------
 // Account settings (F-051) — change password, soft-delete account (30-day
 // grace period), blocked-users management, push-token unregister.
 // `passwordSchema` (above, in Auth) is reused here so password strength rules
