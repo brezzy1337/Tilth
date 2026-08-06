@@ -22,6 +22,15 @@ export type PreAuthStackParamList = {
   Hero: undefined;
   LogIn: undefined;
   SignUp: undefined;
+  /**
+   * Email-code confirmation step for restoring a soft-deleted account
+   * (F-054). Reached only when `auth.login` throws the
+   * `RESTORE_VERIFICATION_REQUIRED` challenge (server has email configured
+   * and the account is deactivated-in-grace) — LogInScreen forwards the
+   * exact credentials the user just typed so this screen can call
+   * `auth.verifyRestore`/`auth.requestRestoreCode` without asking again.
+   */
+  RestoreVerify: { usernameOrEmail: string; password: string };
 };
 
 export type TabParamList = {
