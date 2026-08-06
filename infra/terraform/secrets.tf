@@ -5,7 +5,7 @@
 # NO secret value ever enters Terraform state. Values are injected out-of-band
 # by infra/scripts/inject-secrets.sh using `gcloud secrets versions add`.
 #
-# The seven secrets:
+# The eight secrets:
 #   DATABASE_URL                  — runtime Postgres URL (Unix socket form); runtime SA access
 #   MIGRATE_DATABASE_URL          — CI Postgres URL (TCP form via Auth Proxy); deploy SA access
 #   JWT_SECRET                    — HMAC signing key for JWTs
@@ -13,6 +13,7 @@
 #   STRIPE_SECRET_KEY             — Stripe platform account secret key
 #   STRIPE_WEBHOOK_SECRET         — Stripe webhook signing secret (whsec_…) — platform scope
 #   STRIPE_WEBHOOK_SECRET_CONNECT — Stripe webhook signing secret (whsec_…) — Connected-accounts scope
+#   SENDGRID_API_KEY              — SendGrid Mail Send API key (email verification, F-054)
 #
 # IAM bindings granting access to these secrets are in iam.tf.
 
@@ -25,6 +26,7 @@ locals {
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "STRIPE_WEBHOOK_SECRET_CONNECT", # Connected-accounts scoped webhook signing secret
+    "SENDGRID_API_KEY",              # Mail Send API key — email verification (F-054)
   ]
 }
 

@@ -64,7 +64,7 @@ resource "google_service_account_iam_member" "deploy_acts_as_runtime" {
   member             = "serviceAccount:${google_service_account.deploy.email}"
 }
 
-# ── Runtime SA — per-secret secretAccessor (6 runtime secrets) ──────────────
+# ── Runtime SA — per-secret secretAccessor (7 runtime secrets) ──────────────
 # Each binding is declared individually so that adding or revoking access to a
 # single secret requires no other changes and produces a minimal diff.
 
@@ -76,6 +76,7 @@ locals {
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "STRIPE_WEBHOOK_SECRET_CONNECT", # Connected-accounts scoped webhook signing secret
+    "SENDGRID_API_KEY",              # Mail Send API key — email verification (F-054)
   ]
 }
 

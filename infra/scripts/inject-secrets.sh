@@ -23,6 +23,7 @@
 #        STRIPE_SECRET_KEY
 #        STRIPE_WEBHOOK_SECRET         (may be a placeholder — see note below)
 #        STRIPE_WEBHOOK_SECRET_CONNECT (may be a placeholder — see note below)
+#        SENDGRID_API_KEY              (Mail Send scope only — F-054 email verification)
 #
 #   All secret values flow via --data-file=- (stdin pipe) or process
 #   substitution — never echoed, never written to a file, never passed as a
@@ -324,6 +325,24 @@ else
         log_ok "STRIPE_WEBHOOK_SECRET_CONNECT stored."
     fi
     unset _WEBHOOK_SECRET_CONNECT
+fi
+
+# ── SENDGRID_API_KEY ──────────────────────────────────────────────────────────
+# Required to enable email verification (F-054). Create it in the GCP
+# Marketplace SendGrid subscription with Mail Send access only — no other
+# scopes. SENDGRID_FROM_EMAIL is not a secret (it has an in-code default) and
+# is set as a plain env var on the Cloud Run service, not injected here.
+if secret_has_version "SENDGRID_API_KEY"; then
+    log_ok "SENDGRID_API_KEY already has an enabled version — skipping."
+else
+    printf '\nEnter SENDGRID_API_KEY (SG…, Mail Send scope only, input hidden): '
+    read -rs _SENDGRID_KEY
+    printf '\n'
+    if [[ -z "${_SENDGRID_KEY}" ]]; then
+        die "SENDGRID_API_KEY cannot be empty."
+    fi
+    printf '%s' "${_SENDGRID_KEY}" | add_secret_version_from_fd "SENDGRID_API_KEY"
+    unset _SENDGRID_KEY
 fi
 
 # =============================================================================
