@@ -130,7 +130,7 @@ export const envSchema = z.object({
    */
   EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
   /**
-   * SendGrid API key for sending transactional email (F-054 account-restore
+   * Resend API key for sending transactional email (F-054 account-restore
    * verification codes).
    *
    * OPTIONAL at boot — same graceful-degradation pattern as Mux/GCS: when
@@ -140,13 +140,15 @@ export const envSchema = z.object({
    * the feature is dark until this key is mounted.
    * Locally: set in .env (gitignored). Production: GCP Secret Manager.
    */
-  SENDGRID_API_KEY: z.string().min(1).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
   /**
-   * Verified SendGrid sender address for restore-code emails. Not a
-   * secret — safe to default. Override in .env/Secret Manager once a
-   * verified sender is configured for the pilot domain.
+   * Verified sender address for restore-code emails. Deliberately
+   * provider-generic (NOT RESEND_FROM_EMAIL) so a future provider swap
+   * doesn't rename it again. Not a secret — safe to default. Override in
+   * .env/Secret Manager once a verified sender is configured for the pilot
+   * domain.
    */
-  SENDGRID_FROM_EMAIL: z.string().email().default("no-reply@tilth.market"),
+  EMAIL_FROM: z.string().email().default("no-reply@tilth.market"),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -16,7 +16,7 @@
  *     auth.account-settings.integration.test.ts suite already covers this
  *     path in depth; this file adds one direct check for a self-contained
  *     read).
- *   - `ctx.email` configured (stubbed — NEVER hits sendgrid.com):
+ *   - `ctx.email` configured (stubbed — NEVER hits resend.com):
  *     `auth.login` on a deactivated-in-grace account throws FORBIDDEN with
  *     message === RESTORE_VERIFICATION_REQUIRED and creates a restore_codes
  *     row (never the account itself, which stays deactivated until
@@ -183,7 +183,7 @@ describeWithDb("F-054 restore verification — Postgres integration", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Env-gated fallback — SendGrid not configured
+  // Env-gated fallback — Resend not configured
   // ---------------------------------------------------------------------------
 
   describe("auth.login — email disabled (ctx.email === null)", () => {

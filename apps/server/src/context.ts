@@ -184,13 +184,13 @@ export interface MuxClient {
 /**
  * DI interface for sending transactional email (F-054 account-restore codes).
  *
- * Backed by SendGrid's v3 REST API via plain `fetch` in production (see
+ * Backed by Resend's v3 REST API via plain `fetch` in production (see
  * `email.ts`), but routers only depend on this small interface — never the
- * SendGrid HTTP details directly — so the router import tree stays
+ * Resend HTTP details directly — so the router import tree stays
  * fetch-detail-free and mobile-typecheck-safe (mirrors `StripeClient` /
  * `MediaClient` / `MuxClient` above).
  *
- * `null` in `ContextDeps.email` / `Context.email` means `SENDGRID_API_KEY` is
+ * `null` in `ContextDeps.email` / `Context.email` means `RESEND_API_KEY` is
  * unset: `auth.login`'s self-restore path stays on its pre-F-054 SILENT
  * restore behavior (no code challenge), and `auth.requestRestoreCode` /
  * `auth.verifyRestore` are unreachable in a meaningful way (see auth.ts).
@@ -238,7 +238,7 @@ export interface ContextDeps {
   mux: MuxClient | null;
   /** Never null — see PushClient doc comment. */
   push: PushClient;
-  /** Null when SENDGRID_API_KEY is unset — see EmailClient doc comment. */
+  /** Null when RESEND_API_KEY is unset — see EmailClient doc comment. */
   email: EmailClient | null;
 }
 

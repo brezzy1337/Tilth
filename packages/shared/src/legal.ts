@@ -129,7 +129,7 @@ export const PRIVACY_POLICY: LegalDocument = {
     {
       heading: "Who we share it with",
       paragraphs: [
-        "Service providers that make Tilth work: Stripe (payments and seller onboarding), Google Cloud (hosting, database, and media storage), Expo (push notification delivery), and Mux (video processing). Each receives only what it needs. Map data for community places comes from OpenStreetMap (© OpenStreetMap contributors) and the USDA local food directories. We may disclose information if required by law.",
+        "Service providers that make Tilth work: Stripe (payments and seller onboarding), Google Cloud (hosting, database, and media storage), Expo (push notification delivery), Mux (video processing), and Resend (transactional email delivery, such as account verification codes). Each receives only what it needs. Map data for community places comes from OpenStreetMap (© OpenStreetMap contributors) and the USDA local food directories. We may disclose information if required by law.",
       ],
     },
     {

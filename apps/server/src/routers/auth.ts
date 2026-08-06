@@ -81,9 +81,9 @@ async function requirePasswordMatch(
 // ---------------------------------------------------------------------------
 // F-054 — email-verified account restore
 //
-// Today (no SendGrid configured, `ctx.email === null`): a password-verified
+// Today (no email provider configured, `ctx.email === null`): a password-verified
 // `login` on a deactivated-in-grace account SILENTLY self-restores, exactly
-// as before F-054. Once `SENDGRID_API_KEY` is mounted (`ctx.email` non-null),
+// as before F-054. Once `RESEND_API_KEY` is mounted (`ctx.email` non-null),
 // that silent restore is replaced by an emailed 6-digit code the caller must
 // submit to `verifyRestore` — `login` instead throws a FORBIDDEN
 // `RESTORE_VERIFICATION_REQUIRED` challenge. This is the env-gated rollout
@@ -237,7 +237,7 @@ type RestoreCodeIssueResult =
  * Atomically decide whether to create a fresh restore code for `userId`,
  * enforcing the resend cooldown and hourly cap — WITHOUT sending the email
  * (callers send it themselves, using the returned plaintext `code`, AFTER
- * this transaction has committed — a slow network call to SendGrid must
+ * this transaction has committed — a slow network call to the email provider must
  * never hold the lock below open).
  *
  * CRITICAL (F-054 review fix — rate-limit TOCTOU): the cooldown read, the
@@ -386,8 +386,8 @@ export const authRouter = router({
    * "this account was deleted".
    *
    * F-054 — email-verified restore, ENV-GATED on `ctx.email` (non-null only
-   * once `SENDGRID_API_KEY` is configured):
-   *   - `ctx.email === null` (SendGrid not configured): unchanged from
+   * once `RESEND_API_KEY` is configured):
+   *   - `ctx.email === null` (no email provider configured): unchanged from
    *     F-051 — the account SELF-RESTORES silently right here, no code
    *     challenge. This is the "feature dark" state; today's behavior is
    *     preserved byte-for-byte.
@@ -449,7 +449,7 @@ export const authRouter = router({
           });
         }
 
-        // Feature dark (no SendGrid configured) — pre-F-054 silent self-restore,
+        // Feature dark (no email provider configured) — pre-F-054 silent self-restore,
         // unchanged: clears both fields so every deactivation-gated surface
         // (helpers.ts's activeUserClause/isUserDeactivated) sees this account
         // as active again from this point on.
@@ -496,7 +496,7 @@ export const authRouter = router({
       );
 
       // Same generic error for a live account, a past-grace account, AND a
-      // feature-dark environment (no SendGrid) — none of these may be
+      // feature-dark environment (no email provider) — none of these may be
       // distinguishable from a wrong password.
       if (!ctx.email || !isDeactivatedInGrace(found)) throw invalidCredentialsError();
 

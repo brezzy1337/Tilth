@@ -29,7 +29,7 @@ import { createRequestListener } from "./request-listener";
 import { createGcsMediaClient } from "./gcs";
 import { createMuxClient } from "./mux";
 import { createExpoPushClient } from "./push";
-import { createSendGridEmailClient, emailEnabled } from "./email";
+import { createResendEmailClient, emailEnabled } from "./email";
 
 const stripe = createStripeClient(env.STRIPE_SECRET_KEY, {
   refreshUrl: env.STRIPE_CONNECT_REFRESH_URL,
@@ -50,12 +50,12 @@ const mux =
 // is optional, only raises rate limits), so this client is always constructed.
 const push = createExpoPushClient(env.EXPO_ACCESS_TOKEN);
 
-// F-054 — SendGrid credentials do not exist yet for this pilot. OPTIONAL at
+// F-054 — Resend credentials do not exist yet for this pilot. OPTIONAL at
 // boot, same graceful-degradation pattern as Mux/GCS above: when unset,
 // `email` is null and `auth.login`'s deactivated-in-grace self-restore path
 // keeps its pre-F-054 silent-restore behavior (see auth.ts).
-const email = emailEnabled(env.SENDGRID_API_KEY)
-  ? createSendGridEmailClient(env.SENDGRID_API_KEY, env.SENDGRID_FROM_EMAIL)
+const email = emailEnabled(env.RESEND_API_KEY)
+  ? createResendEmailClient(env.RESEND_API_KEY, env.EMAIL_FROM)
   : null;
 
 const trpcHandler = createHTTPHandler({

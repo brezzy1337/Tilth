@@ -99,7 +99,7 @@ export type AuthResponse = z.infer<typeof authResponse>;
 // emails a 6-digit code -> user submits it -> account restores and receives
 // the same `authResponse` shape as a normal login.
 //
-// This is env-gated server-side (no SendGrid key configured => legacy silent
+// This is env-gated server-side (no Resend key configured => legacy silent
 // restore stays in effect), so the schemas below are additive, not a
 // replacement for the existing login/auth contract.
 // ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ export const RESTORE_CODE_MAX_PER_HOUR = 5;
 /**
  * Machine-readable marker the server places in the `TRPCError` message/cause
  * when `auth.login` hits a deactivated-in-grace account and email-verified
- * restore is enabled (i.e. SendGrid is configured). Mobile matches on this
+ * restore is enabled (i.e. Resend is configured). Mobile matches on this
  * exact string to branch into the restore-code flow instead of showing a
  * generic login error.
  */

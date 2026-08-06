@@ -593,7 +593,7 @@ export const communityPlaces = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Restore codes — F-054 email-verified account restore. When SendGrid is
+// Restore codes — F-054 email-verified account restore. When Resend is
 // configured (`ctx.email` non-null), `auth.login` on a deactivated-in-grace
 // account no longer self-restores silently: it emails a 6-digit code and the
 // caller must submit it via `auth.verifyRestore` to complete reactivation

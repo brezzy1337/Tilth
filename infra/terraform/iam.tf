@@ -76,7 +76,7 @@ locals {
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "STRIPE_WEBHOOK_SECRET_CONNECT", # Connected-accounts scoped webhook signing secret
-    "SENDGRID_API_KEY",              # Mail Send API key — email verification (F-054)
+    "RESEND_API_KEY",                # Resend sending-only API key — email verification (F-054)
   ]
 }
 
