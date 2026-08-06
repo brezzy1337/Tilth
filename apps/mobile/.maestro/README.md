@@ -7,7 +7,7 @@ a release APK on an Android emulator in CI, run against **prod**
 `${MAESTRO_TEST_EMAIL}` / `${MAESTRO_TEST_PASSWORD}`, injected by the CI
 workflow (`.github/workflows/mobile-e2e.yml`) as environment variables.
 
-## Flows (run in filename order)
+## Flows (explicit order — see below)
 
 | File | Covers |
 | --- | --- |
@@ -44,7 +44,10 @@ already signed into (or able to sign into) a test account:
 # from apps/mobile
 MAESTRO_TEST_EMAIL="you@example.com" \
 MAESTRO_TEST_PASSWORD="..." \
-  maestro test .maestro/                      # all flows, filename order
+  # IMPORTANT: pass files explicitly, in this order. Maestro's directory mode
+  # walks the filesystem UNSORTED, and 01-03 assume 00's login session exists.
+  maestro test .maestro/00-login.yaml .maestro/01-settings-legal.yaml \
+    .maestro/02-change-password.yaml .maestro/03-blocked-users.yaml
 
 MAESTRO_TEST_EMAIL="you@example.com" \
 MAESTRO_TEST_PASSWORD="..." \
@@ -70,3 +73,25 @@ three password fields):
 Everything else is matched by real, already-shipped visible text or
 `accessibilityLabel` (e.g. HomeScreen's gear icon, `accessibilityLabel=
 "Settings"`) — no other component changes were made for this harness.
+
+## Recovery: stale password after a mid-flow failure
+
+`02-change-password.yaml` changes the live account password to
+`${MAESTRO_TEST_PASSWORD}-x` and reverts it at the end. If the flow dies
+between those two points (timeout, emulator flake), the account is left on
+the `-x` password while the `E2E_TEST_PASSWORD` GitHub secret still holds
+the original — every later run then fails at `00-login.yaml`.
+
+To recover, try logging in via the API with the original secret, then with
+`<original>-x`. Whichever works tells you the live state; if it's `-x`,
+either change the password back through `auth.changePassword` with that
+session, or update the GitHub secret to the `-x` value. Never leave the
+secret and the live password out of sync.
+
+## Security note (CI artifacts)
+
+Maestro's `commands.json` debug files contain post-substitution command
+values — i.e. the resolved password from `inputText` steps. The CI workflow
+deletes `commands*.json` before uploading failure artifacts; keep that step
+if you touch the upload. Screenshots are safe (password fields use
+`secureTextEntry`).
