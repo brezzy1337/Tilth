@@ -124,7 +124,11 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Run Maestro flows on emulator
-        uses: reactivecircus/android-emulator-runner@e93c997dcab69054e999e3924af3d21c4a736e13 # v2.9.0
+        # v2.38.0 — NOT v2.9.x: the "v2.9.0" pin was a lexicographic-sort
+        # trap (2019 tag); ancient versions have a non-idempotent
+        # cmdline-tools install that always collides on current runner
+        # images (runs 31147283916, 31149040652).
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         env:
           MAESTRO_VERSION: 2.8.0
           # SHA-256 of the cli-2.8.0 release zip, verified out-of-band
