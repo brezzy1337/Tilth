@@ -104,6 +104,7 @@ export function ChangePasswordScreen() {
               autoCorrect={false}
               textContentType="password"
               placeholder="Your current password"
+              testID="change-password-current-input"
             />
             <FormField
               label="New password"
@@ -115,6 +116,7 @@ export function ChangePasswordScreen() {
               autoCorrect={false}
               textContentType="newPassword"
               placeholder="At least 8 characters"
+              testID="change-password-new-input"
             />
             <FormField
               label="Confirm new password"
@@ -126,6 +128,7 @@ export function ChangePasswordScreen() {
               autoCorrect={false}
               textContentType="newPassword"
               placeholder="Re-enter your new password"
+              testID="change-password-confirm-input"
             />
 
             {serverError ? <Text style={styles.serverError}>{serverError}</Text> : null}

@@ -1,0 +1,180 @@
+name: Mobile E2E
+
+# Maestro end-to-end suite against a release APK on an Android emulator.
+# Expensive (~emulator + gradle), so PRs only pay for it when they opt in
+# with the "e2e" label; workflow_dispatch always runs.
+on:
+  workflow_dispatch:
+  pull_request:
+    # "labeled" is not in the default pull_request types — without it, adding
+    # the "e2e" label to an open PR would never trigger a run.
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "apps/mobile/**"
+      - "packages/shared/**"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: build apk · emulator · maestro
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Label gate: mobile PRs don't pay the emulator tax by default.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'e2e')
+
+    env:
+      # Inlined into the JS bundle by Metro during assembleRelease
+      # (EXPO_PUBLIC_* build-time substitution) — the E2E build talks to prod.
+      EXPO_PUBLIC_API_URL: https://api.tilth.market
+      # Dummy value, NOT a secret. app.config.js injects this into the
+      # AndroidManifest for react-native-maps; the config does not hard-fail
+      # when the var is absent (expo config-plugins just omits the meta-data),
+      # but a placeholder keeps the manifest shape stable. Map flows are out
+      # of scope for E2E v1 — promote to a repo secret when they land.
+      GOOGLE_MAPS_ANDROID_KEY: e2e-dummy-key-map-flows-out-of-scope
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # GitHub-hosted Linux runners expose /dev/kvm but gate it behind the kvm
+      # group; without this the emulator falls back to unusably slow software
+      # emulation (and android-emulator-runner times out).
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Expo SDK 56 / react-native 0.85 (AGP 8.x) builds require JDK 17 —
+      # matches the React Native environment-setup requirement and Expo's own
+      # SDK 56 build images.
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Generates apps/mobile/android/ from app.json + app.config.js.
+      # --no-install: deps are already installed via pnpm above.
+      - name: Expo prebuild (Android)
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+
+      # After prebuild so the generated gradle wrapper file exists when
+      # hashFiles() is evaluated at step run time.
+      - name: Cache Gradle
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # The Expo template's project-level gradle.properties caps the daemon at
+      # 2 GiB heap / 512 MiB metaspace — D8's mergeDexRelease OOMs there
+      # (observed run 31144562563). User-home gradle.properties takes
+      # precedence over the project file; the runner has RAM to spare.
+      - name: Raise Gradle JVM memory
+        run: |
+          mkdir -p ~/.gradle
+          echo 'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m' >> ~/.gradle/gradle.properties
+
+      # Expo's generated android project signs the release buildType with the
+      # debug keystore by default, so this APK installs cleanly on an emulator
+      # without any signing secrets.
+      - name: Build release APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease
+
+      # Current ubuntu images ship ANDROID_HOME with only what gradle
+      # auto-downloads — platform-tools (adb) is absent and the emulator
+      # action spawns `adb` directly ("spawn adb ENOENT", run 31145677196).
+      # Deliberately NOT android-actions/setup-android: it creates
+      # $ANDROID_HOME/cmdline-tools, which collides with the emulator
+      # action's own non-idempotent cmdline-tools install (`sudo mkdir`
+      # → "File exists", run 31147283916). Install ONLY platform-tools,
+      # hash-pinned (cloud-sql-proxy precedent), and leave cmdline-tools
+      # absent for the emulator action to manage.
+      - name: Install Android platform-tools (adb)
+        env:
+          PT_VERSION: r36.0.1
+          # Verified out-of-band 2026-08-07; re-verify when bumping.
+          PT_SHA256: 4804403b06e40a7570f1e3e539d7e4b22a632d557a00c60f1cf3746e6d4ca23b
+        run: |
+          curl -fsSL -o platform-tools.zip "https://dl.google.com/android/repository/platform-tools_${PT_VERSION}-linux.zip"
+          echo "${PT_SHA256}  platform-tools.zip" | sha256sum -c -
+          sudo unzip -q -o platform-tools.zip -d "$ANDROID_HOME"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Run Maestro flows on emulator
+        # v2.38.0 — NOT v2.9.x: the "v2.9.0" pin was a lexicographic-sort
+        # trap (2019 tag); ancient versions have a non-idempotent
+        # cmdline-tools install that always collides on current runner
+        # images (runs 31147283916, 31149040652).
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          MAESTRO_VERSION: 2.8.0
+          # SHA-256 of the cli-2.8.0 release zip, verified out-of-band
+          # 2026-08-06 — mirrors the cloud-sql-proxy hash-pin precedent
+          # (infra/README.md §G). Re-verify when bumping MAESTRO_VERSION.
+          MAESTRO_ZIP_SHA256: b3e561161904fb391875ca5834d5b22cf0b01c052dd1b408ad83e30d8f8951b3
+          # Maestro auto-injects MAESTRO_-prefixed host env vars into flows.
+          MAESTRO_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
+          MAESTRO_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          # NOTE: emulator-runner executes each script line as a SEPARATE
+          # `sh -c` — exports don't persist across lines and backslash
+          # continuations break (observed: "maestro: not found", run
+          # 31150693008). Absolute paths + one-line commands only.
+          script: |
+            # Checksum-verified release artifact instead of the live curl|bash
+            # installer — this job holds live account secrets in scope.
+            curl -fsSL -o maestro.zip "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+            echo "${MAESTRO_ZIP_SHA256}  maestro.zip" | sha256sum -c -
+            unzip -q maestro.zip -d "$HOME/.maestro-cli"
+            "$HOME/.maestro-cli/maestro/bin/maestro" --version
+            adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+            adb shell pm grant market.tilth.app android.permission.ACCESS_FINE_LOCATION
+            adb shell pm grant market.tilth.app android.permission.ACCESS_COARSE_LOCATION
+            adb emu geo fix -93.2650 44.9778
+            # Explicit file order (Maestro dir mode is unsorted); 01–03 assume 00's login session.
+            "$HOME/.maestro-cli/maestro/bin/maestro" test apps/mobile/.maestro/00-login.yaml apps/mobile/.maestro/01-settings-legal.yaml apps/mobile/.maestro/02-change-password.yaml apps/mobile/.maestro/03-blocked-users.yaml
+
+      # SECURITY: Maestro's debug output includes commands.json files whose
+      # `evaluatedCommand` fields hold POST-env-substitution values — i.e. the
+      # resolved E2E password from inputText steps, in plaintext. GitHub's
+      # secret masking covers logs, NOT artifact file contents, so these must
+      # be scrubbed before upload. Screenshots + logs remain for debugging.
+      - name: Scrub resolved-secret files from Maestro output
+        if: failure()
+        run: find ~/.maestro/tests -name 'commands*.json' -delete 2>/dev/null || true
+
+      # Maestro writes per-run screenshots + logs under ~/.maestro/tests.
+      - name: Upload Maestro debug output
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: maestro-debug-output
+          path: ~/.maestro/tests/
+          if-no-files-found: ignore
+          retention-days: 7

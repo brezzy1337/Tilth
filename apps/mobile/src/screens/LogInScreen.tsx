@@ -100,6 +100,7 @@ export function LogInScreen({ navigation }: Props) {
               keyboardType="email-address"
               textContentType="username"
               placeholder="Username or email"
+              testID="login-username-input"
             />
 
             <FormField
@@ -112,6 +113,7 @@ export function LogInScreen({ navigation }: Props) {
               autoCorrect={false}
               textContentType="password"
               placeholder="Password"
+              testID="login-password-input"
             />
 
             {/* Server error */}
@@ -120,7 +122,12 @@ export function LogInScreen({ navigation }: Props) {
             ) : null}
 
             {/* Submit */}
-            <Button title="Log In" onPress={handleSubmit} loading={mutation.isPending} />
+            <Button
+              title="Log In"
+              onPress={handleSubmit}
+              loading={mutation.isPending}
+              testID="login-submit-button"
+            />
           </Card>
 
           {/* Link to Sign Up */}

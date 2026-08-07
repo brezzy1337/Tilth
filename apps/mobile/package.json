@@ -51,6 +51,7 @@
     "@types/react": "~19.2.2",
     "eslint": "catalog:",
     "typescript": "~6.0.3",
-    "typescript-eslint": "catalog:"
+    "typescript-eslint": "catalog:",
+    "babel-preset-expo": "56.0.15"
   }
 }

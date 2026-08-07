@@ -1,0 +1,66 @@
+# 01-settings-legal.yaml — F-055 mobile E2E harness.
+#
+# Covers the F-051/F-052 checklist: Settings renders the signed-in profile row,
+# and both legal docs (native LegalScreen, F-052) open in-app with their real
+# copy from packages/shared/src/legal.ts.
+#
+# Assumes 00-login.yaml already ran in this suite (Maestro runs flows in
+# filename order via `maestro test apps/mobile/.maestro/`) and the session
+# from SecureStore is still valid — no clearState here, just relaunch.
+appId: market.tilth.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 20000
+
+# Gear icon → Settings (HomeScreen.tsx: accessibilityLabel="Settings")
+# launchApp COLD-STARTS the app: the gear renders before React Navigation
+# finishes mounting, so a tap ~1s in gets swallowed (runs 31185995079,
+# 31188990644: gear tapped, no navigation). Wait for the tab bar — the
+# last thing to mount — before tapping.
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# The gear's tap centre (y≈107) falls INSIDE the emulator's system status
+# bar window (y 1–128, per the run-31191892606 hierarchy dump), so a
+# normal centre tap is delivered to SystemUI and never reaches the app.
+# Tap the gear's lower half instead (91%,6% ≈ 983,144 on the pinned
+# pixel_6 1080x2400 profile — inside the button, below the status bar).
+# NOTE: on a real phone the top safe-area inset pushes this header down
+# and a centre tap is fine — see the "header under the status bar"
+# follow-up in README.md.
+- tapOn:
+    point: "91%,6%"
+# Confirm we actually LEFT Home instead of assuming the tap landed.
+- extendedWaitUntil:
+    visible: "Account"
+    timeout: 15000
+
+# Account section — profile email row (SettingsScreen.tsx: SettingsRow
+# label="Email" value={user?.email}). Asserting the actual injected email
+# confirms both that Settings rendered AND that the signed-in user really is
+# the e2e-runner account.
+- assertVisible: "Email"
+- assertVisible: "${MAESTRO_TEST_EMAIL}"
+
+# About → Terms of Service (native LegalScreen; header title set in App.tsx)
+- tapOn: "Terms of Service"
+- assertVisible: "Terms of Service"
+- extendedWaitUntil:
+    visible: "Welcome to Tilth"
+    timeout: 10000
+- assertVisible: "Welcome to Tilth"
+- back
+
+# Back on Settings — About → Privacy Policy
+- assertVisible: "Settings"
+- tapOn: "Privacy Policy"
+- assertVisible: "Privacy Policy"
+- extendedWaitUntil:
+    visible: "What this covers"
+    timeout: 10000
+- assertVisible: "What this covers"
+- back
+
+- assertVisible: "Settings"
