@@ -87,6 +87,15 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
+      # The Expo template's project-level gradle.properties caps the daemon at
+      # 2 GiB heap / 512 MiB metaspace — D8's mergeDexRelease OOMs there
+      # (observed run 31144562563). User-home gradle.properties takes
+      # precedence over the project file; the runner has RAM to spare.
+      - name: Raise Gradle JVM memory
+        run: |
+          mkdir -p ~/.gradle
+          echo 'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m' >> ~/.gradle/gradle.properties
+
       # Expo's generated android project signs the release buildType with the
       # debug keystore by default, so this APK installs cleanly on an emulator
       # without any signing secrets.
