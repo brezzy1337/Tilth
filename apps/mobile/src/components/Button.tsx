@@ -35,6 +35,9 @@ type Props = {
   disabled?: boolean;
   fullWidth?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** E2E hook (F-055). Screen headers can share a button's label, so flows
+   * need an unambiguous target. Invisible to users. */
+  testID?: string;
 };
 
 export function Button({
@@ -45,6 +48,7 @@ export function Button({
   disabled = false,
   fullWidth = true,
   style,
+  testID,
 }: Props) {
   const isDisabled = disabled || loading;
   const spinnerColor =
@@ -54,6 +58,7 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      testID={testID}
       style={({ pressed }) => [
         styles.base,
         fullWidth ? styles.fullWidth : null,

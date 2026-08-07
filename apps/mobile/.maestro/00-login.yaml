@@ -30,7 +30,10 @@ appId: market.tilth.app
 - tapOn:
     id: "login-password-input"
 - inputText: "${MAESTRO_TEST_PASSWORD}"
-- tapOn: "Log In"
+# The nav header title is ALSO "Log In" — text match hits the header
+# TextView (run 31183060065), so target the submit button by testID.
+- tapOn:
+    id: "login-submit-button"
 
 # auth.login is a real network call against prod — give it room.
 - extendedWaitUntil:

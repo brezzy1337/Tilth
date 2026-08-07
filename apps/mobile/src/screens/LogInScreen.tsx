@@ -122,7 +122,12 @@ export function LogInScreen({ navigation }: Props) {
             ) : null}
 
             {/* Submit */}
-            <Button title="Log In" onPress={handleSubmit} loading={mutation.isPending} />
+            <Button
+              title="Log In"
+              onPress={handleSubmit}
+              loading={mutation.isPending}
+              testID="login-submit-button"
+            />
           </Card>
 
           {/* Link to Sign Up */}
