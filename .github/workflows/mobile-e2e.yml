@@ -154,6 +154,9 @@ jobs:
             unzip -q maestro.zip -d "$HOME/.maestro-cli"
             "$HOME/.maestro-cli/maestro/bin/maestro" --version
             adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+            adb shell pm grant market.tilth.app android.permission.ACCESS_FINE_LOCATION
+            adb shell pm grant market.tilth.app android.permission.ACCESS_COARSE_LOCATION
+            adb emu geo fix -93.2650 44.9778
             # Explicit file order (Maestro dir mode is unsorted); 01–03 assume 00's login session.
             "$HOME/.maestro-cli/maestro/bin/maestro" test apps/mobile/.maestro/00-login.yaml apps/mobile/.maestro/01-settings-legal.yaml apps/mobile/.maestro/02-change-password.yaml apps/mobile/.maestro/03-blocked-users.yaml
 

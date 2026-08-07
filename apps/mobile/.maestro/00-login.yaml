@@ -36,7 +36,9 @@ appId: market.tilth.app
     id: "login-submit-button"
 
 # auth.login is a real network call against prod — give it room.
+# "Tilth" in the header is a stylized LOGO IMAGE, not selectable text
+# (run 31185995079) — anchor on the tab bar label + the gear instead.
 - extendedWaitUntil:
-    visible: "Tilth"
+    visible: "Home"
     timeout: 20000
 - assertVisible: "Settings"
