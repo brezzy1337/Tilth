@@ -95,3 +95,21 @@ values — i.e. the resolved password from `inputText` steps. The CI workflow
 deletes `commands*.json` before uploading failure artifacts; keep that step
 if you touch the upload. Screenshots are safe (password fields use
 `secureTextEntry`).
+
+## Finding: header icons sit under the status bar (needs a real-device check)
+
+The run-31191892606 hierarchy dump showed the Home header's icon row
+(Orders / Cart / Settings, y≈61–153) overlapping the system status-bar
+window (y 1–128) on the pinned pixel_6 emulator. The buttons render and are
+in the accessibility tree, but a tap at their centre is delivered to
+SystemUI, not the app — i.e. **they are unreachable**.
+
+On Devin's physical device the same header is reachable, so the top
+safe-area inset resolves correctly there and this is emulator-specific.
+Still worth a human check on a device with a small/no notch: if any real
+device under-reports the top inset the same way, those three controls
+become dead on that device. If confirmed, the fix belongs in HomeScreen's
+header (respect `useSafeAreaInsets().top`), not in these flows.
+
+Until then the flows tap the gear's lower half by point ("91%,6%"), which
+is inside the button and below the status bar on the pinned profile.

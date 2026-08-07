@@ -22,7 +22,16 @@ appId: market.tilth.app
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
-- tapOn: "Settings"
+# The gear's tap centre (y≈107) falls INSIDE the emulator's system status
+# bar window (y 1–128, per the run-31191892606 hierarchy dump), so a
+# normal centre tap is delivered to SystemUI and never reaches the app.
+# Tap the gear's lower half instead (91%,6% ≈ 983,144 on the pinned
+# pixel_6 1080x2400 profile — inside the button, below the status bar).
+# NOTE: on a real phone the top safe-area inset pushes this header down
+# and a centre tap is fine — see the "header under the status bar"
+# follow-up in README.md.
+- tapOn:
+    point: "91%,6%"
 # Confirm we actually LEFT Home instead of assuming the tap landed.
 - extendedWaitUntil:
     visible: "Account"
