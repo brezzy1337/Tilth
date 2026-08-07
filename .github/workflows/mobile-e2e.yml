@@ -104,14 +104,24 @@ jobs:
         run: ./gradlew assembleRelease
 
       # Current ubuntu images ship ANDROID_HOME with only what gradle
-      # auto-downloads — platform-tools (adb) is absent, and the emulator
-      # action spawns `adb` directly (observed: "spawn adb ENOENT",
-      # run 31145677196). This installs cmdline-tools + platform-tools and
-      # wires PATH.
-      - name: Setup Android SDK platform-tools
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
-        with:
-          packages: platform-tools
+      # auto-downloads — platform-tools (adb) is absent and the emulator
+      # action spawns `adb` directly ("spawn adb ENOENT", run 31145677196).
+      # Deliberately NOT android-actions/setup-android: it creates
+      # $ANDROID_HOME/cmdline-tools, which collides with the emulator
+      # action's own non-idempotent cmdline-tools install (`sudo mkdir`
+      # → "File exists", run 31147283916). Install ONLY platform-tools,
+      # hash-pinned (cloud-sql-proxy precedent), and leave cmdline-tools
+      # absent for the emulator action to manage.
+      - name: Install Android platform-tools (adb)
+        env:
+          PT_VERSION: r36.0.1
+          # Verified out-of-band 2026-08-07; re-verify when bumping.
+          PT_SHA256: 4804403b06e40a7570f1e3e539d7e4b22a632d557a00c60f1cf3746e6d4ca23b
+        run: |
+          curl -fsSL -o platform-tools.zip "https://dl.google.com/android/repository/platform-tools_${PT_VERSION}-linux.zip"
+          echo "${PT_SHA256}  platform-tools.zip" | sha256sum -c -
+          sudo unzip -q -o platform-tools.zip -d "$ANDROID_HOME"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Run Maestro flows on emulator
         uses: reactivecircus/android-emulator-runner@e93c997dcab69054e999e3924af3d21c4a736e13 # v2.9.0
