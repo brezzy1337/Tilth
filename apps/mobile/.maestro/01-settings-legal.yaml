@@ -15,7 +15,18 @@ appId: market.tilth.app
     timeout: 20000
 
 # Gear icon → Settings (HomeScreen.tsx: accessibilityLabel="Settings")
+# launchApp COLD-STARTS the app: the gear renders before React Navigation
+# finishes mounting, so a tap ~1s in gets swallowed (runs 31185995079,
+# 31188990644: gear tapped, no navigation). Wait for the tab bar — the
+# last thing to mount — before tapping.
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
 - tapOn: "Settings"
+# Confirm we actually LEFT Home instead of assuming the tap landed.
+- extendedWaitUntil:
+    visible: "Account"
+    timeout: 15000
 
 # Account section — profile email row (SettingsScreen.tsx: SettingsRow
 # label="Email" value={user?.email}). Asserting the actual injected email
