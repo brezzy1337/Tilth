@@ -142,23 +142,20 @@ jobs:
           api-level: 34
           arch: x86_64
           profile: pixel_6
+          # NOTE: emulator-runner executes each script line as a SEPARATE
+          # `sh -c` — exports don't persist across lines and backslash
+          # continuations break (observed: "maestro: not found", run
+          # 31150693008). Absolute paths + one-line commands only.
           script: |
             # Checksum-verified release artifact instead of the live curl|bash
             # installer — this job holds live account secrets in scope.
             curl -fsSL -o maestro.zip "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
             echo "${MAESTRO_ZIP_SHA256}  maestro.zip" | sha256sum -c -
             unzip -q maestro.zip -d "$HOME/.maestro-cli"
-            export PATH="$PATH:$HOME/.maestro-cli/maestro/bin"
-            maestro --version
+            "$HOME/.maestro-cli/maestro/bin/maestro" --version
             adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
-            # Explicit file order — Maestro's directory mode walks the FS with
-            # NO sort (WorkspaceExecutionPlanner), so 00→03 order must be
-            # spelled out; 01–03 assume 00's login session exists.
-            maestro test \
-              apps/mobile/.maestro/00-login.yaml \
-              apps/mobile/.maestro/01-settings-legal.yaml \
-              apps/mobile/.maestro/02-change-password.yaml \
-              apps/mobile/.maestro/03-blocked-users.yaml
+            # Explicit file order (Maestro dir mode is unsorted); 01–03 assume 00's login session.
+            "$HOME/.maestro-cli/maestro/bin/maestro" test apps/mobile/.maestro/00-login.yaml apps/mobile/.maestro/01-settings-legal.yaml apps/mobile/.maestro/02-change-password.yaml apps/mobile/.maestro/03-blocked-users.yaml
 
       # SECURITY: Maestro's debug output includes commands.json files whose
       # `evaluatedCommand` fields hold POST-env-substitution values — i.e. the
